@@ -1,0 +1,27 @@
+# YOLO 检测模型配置
+model:
+  path: ../model/yolov8m        # 模型路径（不带 .pt 后缀）
+  class_id: 39                   # COCO 水瓶类别 ID
+  conf_threshold: 0.5            # 检测置信度阈值
+  device: gpu                    # 运行设备: gpu 优先(cuda不可用回退cpu), cpu 强制cpu
+
+# 深度范围配置
+depth:
+  min: 0.15                      # 深度有效最小值（米）
+  max: 1.5                       # 深度有效最大值（米）
+  z_threshold: 0.05              # 深度离群过滤阈值（米），锚点深度±此范围外视为离群点
+
+# 相机流配置
+stream:
+  color_width: 1280              # 彩色流宽度（像素）
+  color_height: 720              # 彩色流高度（像素）
+  color_fps: 30                  # 彩色流帧率
+  color_format: OBFormat.RGB     # 彩色流格式
+  depth_width: 1280              # 深度流宽度（像素）
+  depth_height: 800              # 深度流高度（像素）
+  depth_fps: 30                  # 深度流帧率
+  depth_format: OBFormat.Y16     # 深度流格式
+
+# 时域平滑配置
+smoothing:
+  alpha: 0.4                     # EMA 平滑系数（0~1），值越小平滑越强

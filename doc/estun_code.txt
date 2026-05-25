@@ -1,0 +1,29 @@
+SocketCreat(scoketflag) # scoketflag初始值为1，每个Socket函数使用同一个flag，执行成功返回0，失败返回1
+if scoketflag!=0
+    return
+while true
+    GetCurCpos P0
+    scoketstr1 = CposTostr(P0)
+    SocketSendStr(scoketstr1)
+    if scoketflag==0
+        SocketReadStr(scoketstr4)
+        P1 = TranStrToCpos(scoketstr4)
+        P2 = CposOffset(DCP1)
+        P3 = CposOffset(DCP2)
+        if scoketflag==0
+            MovL P2
+            Wait 1s
+            MovL P1
+            SocketSendStr('GRIP')
+            SocketReadStr(scoketstr5)
+            if scoketstr5 = '111'
+                MovL P3
+                Wait 1s
+                MovL P1
+                SocketSendStr('RELEASE')
+                SocketReadStr(scoketstr6)
+                if scoketstr6 == '222'
+                    MovL Home
+                    SocketClose
+                    Return          
+    Wait 1s

@@ -1,0 +1,21 @@
+# ESTUN 机器人配置（从 RealSense_R/config.yaml 独立）
+# 夹爪偏移约定：先平移 t_offset，再绕 Z 轴旋转 r_offset.C
+# p_gripper = R_z(C)^T @ (p_flange - t_offset)
+
+estun:
+  tcp_server:
+    host: "192.168.101.99"       # 服务器 IP 地址
+    port: 8080                   # 服务器端口
+  hand:
+    port: "COM5"                 # 灵巧手串口号
+  calibration:
+    result_path: "calib_data/calibration_result.yaml"  # 手眼标定结果(相对项目根目录)
+  stabilization:
+    window: 5                    # 稳定帧数窗口
+    pos_threshold: 0.01          # 位置变化阈值(米)
+    angle_threshold: 5.0         # 角度变化阈值(度)
+  send_interval: 0.1             # 最小发送间隔(秒)
+  gripper_offset:
+    t_offset: [-0.02, 0, 0.10]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转
+    r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}
+  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free

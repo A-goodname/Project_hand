@@ -1,0 +1,1232 @@
+device_info:
+  name: Orbbec Gemini 215
+  pid: '0x0808'
+  vid: '0x2BC5'
+  uid: '0x1225a594'
+  serial_number: AYZPB41002F
+  connection_type: USB3.0
+  firmware_version: 1.0.9
+  hardware_version: '1.0'
+sensor_profiles:
+  sensor_count: 5
+  sensors:
+  - type: OBSensorType.IR_SENSOR
+    profiles:
+    - format: OBFormat.Y8
+      width: 1280
+      height: 800
+      fps: 15
+    - format: OBFormat.Y8
+      width: 1280
+      height: 800
+      fps: 30
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 800
+      fps: 30
+    - format: OBFormat.Y8
+      width: 1280
+      height: 800
+      fps: 20
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 800
+      fps: 20
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 800
+      fps: 15
+    - format: OBFormat.Y8
+      width: 1280
+      height: 800
+      fps: 10
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 800
+      fps: 10
+    - format: OBFormat.Y8
+      width: 1280
+      height: 800
+      fps: 5
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 800
+      fps: 5
+    - format: OBFormat.Y8
+      width: 640
+      height: 400
+      fps: 30
+    - format: OBFormat.MJPG
+      width: 640
+      height: 400
+      fps: 30
+    - format: OBFormat.Y8
+      width: 640
+      height: 400
+      fps: 20
+    - format: OBFormat.MJPG
+      width: 640
+      height: 400
+      fps: 20
+    - format: OBFormat.Y8
+      width: 640
+      height: 400
+      fps: 15
+    - format: OBFormat.MJPG
+      width: 640
+      height: 400
+      fps: 15
+    - format: OBFormat.Y8
+      width: 640
+      height: 400
+      fps: 10
+    - format: OBFormat.MJPG
+      width: 640
+      height: 400
+      fps: 10
+    - format: OBFormat.Y8
+      width: 640
+      height: 400
+      fps: 5
+    - format: OBFormat.MJPG
+      width: 640
+      height: 400
+      fps: 5
+  - type: OBSensorType.COLOR_SENSOR
+    profiles:
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 720
+      fps: 15
+    - format: OBFormat.RGB
+      width: 1920
+      height: 1080
+      fps: 30
+    - format: OBFormat.MJPG
+      width: 1920
+      height: 1080
+      fps: 30
+    - format: OBFormat.YUYV
+      width: 1920
+      height: 1080
+      fps: 30
+    - format: OBFormat.RGB
+      width: 1920
+      height: 1080
+      fps: 20
+    - format: OBFormat.MJPG
+      width: 1920
+      height: 1080
+      fps: 20
+    - format: OBFormat.YUYV
+      width: 1920
+      height: 1080
+      fps: 20
+    - format: OBFormat.RGB
+      width: 1920
+      height: 1080
+      fps: 15
+    - format: OBFormat.MJPG
+      width: 1920
+      height: 1080
+      fps: 15
+    - format: OBFormat.YUYV
+      width: 1920
+      height: 1080
+      fps: 15
+    - format: OBFormat.RGB
+      width: 1920
+      height: 1080
+      fps: 10
+    - format: OBFormat.MJPG
+      width: 1920
+      height: 1080
+      fps: 10
+    - format: OBFormat.YUYV
+      width: 1920
+      height: 1080
+      fps: 10
+    - format: OBFormat.RGB
+      width: 1920
+      height: 1080
+      fps: 5
+    - format: OBFormat.MJPG
+      width: 1920
+      height: 1080
+      fps: 5
+    - format: OBFormat.YUYV
+      width: 1920
+      height: 1080
+      fps: 5
+    - format: OBFormat.RGB
+      width: 1280
+      height: 720
+      fps: 30
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 720
+      fps: 30
+    - format: OBFormat.YUYV
+      width: 1280
+      height: 720
+      fps: 30
+    - format: OBFormat.RGB
+      width: 1280
+      height: 720
+      fps: 20
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 720
+      fps: 20
+    - format: OBFormat.YUYV
+      width: 1280
+      height: 720
+      fps: 20
+    - format: OBFormat.RGB
+      width: 1280
+      height: 720
+      fps: 15
+    - format: OBFormat.YUYV
+      width: 1280
+      height: 720
+      fps: 15
+    - format: OBFormat.RGB
+      width: 1280
+      height: 720
+      fps: 10
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 720
+      fps: 10
+    - format: OBFormat.YUYV
+      width: 1280
+      height: 720
+      fps: 10
+    - format: OBFormat.RGB
+      width: 1280
+      height: 720
+      fps: 5
+    - format: OBFormat.MJPG
+      width: 1280
+      height: 720
+      fps: 5
+    - format: OBFormat.YUYV
+      width: 1280
+      height: 720
+      fps: 5
+    - format: OBFormat.RGB
+      width: 640
+      height: 360
+      fps: 30
+    - format: OBFormat.MJPG
+      width: 640
+      height: 360
+      fps: 30
+    - format: OBFormat.YUYV
+      width: 640
+      height: 360
+      fps: 30
+    - format: OBFormat.RGB
+      width: 640
+      height: 360
+      fps: 20
+    - format: OBFormat.MJPG
+      width: 640
+      height: 360
+      fps: 20
+    - format: OBFormat.YUYV
+      width: 640
+      height: 360
+      fps: 20
+    - format: OBFormat.RGB
+      width: 640
+      height: 360
+      fps: 15
+    - format: OBFormat.MJPG
+      width: 640
+      height: 360
+      fps: 15
+    - format: OBFormat.YUYV
+      width: 640
+      height: 360
+      fps: 15
+    - format: OBFormat.RGB
+      width: 640
+      height: 360
+      fps: 10
+    - format: OBFormat.MJPG
+      width: 640
+      height: 360
+      fps: 10
+    - format: OBFormat.YUYV
+      width: 640
+      height: 360
+      fps: 10
+    - format: OBFormat.RGB
+      width: 640
+      height: 360
+      fps: 5
+    - format: OBFormat.MJPG
+      width: 640
+      height: 360
+      fps: 5
+    - format: OBFormat.YUYV
+      width: 640
+      height: 360
+      fps: 5
+  - type: OBSensorType.DEPTH_SENSOR
+    profiles:
+    - format: OBFormat.Y16
+      width: 1280
+      height: 800
+      fps: 15
+    - format: OBFormat.Y14
+      width: 1280
+      height: 800
+      fps: 30
+    - format: OBFormat.RLE
+      width: 1280
+      height: 800
+      fps: 30
+    - format: OBFormat.Y16
+      width: 1280
+      height: 800
+      fps: 30
+    - format: OBFormat.Y14
+      width: 1280
+      height: 800
+      fps: 20
+    - format: OBFormat.RLE
+      width: 1280
+      height: 800
+      fps: 20
+    - format: OBFormat.Y16
+      width: 1280
+      height: 800
+      fps: 20
+    - format: OBFormat.Y14
+      width: 1280
+      height: 800
+      fps: 15
+    - format: OBFormat.RLE
+      width: 1280
+      height: 800
+      fps: 15
+    - format: OBFormat.Y14
+      width: 1280
+      height: 800
+      fps: 10
+    - format: OBFormat.RLE
+      width: 1280
+      height: 800
+      fps: 10
+    - format: OBFormat.Y16
+      width: 1280
+      height: 800
+      fps: 10
+    - format: OBFormat.Y14
+      width: 1280
+      height: 800
+      fps: 5
+    - format: OBFormat.RLE
+      width: 1280
+      height: 800
+      fps: 5
+    - format: OBFormat.Y16
+      width: 1280
+      height: 800
+      fps: 5
+    - format: OBFormat.Y14
+      width: 640
+      height: 400
+      fps: 30
+    - format: OBFormat.RLE
+      width: 640
+      height: 400
+      fps: 30
+    - format: OBFormat.Y16
+      width: 640
+      height: 400
+      fps: 30
+    - format: OBFormat.Y14
+      width: 640
+      height: 400
+      fps: 20
+    - format: OBFormat.RLE
+      width: 640
+      height: 400
+      fps: 20
+    - format: OBFormat.Y16
+      width: 640
+      height: 400
+      fps: 20
+    - format: OBFormat.Y14
+      width: 640
+      height: 400
+      fps: 15
+    - format: OBFormat.RLE
+      width: 640
+      height: 400
+      fps: 15
+    - format: OBFormat.Y16
+      width: 640
+      height: 400
+      fps: 15
+    - format: OBFormat.Y14
+      width: 640
+      height: 400
+      fps: 10
+    - format: OBFormat.RLE
+      width: 640
+      height: 400
+      fps: 10
+    - format: OBFormat.Y16
+      width: 640
+      height: 400
+      fps: 10
+    - format: OBFormat.Y14
+      width: 640
+      height: 400
+      fps: 5
+    - format: OBFormat.RLE
+      width: 640
+      height: 400
+      fps: 5
+    - format: OBFormat.Y16
+      width: 640
+      height: 400
+      fps: 5
+  - type: OBSensorType.ACCEL_SENSOR
+    profiles:
+    - format: OBFormat.ACCEL
+      fps: N/A
+    - format: OBFormat.ACCEL
+      fps: N/A
+    - format: OBFormat.ACCEL
+      fps: N/A
+    - format: OBFormat.ACCEL
+      fps: N/A
+  - type: OBSensorType.GYRO_SENSOR
+    profiles:
+    - format: OBFormat.GYRO
+      fps: N/A
+    - format: OBFormat.GYRO
+      fps: N/A
+    - format: OBFormat.GYRO
+      fps: N/A
+    - format: OBFormat.GYRO
+      fps: N/A
+rgb_stream_info:
+  profile_count: 45
+  profiles:
+  - format: OBFormat.MJPG
+    width: 1280
+    height: 720
+    fps: 15
+  - format: OBFormat.RGB
+    width: 1920
+    height: 1080
+    fps: 30
+  - format: OBFormat.MJPG
+    width: 1920
+    height: 1080
+    fps: 30
+  - format: OBFormat.YUYV
+    width: 1920
+    height: 1080
+    fps: 30
+  - format: OBFormat.RGB
+    width: 1920
+    height: 1080
+    fps: 20
+  - format: OBFormat.MJPG
+    width: 1920
+    height: 1080
+    fps: 20
+  - format: OBFormat.YUYV
+    width: 1920
+    height: 1080
+    fps: 20
+  - format: OBFormat.RGB
+    width: 1920
+    height: 1080
+    fps: 15
+  - format: OBFormat.MJPG
+    width: 1920
+    height: 1080
+    fps: 15
+  - format: OBFormat.YUYV
+    width: 1920
+    height: 1080
+    fps: 15
+  - format: OBFormat.RGB
+    width: 1920
+    height: 1080
+    fps: 10
+  - format: OBFormat.MJPG
+    width: 1920
+    height: 1080
+    fps: 10
+  - format: OBFormat.YUYV
+    width: 1920
+    height: 1080
+    fps: 10
+  - format: OBFormat.RGB
+    width: 1920
+    height: 1080
+    fps: 5
+  - format: OBFormat.MJPG
+    width: 1920
+    height: 1080
+    fps: 5
+  - format: OBFormat.YUYV
+    width: 1920
+    height: 1080
+    fps: 5
+  - format: OBFormat.RGB
+    width: 1280
+    height: 720
+    fps: 30
+  - format: OBFormat.MJPG
+    width: 1280
+    height: 720
+    fps: 30
+  - format: OBFormat.YUYV
+    width: 1280
+    height: 720
+    fps: 30
+  - format: OBFormat.RGB
+    width: 1280
+    height: 720
+    fps: 20
+  - format: OBFormat.MJPG
+    width: 1280
+    height: 720
+    fps: 20
+  - format: OBFormat.YUYV
+    width: 1280
+    height: 720
+    fps: 20
+  - format: OBFormat.RGB
+    width: 1280
+    height: 720
+    fps: 15
+  - format: OBFormat.YUYV
+    width: 1280
+    height: 720
+    fps: 15
+  - format: OBFormat.RGB
+    width: 1280
+    height: 720
+    fps: 10
+  - format: OBFormat.MJPG
+    width: 1280
+    height: 720
+    fps: 10
+  - format: OBFormat.YUYV
+    width: 1280
+    height: 720
+    fps: 10
+  - format: OBFormat.RGB
+    width: 1280
+    height: 720
+    fps: 5
+  - format: OBFormat.MJPG
+    width: 1280
+    height: 720
+    fps: 5
+  - format: OBFormat.YUYV
+    width: 1280
+    height: 720
+    fps: 5
+  - format: OBFormat.RGB
+    width: 640
+    height: 360
+    fps: 30
+  - format: OBFormat.MJPG
+    width: 640
+    height: 360
+    fps: 30
+  - format: OBFormat.YUYV
+    width: 640
+    height: 360
+    fps: 30
+  - format: OBFormat.RGB
+    width: 640
+    height: 360
+    fps: 20
+  - format: OBFormat.MJPG
+    width: 640
+    height: 360
+    fps: 20
+  - format: OBFormat.YUYV
+    width: 640
+    height: 360
+    fps: 20
+  - format: OBFormat.RGB
+    width: 640
+    height: 360
+    fps: 15
+  - format: OBFormat.MJPG
+    width: 640
+    height: 360
+    fps: 15
+  - format: OBFormat.YUYV
+    width: 640
+    height: 360
+    fps: 15
+  - format: OBFormat.RGB
+    width: 640
+    height: 360
+    fps: 10
+  - format: OBFormat.MJPG
+    width: 640
+    height: 360
+    fps: 10
+  - format: OBFormat.YUYV
+    width: 640
+    height: 360
+    fps: 10
+  - format: OBFormat.RGB
+    width: 640
+    height: 360
+    fps: 5
+  - format: OBFormat.MJPG
+    width: 640
+    height: 360
+    fps: 5
+  - format: OBFormat.YUYV
+    width: 640
+    height: 360
+    fps: 5
+depth_stream_info:
+  profile_count: 30
+  profiles:
+  - format: OBFormat.Y16
+    width: 1280
+    height: 800
+    fps: 15
+  - format: OBFormat.Y14
+    width: 1280
+    height: 800
+    fps: 30
+  - format: OBFormat.RLE
+    width: 1280
+    height: 800
+    fps: 30
+  - format: OBFormat.Y16
+    width: 1280
+    height: 800
+    fps: 30
+  - format: OBFormat.Y14
+    width: 1280
+    height: 800
+    fps: 20
+  - format: OBFormat.RLE
+    width: 1280
+    height: 800
+    fps: 20
+  - format: OBFormat.Y16
+    width: 1280
+    height: 800
+    fps: 20
+  - format: OBFormat.Y14
+    width: 1280
+    height: 800
+    fps: 15
+  - format: OBFormat.RLE
+    width: 1280
+    height: 800
+    fps: 15
+  - format: OBFormat.Y14
+    width: 1280
+    height: 800
+    fps: 10
+  - format: OBFormat.RLE
+    width: 1280
+    height: 800
+    fps: 10
+  - format: OBFormat.Y16
+    width: 1280
+    height: 800
+    fps: 10
+  - format: OBFormat.Y14
+    width: 1280
+    height: 800
+    fps: 5
+  - format: OBFormat.RLE
+    width: 1280
+    height: 800
+    fps: 5
+  - format: OBFormat.Y16
+    width: 1280
+    height: 800
+    fps: 5
+  - format: OBFormat.Y14
+    width: 640
+    height: 400
+    fps: 30
+  - format: OBFormat.RLE
+    width: 640
+    height: 400
+    fps: 30
+  - format: OBFormat.Y16
+    width: 640
+    height: 400
+    fps: 30
+  - format: OBFormat.Y14
+    width: 640
+    height: 400
+    fps: 20
+  - format: OBFormat.RLE
+    width: 640
+    height: 400
+    fps: 20
+  - format: OBFormat.Y16
+    width: 640
+    height: 400
+    fps: 20
+  - format: OBFormat.Y14
+    width: 640
+    height: 400
+    fps: 15
+  - format: OBFormat.RLE
+    width: 640
+    height: 400
+    fps: 15
+  - format: OBFormat.Y16
+    width: 640
+    height: 400
+    fps: 15
+  - format: OBFormat.Y14
+    width: 640
+    height: 400
+    fps: 10
+  - format: OBFormat.RLE
+    width: 640
+    height: 400
+    fps: 10
+  - format: OBFormat.Y16
+    width: 640
+    height: 400
+    fps: 10
+  - format: OBFormat.Y14
+    width: 640
+    height: 400
+    fps: 5
+  - format: OBFormat.RLE
+    width: 640
+    height: 400
+    fps: 5
+  - format: OBFormat.Y16
+    width: 640
+    height: 400
+    fps: 5
+rgb_exposure_info:
+  rgb_property_count: 13
+  rgb_properties:
+  - id: 81
+    name: OB_PROP_COLOR_MIRROR_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 82
+    name: OB_PROP_COLOR_FLIP_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 115
+    name: OB_PROP_COLOR_ROTATE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 270
+      step: 90
+    current: 0
+  - id: 2000
+    name: OB_PROP_COLOR_AUTO_EXPOSURE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 2001
+    name: OB_PROP_COLOR_EXPOSURE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 33000
+      step: 1
+    current: 5000
+  - id: 2002
+    name: OB_PROP_COLOR_GAIN_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1
+      max: 255
+      step: 2
+    current: 101
+  - id: 2003
+    name: OB_PROP_COLOR_AUTO_WHITE_BALANCE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 2004
+    name: OB_PROP_COLOR_WHITE_BALANCE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 2800
+      max: 6800
+      step: 10
+    current: 5000
+  - id: 2005
+    name: OB_PROP_COLOR_BRIGHTNESS_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1
+      max: 255
+      step: 1
+    current: 52
+  - id: 2006
+    name: OB_PROP_COLOR_SHARPNESS_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 255
+      step: 1
+    current: 99
+  - id: 2008
+    name: OB_PROP_COLOR_SATURATION_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 255
+      step: 1
+    current: 32
+  - id: 2009
+    name: OB_PROP_COLOR_CONTRAST_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 255
+      step: 1
+    current: 40
+  - id: 2015
+    name: OB_PROP_COLOR_POWER_LINE_FREQUENCY_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 2
+      step: 1
+    current: 2
+all_properties:
+  property_count: 46
+  properties:
+  - id: 3
+    name: OB_PROP_LASER_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 6
+    name: OB_PROP_FLOOD_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 14
+    name: OB_PROP_DEPTH_MIRROR_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 15
+    name: OB_PROP_DEPTH_FLIP_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 17
+    name: OB_PROP_DEPTH_HOLEFILTER_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 18
+    name: OB_PROP_IR_MIRROR_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 19
+    name: OB_PROP_IR_FLIP_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 42
+    name: OB_PROP_DEPTH_ALIGN_HARDWARE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 63
+    name: OB_PROP_DEPTH_ALIGN_HARDWARE_MODE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 2
+      step: 1
+    current: 0
+  - id: 75
+    name: OB_PROP_DEPTH_PRECISION_LEVEL_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 6
+      max: 0
+      step: 1
+    current: 0
+  - id: 81
+    name: OB_PROP_COLOR_MIRROR_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 82
+    name: OB_PROP_COLOR_FLIP_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 85
+    name: OB_PROP_DISPARITY_TO_DEPTH_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 87
+    name: OB_PROP_WATCHDOG_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 88
+    name: OB_PROP_EXTERNAL_SIGNAL_RESET_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 89
+    name: OB_PROP_HEARTBEAT_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 104
+    name: OB_PROP_TIMER_RESET_SIGNAL_BOOL
+    permission: _/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: null
+  - id: 105
+    name: OB_PROP_TIMER_RESET_TRIGGER_OUT_ENABLE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 106
+    name: OB_PROP_TIMER_RESET_DELAY_US_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 10000000
+      step: 1
+    current: 0
+  - id: 115
+    name: OB_PROP_COLOR_ROTATE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 270
+      step: 90
+    current: 0
+  - id: 116
+    name: OB_PROP_IR_ROTATE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 270
+      step: 90
+    current: 0
+  - id: 118
+    name: OB_PROP_DEPTH_ROTATE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 270
+      step: 90
+    current: 0
+  - id: 130
+    name: OB_PROP_SYNC_SIGNAL_TRIGGER_OUT_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 2000
+    name: OB_PROP_COLOR_AUTO_EXPOSURE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 2001
+    name: OB_PROP_COLOR_EXPOSURE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 33000
+      step: 1
+    current: 5000
+  - id: 2002
+    name: OB_PROP_COLOR_GAIN_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1
+      max: 255
+      step: 2
+    current: 101
+  - id: 2003
+    name: OB_PROP_COLOR_AUTO_WHITE_BALANCE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 2004
+    name: OB_PROP_COLOR_WHITE_BALANCE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 2800
+      max: 6800
+      step: 10
+    current: 5000
+  - id: 2005
+    name: OB_PROP_COLOR_BRIGHTNESS_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1
+      max: 255
+      step: 1
+    current: 52
+  - id: 2006
+    name: OB_PROP_COLOR_SHARPNESS_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 255
+      step: 1
+    current: 99
+  - id: 2008
+    name: OB_PROP_COLOR_SATURATION_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 255
+      step: 1
+    current: 32
+  - id: 2009
+    name: OB_PROP_COLOR_CONTRAST_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 255
+      step: 1
+    current: 40
+  - id: 2015
+    name: OB_PROP_COLOR_POWER_LINE_FREQUENCY_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 2
+      step: 1
+    current: 2
+  - id: 2016
+    name: OB_PROP_DEPTH_AUTO_EXPOSURE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 2017
+    name: OB_PROP_DEPTH_EXPOSURE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 100
+      max: 6800
+      step: 1
+    current: 5000
+  - id: 2018
+    name: OB_PROP_DEPTH_GAIN_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1000
+      max: 15000
+      step: 100
+    current: 1694
+  - id: 2021
+    name: OB_PROP_GYRO_ODR_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1
+      max: 15
+      step: 1
+    current: 8
+  - id: 2022
+    name: OB_PROP_ACCEL_ODR_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1
+      max: 15
+      step: 1
+    current: 8
+  - id: 2025
+    name: OB_PROP_IR_AUTO_EXPOSURE_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 2026
+    name: OB_PROP_IR_EXPOSURE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 100
+      max: 6800
+      step: 1
+    current: 5000
+  - id: 2027
+    name: OB_PROP_IR_GAIN_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 1000
+      max: 15000
+      step: 100
+    current: 1694
+  - id: 2028
+    name: OB_PROP_IR_CHANNEL_DATA_SOURCE_INT
+    permission: R/W
+    type: INT
+    range:
+      min: 0
+      max: 1
+      step: 1
+    current: 0
+  - id: 2029
+    name: OB_PROP_DEPTH_RM_FILTER_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: null
+  - id: 3004
+    name: OB_PROP_SDK_DISPARITY_TO_DEPTH_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 1
+  - id: 3009
+    name: OB_PROP_SDK_ACCEL_FRAME_TRANSFORMED_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0
+  - id: 3010
+    name: OB_PROP_SDK_GYRO_FRAME_TRANSFORMED_BOOL
+    permission: R/W
+    type: BOOL
+    values:
+    - 0
+    - 1
+    current: 0

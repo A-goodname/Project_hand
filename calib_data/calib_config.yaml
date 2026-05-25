@@ -1,0 +1,15 @@
+calibration:
+  chessboard:
+    pattern_size: [9, 6]      # 内角点 (columns, rows)
+    square_size: 0.025        # 方格边长（米）
+  robot:
+    reference_frame: "base"
+    pose_format: "euler_zyx"
+  camera:
+    resolution: [640, 480]
+    depth_enabled: false
+  data:
+    save_dir: "."               # "." 表示 calib_data/ 目录自身
+    image_format: "png"
+    required_samples: 15
+    reprojection_error_threshold: 0.5 # solvePnP重投影误差阈值(px)

@@ -1,0 +1,22 @@
+# RealSense_R 配置文件
+
+model:
+  name: "./model/yolov8m"        # YOLO 模型路径(相对项目根目录, 不写 .pt 后缀)
+  conf_threshold: 0.5            # 检测置信度阈值
+  target_class_id: 39            # COCO 目标类别(39=bottle)
+  device: gpu                    # 运行设备: gpu 优先(cuda不可用回退cpu), cpu 强制cpu
+
+depth:
+  min: 0.15                      # 最小有效深度(米)
+  max: 1.5                       # 最大有效深度(米)
+  z_threshold: 0.05              # 深度离群过滤阈值(米)
+
+smoothing:
+  alpha: 0.4                     # EMA 时域平滑系数
+
+resolution:
+  width: 640                     # 图像宽度
+  height: 480                    # 图像高度
+  fps: 30                        # 帧率
+
+# ESTUN 配置已迁移至 estun_config.yaml（项目根目录）

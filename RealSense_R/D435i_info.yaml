@@ -1,0 +1,29 @@
+camera:
+  name: Intel RealSense D435i
+  resolution: [640, 480]
+
+depth:
+  intrinsics:
+    ppx: 318.0
+    ppy: 242.08
+    fx: 381.43
+    fy: 381.43
+    distortion: [0, 0, 0, 0, 0]
+    model: brown_conrady
+
+color:
+  intrinsics:
+    ppx: 322.99
+    ppy: 230.83
+    fx: 607.96
+    fy: 607.84
+    distortion: [0, 0, 0, 0, 0]
+    model: inverse_brown_conrady
+
+extrinsics:
+  depth_to_color:
+    rotation: [0.999654, 0.0262549, 0.00146348, -0.0262588, 0.999652, 0.00269019, -0.00139234, -0.00272768, 0.999995]
+    translation: [0.0149013, -0.00027249, 0.00003133]
+  color_to_depth:
+    rotation: [0.999654, -0.0262588, -0.00139234, 0.0262549, 0.999652, -0.00272768, 0.00146348, 0.00269019, 0.999995]
+    translation: [-0.01490327, -0.00011875, -0.00005241]
