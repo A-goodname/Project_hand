@@ -35,6 +35,7 @@ import cv2
 import numpy as np
 import torch
 import pyrealsense2 as rs
+from typing import Optional
 from ultralytics import YOLO
 
 # ============================================================
@@ -140,16 +141,16 @@ class PoseSmoother:
     def update(self, pos, rot):
         if pos is None or rot is None:
             return None, None
-        if self.filtered_pos is None:
+        if self.filtered_pos is None or self.filtered_rot is None:
             self.filtered_pos = list(pos)
             self.filtered_rot = rot.copy()
-        else:
-            for i in range(3):
-                self.filtered_pos[i] = (1 - self.alpha) * self.filtered_pos[i] + self.alpha * pos[i]
-            self.filtered_rot = (1 - self.alpha) * self.filtered_rot + self.alpha * rot
-            # SVD 正交化, 确保是有效的旋转矩阵
-            U, _, Vt = np.linalg.svd(self.filtered_rot)
-            self.filtered_rot = U @ Vt
+            return tuple(self.filtered_pos), self.filtered_rot
+        for i in range(3):
+            self.filtered_pos[i] = (1 - self.alpha) * self.filtered_pos[i] + self.alpha * pos[i]
+        self.filtered_rot = (1 - self.alpha) * self.filtered_rot + self.alpha * rot
+        # SVD 正交化, 确保是有效的旋转矩阵
+        U, _, Vt = np.linalg.svd(self.filtered_rot)
+        self.filtered_rot = U @ Vt
         return tuple(self.filtered_pos), self.filtered_rot
 
     def reset(self):
@@ -212,6 +213,10 @@ class RealSenseYOLO6DPoseDetector:
         # --- 平滑 ---
         self._pos_smoother = PositionSmoother(alpha=SMOOTH_ALPHA)
         self._pose_smoother = PoseSmoother(alpha=0.3)
+
+        # --- estun_run.py 外部使用的属性（定义于此以消除 Pylance 报错） ---
+        self.last_known_pose: Optional[tuple] = None  # 存储上次稳定的 (pos, euler)
+        self._cached_raw_depth = None                  # 缓存原始深度帧
 
     # ------------------------------------------------------------
     #  工具: 将单个彩色像素映射到深度图坐标
@@ -428,9 +433,9 @@ class RealSenseYOLO6DPoseDetector:
         eig_vec = eig_vec[:, idx]
 
         # 主方向 (最大特征值) -> Y轴 (绿色), 水瓶竖直时为主轴
-        target_y_main = eig_vec[:, 0].real
+        target_y_main = np.real(eig_vec[:, 0])
         # 最小方差方向 -> Z轴 (蓝色), 指向相机
-        target_z = eig_vec[:, 2].real
+        target_z = np.real(eig_vec[:, 2])
 
         if target_z[2] > 0:
             target_z = -target_z
@@ -538,6 +543,7 @@ class RealSenseYOLO6DPoseDetector:
                         print(f"\nTarget 6D Pose: (X, Y, Z, A, B, C) = "
                               f"({smooth_pos[0]:.3f}, {smooth_pos[1]:.3f}, {smooth_pos[2]:.3f}, "
                               f"{A:.1f}, {B:.1f}, {C:.1f})")
+                        assert point_cloud is not None
                         print(f"Point cloud points: {point_cloud.shape[0]}")
 
                         # 绘制检测框
@@ -563,7 +569,7 @@ class RealSenseYOLO6DPoseDetector:
                         print("Warning: 点云数量不足, 无法计算位姿")
 
                 # 并排显示
-                if display_img.shape == depth_colormap.shape:
+                if depth_colormap is not None and display_img.shape == depth_colormap.shape:
                     images = np.hstack((display_img, depth_colormap))
                 else:
                     images = display_img

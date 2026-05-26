@@ -90,7 +90,7 @@ def _init_colors(num_classes, seed=42):
         # 色调在 [0, 179] 范围内均匀分布 (OpenCV Hue 范围)
         step = max(1, 180 // num_classes)
         hue = (i * step) % 180
-        hsv = np.uint8([[[hue, 200, 240]]])
+        hsv = np.array([[[hue, 200, 240]]], dtype=np.uint8)
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
         colors.append((int(bgr[0]), int(bgr[1]), int(bgr[2])))
     return colors

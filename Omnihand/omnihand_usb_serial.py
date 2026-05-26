@@ -25,6 +25,8 @@ import struct
 import time
 from typing import List, Optional, Dict, Any, Tuple, Union
 
+import serial
+
 
 # ============================================================================
 # 自定义异常
@@ -246,12 +248,14 @@ class OmniHandSerial:
         """清空输入缓冲区"""
         if not self.is_open:
             raise OmniHandError("串口未打开")
+        assert self._ser is not None
         self._ser.reset_input_buffer()
 
     def flush_output(self):
         """清空输出缓冲区"""
         if not self.is_open:
             raise OmniHandError("串口未打开")
+        assert self._ser is not None
         self._ser.reset_output_buffer()
 
     # ======================== 协议编解码 ========================
@@ -294,6 +298,7 @@ class OmniHandSerial:
         """发送协议帧"""
         if not self.is_open:
             raise OmniHandError("串口未打开")
+        assert self._ser is not None
         frame = self.build_frame(cmd, data, node_id)
         self._ser.write(frame)
         self._ser.flush()
@@ -303,6 +308,7 @@ class OmniHandSerial:
         """精确读取 n 字节"""
         buf = bytearray()
         while len(buf) < n:
+            assert self._ser is not None
             part = self._ser.read(n - len(buf))
             if not part:
                 break
@@ -331,6 +337,7 @@ class OmniHandSerial:
         if not self.is_open:
             raise OmniHandError("串口未打开")
 
+        assert self._ser is not None
         old_timeout = self._ser.timeout
         if timeout is not None:
             self._ser.timeout = timeout
@@ -388,6 +395,7 @@ class OmniHandSerial:
 
         finally:
             if timeout is not None:
+                assert self._ser is not None
                 self._ser.timeout = old_timeout
 
     def request(

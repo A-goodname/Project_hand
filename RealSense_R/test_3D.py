@@ -405,6 +405,7 @@ class RealSenseYOLO3DDetector:
                     if position is not None:
                         # 时域平滑
                         smoothed = self._smoother.update(position)
+                        assert smoothed is not None
                         print(f"\nTarget 3D position (x, y, z): "
                               f"({smoothed[0]:.3f}, {smoothed[1]:.3f}, {smoothed[2]:.3f}) m")
 
@@ -422,7 +423,7 @@ class RealSenseYOLO3DDetector:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
                 # 并排显示彩色图 + 原始深度热力图
-                if display_img.shape == depth_colormap.shape:
+                if depth_colormap is not None and display_img.shape == depth_colormap.shape:
                     images = np.hstack((display_img, depth_colormap))
                 else:
                     images = display_img

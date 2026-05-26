@@ -181,7 +181,7 @@ class OrbbecYOLO3DDetector:
 
         # ---- 深度伪彩图 ----
         depth_valid = (depth_data > depth_min).astype(np.uint8) * 255
-        depth_norm = cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX)
+        depth_norm = cv2.normalize(depth_data, np.zeros_like(depth_data), 0, 255, cv2.NORM_MINMAX)
         depth_colormap = cv2.applyColorMap(depth_norm.astype(np.uint8), cv2.COLORMAP_JET)
         depth_colormap[depth_valid == 0] = 0
 
@@ -237,6 +237,7 @@ class OrbbecYOLO3DDetector:
         x2 = max(0, min(int(bbox[2]), depth_data.shape[1] - 1))
         y2 = max(0, min(int(bbox[3]), depth_data.shape[0] - 1))
 
+        assert self.color_intrinsics is not None
         fx = self.color_intrinsics.fx
         fy = self.color_intrinsics.fy
         ppx = self.color_intrinsics.cx
@@ -313,6 +314,7 @@ class OrbbecYOLO3DDetector:
 
                     if position is not None:
                         smoothed = self._smoother.update(position)
+                        assert smoothed is not None
                         print(f"\nTarget 3D position (x, y, z): ({smoothed[0]:.3f}, {smoothed[1]:.3f}, {smoothed[2]:.3f}) m")
 
                         text_pos = f'({smoothed[0]:.2f}, {smoothed[1]:.2f}, {smoothed[2]:.2f})'
@@ -321,8 +323,11 @@ class OrbbecYOLO3DDetector:
 
                 # ---- 调整显示尺寸 ----
                 img_rgb = cv2.resize(display_img, (display_w, display_h))
-                img_depth = cv2.resize(depth_colormap, (display_w, display_h))
-                images = np.hstack((img_rgb, img_depth))
+                if depth_colormap is not None:
+                    img_depth = cv2.resize(depth_colormap, (display_w, display_h))
+                    images = np.hstack((img_rgb, img_depth))
+                else:
+                    images = img_rgb
 
                 cv2.imshow(WIN_NAME, images)
 

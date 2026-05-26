@@ -703,6 +703,7 @@ def main():
                 if position is not None and rotation is not None:
                     smooth_pos, smooth_rot = detector._pose_smoother.update(position, rotation)
                     if smooth_pos is not None:
+                        assert smooth_rot is not None
                         # 转换到末端法兰坐标系 (cam -> ee)
                         pos_ee = T_cam2ee[:3, :3] @ np.array(smooth_pos) + T_cam2ee[:3, 3]
                         rot_ee = T_cam2ee[:3, :3] @ smooth_rot
@@ -749,7 +750,7 @@ def main():
                 detector._pose_smoother.reset()
 
             # ---- [Step 4] 显示: 拼接彩色/深度图, 绘制 6D 坐标系和位置信息 ----
-            if display_img.shape[:2] == depth_colormap.shape[:2]:
+            if depth_colormap is not None and display_img.shape[:2] == depth_colormap.shape[:2]:
                 images = np.hstack((display_img, depth_colormap))
             else:
                 images = display_img

@@ -382,6 +382,7 @@ class RealSenseYOLO3DDetector:
                     if position is not None:
                         # 时域平滑
                         smoothed = self._smoother.update(position)
+                        assert smoothed is not None
                         print(f"\nTarget 3D position (x, y, z): ({smoothed[0]:.3f}, {smoothed[1]:.3f}, {smoothed[2]:.3f}) m")
 
                         # 绘制检测框和中心点
@@ -398,7 +399,7 @@ class RealSenseYOLO3DDetector:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
                 # 并排显示
-                if display_img.shape == depth_colormap.shape:
+                if depth_colormap is not None and display_img.shape == depth_colormap.shape:
                     images = np.hstack((display_img, depth_colormap))
                 else:
                     images = display_img

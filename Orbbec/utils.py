@@ -105,7 +105,7 @@ def frame_to_rgb_frame(frame: VideoFrame) -> Union[Optional[VideoFrame], Any]:
     return rgb_frame
 
 
-def frame_to_bgr_image(frame: VideoFrame) -> Union[Optional[np.array], Any]:
+def frame_to_bgr_image(frame: VideoFrame) -> Union[Optional[np.ndarray], Any]:
     width = frame.get_width()
     height = frame.get_height()
     color_format = frame.get_format()
