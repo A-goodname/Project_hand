@@ -196,16 +196,16 @@ class KinematicsConverter:
     # 来自 test.json 的实际设备位姿
     DIRECT_POSITIONS: Dict[int, List[int]] = {
         Gesture.GRIP.value: [
-            4095,  # J0 Thumb Roll   (axis_1)
-            3563,  # J1 Thumb Ab/Ad  (axis_2)
-            1915,  # J2 Thumb MCP    (axis_3)
-            0,     # J3 Index Ab/Ad  (axis_4)
-            2750,  # J4 Index PIP    (axis_5)
-            2750,  # J5 Middle PIP   (axis_6)
-            1755,  # J6 Ring Ab/Ad   (axis_7)
-            2750,  # J7 Ring PIP     (axis_8)
-            1117,  # J8 Pinky Ab/Ad  (axis_9)
-            2750,  # J9 Pinky PIP    (axis_10)
+            4095,  # J0 Thumb Roll (axis_1)
+            4015,  # J1 Thumb Ab/Ad (axis_2)
+            691,  # J2 Thumb MCP (axis_3)
+            0,  # J3 Index Ab/Ad (axis_4)
+            1728,  # J4 Index PIP (axis_5)
+            1782,  # J5 Middle PIP (axis_6)
+            89,  # J6 Ring Ab/Ad (axis_7)
+            1728,  # J7 Ring PIP (axis_8)
+            3965,  # J8 Pinky Ab/Ad (axis_9)
+            1622,  # J9 Pinky PIP (axis_10)
         ],
     }
 
