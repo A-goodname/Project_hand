@@ -67,7 +67,7 @@ try:
     OMNIHAND_AVAILABLE = True
 except ImportError:
     OMNIHAND_AVAILABLE = False
-    print("[WARN] OmniHand 模块导入失败，将模拟手爪操作")
+    print("[WARN] OmniHand 模块导入失败，将模拟灵巧手操作")
 
 # ---- 全局退出事件 ----
 stop_event = threading.Event()
@@ -217,9 +217,9 @@ def load_cam2ee(yaml_path):
         data = yaml.safe_load(f)
 
     calib = data.get("calibration", {})
-    hand_eye = calib.get("hand_eye", {})
+    hand_eye = calib.get("handeye", {})
     if not hand_eye:
-        print("[WARN] 标定文件中未找到 calibration/hand_eye 章节")
+        print("[WARN] 标定文件中未找到 calibration/handeye 章节")
         print("[WARN] 使用单位矩阵")
         return I
 
@@ -357,16 +357,22 @@ def init_hand(hand_port=None):
     global _hand
     port = hand_port or HAND_PORT
     if not OMNIHAND_AVAILABLE:
-        print("[HAND] OmniHand 不可用, 将模拟所有手爪操作")
+        print("[HAND] OmniHand 不可用, 将模拟所有灵巧手操作")
         _hand = None
         return
     try:
         _hand = OmniHandGesture(port=port)
+        _hand.open()
         _hand.enable()
         print("[INFO] 手爪已初始化并启用")
     except Exception as e:
         print(f"[WARN] 手爪初始化失败: {e}")
         print("[WARN] 将模拟手爪操作")
+        if _hand is not None:
+            try:
+                _hand.close()
+            except Exception:
+                pass
         _hand = None
 
 
@@ -397,16 +403,17 @@ def release_object():
 
 
 def disable_hand():
-    """关闭灵巧手 (RESET -> disable)"""
+    """关闭灵巧手 (RESET -> disable -> close)"""
     global _hand
     if _hand is not None:
         try:
             _hand.do_gesture(Gesture.RESET, delay=0.3)
             time.sleep(0.5)
             _hand.disable()
-            print("[INFO] 手爪已禁用")
+            _hand.close()
+            print("[INFO] 灵巧手已禁用并关闭串口")
         except Exception as e:
-            print(f"[WARN] 手爪禁用失败: {e}")
+            print(f"[WARN] 灵巧手禁用失败: {e}")
         _hand = None
 
 
