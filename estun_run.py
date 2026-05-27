@@ -95,10 +95,18 @@ CALIB_RESULT_PATH = os.path.join(_project_root, _cfg_estun["calibration"]["resul
 STABLE_WINDOW = _cfg_estun["stabilization"]["window"]
 POS_THRESHOLD = _cfg_estun["stabilization"]["pos_threshold"]
 ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
-SEND_INTERVAL = _cfg_estun["send_interval"]
 GRIPPER_T_OFFSET = np.array(_cfg_estun["gripper_offset"]["t_offset"], dtype=float)
 GRIPPER_R_OFFSET = np.array(_cfg_estun["gripper_offset"]["r_offset"], dtype=float)
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
+
+# ---- 防御性检查：确保 orientation_mode 合法 ----
+VALID_MODES = {"vertical", "horizontal", "free"}
+if ORIENTATION_MODE not in VALID_MODES:
+    print(f"[WARN] 未知的 orientation_mode: {ORIENTATION_MODE}，将使用 free 模式")
+    ORIENTATION_MODE = "free"
+elif ORIENTATION_MODE == "horizontal":
+    print("[WARN] horizontal 模式暂未实现，将使用 free 模式")
+    ORIENTATION_MODE = "free"
 
 
 # =============================================================
@@ -188,6 +196,67 @@ def compute_gripper_offset_transform(t_offset_std, r_offset):
     R = euler_to_rotation_matrix(*r_offset, order="zyx")  # = R_z(C)
     t_effective = R @ np.array(t_offset_std, dtype=float)
     return R, t_effective
+
+
+def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
+    """
+    计算末端系下的目标抓取旋转矩阵 R_grasp_ee
+
+    坐标约定（YOLO 6D输出）：
+        R_obj(:,0) = X轴 (Y x Z)
+        R_obj(:,1) = Y轴 (PCA主方向, 瓶身轴线)
+        R_obj(:,2) = Z轴 (指向相机)
+
+    模式说明：
+        free      : 仅叠加固定夹爪安装偏移 Rz(C)，
+                    将水瓶Y轴统一为竖直向下以消除PCA符号歧义
+        vertical  : 末端XY平面与基坐标系Z轴平行，
+                    ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
+        horizontal: 暂未实现
+
+    参数:
+        R_obj_ee : 3x3, 物体在末端系下的旋转矩阵
+        mode     : str, "vertical" | "horizontal" | "free"
+        r_offset : np.ndarray, 旋转偏移 [A, B, C], 度
+        R_ee_base : 3x3 or None, 末端在基系下的旋转矩阵, free模式下用于Y轴符号修正
+
+    返回:
+        R_grasp_ee : 3x3
+    """
+    if mode == "free":
+        # 统一Y轴指向: 修正 PCA 符号歧义, 确保 Y 轴竖直向下
+        if R_ee_base is not None:
+            y_base = R_ee_base @ R_obj_ee[:, 1]
+            if y_base[2] > 0:  # Y轴指向上方, 需要翻转
+                R_obj_ee = R_obj_ee.copy()
+                R_obj_ee[:, 1] *= -1
+                R_obj_ee[:, 0] *= -1
+        # 仅叠加固定夹爪安装偏移，不做方向修正
+        R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
+        return R_obj_ee @ R_offset.T
+
+    if mode == "vertical":
+        # 工具(夹爪)的目标朝向: ee-X = 水瓶Y轴, ee-Y = 水瓶X轴, ee-Z = -水瓶Z轴
+        # 先统一 Y 轴指向向下
+        R_tmp = R_obj_ee.copy()
+        if R_ee_base is not None:
+            y_base = R_ee_base @ R_tmp[:, 1]
+            if y_base[2] > 0:  # Y轴指向上方, 翻转
+                R_tmp[:, 1] *= -1
+                R_tmp[:, 0] *= -1
+        # 工具目标朝向
+        R_tool = np.column_stack([
+            R_tmp[:, 1],   # 工具X轴 = 水瓶Y轴(向下)
+            R_tmp[:, 0],   # 工具Y轴 = 水瓶X轴
+            -R_tmp[:, 2]   # 工具Z轴 = -水瓶Z轴 (保持右手系)
+        ])
+        return R_tool
+
+    elif mode == "horizontal":
+        raise NotImplementedError("horizontal 抓取模式暂未实现")
+
+    else:
+        raise ValueError(f"不支持的抓取模式: {mode}")
 
 
 def load_cam2ee(yaml_path):
@@ -364,6 +433,7 @@ def init_hand(hand_port=None):
         _hand = OmniHandGesture(port=port)
         _hand.open()
         _hand.enable()
+        _hand.do_gesture(Gesture.PAPER, delay=0.3) # 确保初始手势
         print("[INFO] 手爪已初始化并启用")
     except Exception as e:
         print(f"[WARN] 手爪初始化失败: {e}")
@@ -421,25 +491,19 @@ def disable_hand():
 # 功能模块: 姿态后修正
 # =============================================================
 
-def post_correct_angles(A, B, C, robot_ABC, mode="vertical"):
+def post_correct_angles(A, B, C, robot_ABC):
     """
-    对基坐标系欧拉角进行后修正，确保可达性和方向合理性
+    对基坐标系欧拉角进行可达性修正
 
-    1. 可达性: 将 A (rx) 和 C (rz) 加减 180 度, 使其偏离当前末端位姿最小
-    2. 方向修正 (mode):
-       - "vertical"   : A 固定为 +/- 90, B 固定为 0 或 180
-       - "horizontal" : B 固定为 +/- 90, A 固定为 0 或 180
-       - "free"       : 不做额外修正
+    将 A (rx) 和 C (rz) 加减 180 度, 使其偏离当前末端位姿最小
 
     参数:
         A, B, C  : float, 基坐标系欧拉角 (度)
         robot_ABC : (float, float, float), 机器人末端欧拉角 (度)
-        mode      : str, 方向修正模式
 
     返回:
         A, B, C : float, 修正后的欧拉角
     """
-    # 1. 可达性修正
     while A - robot_ABC[0] > 90:
         A -= 180
     while robot_ABC[0] - A > 90:
@@ -448,15 +512,6 @@ def post_correct_angles(A, B, C, robot_ABC, mode="vertical"):
         C -= 180
     while robot_ABC[2] - C > 90:
         C += 180
-
-    # 2. 方向修正
-    if mode == "vertical":
-        A = 90 if abs(robot_ABC[0] - 90) < abs(robot_ABC[0] + 90) else -90
-        B = 0 if abs(robot_ABC[1] - 0) < abs(robot_ABC[1] - 180) else 180
-    elif mode == "horizontal":
-        B = 90 if abs(robot_ABC[1] - 90) < abs(robot_ABC[1] + 90) else -90
-        A = 0 if abs(robot_ABC[0] - 0) < abs(robot_ABC[0] - 180) else 180
-    # "free" 无需额外修正
 
     return A, B, C
 
@@ -505,7 +560,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
 
     # ---- [Phase B] 等待主循环产生稳定位姿 -> 基坐标转换 -> 补偿偏移 (30s 超时) ----
     # 预计算夹爪偏移变换 (常量, 在循环外执行一次)
-    R_fl2gr, t_fl2gr = compute_gripper_offset_transform(GRIPPER_T_OFFSET, GRIPPER_R_OFFSET)
+    _, t_fl2gr = compute_gripper_offset_transform(GRIPPER_T_OFFSET, GRIPPER_R_OFFSET)
     print("[INFO] 等待稳定目标位姿...", flush=True)
     target_sent = False
     wait_start = time.time()
@@ -513,32 +568,24 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
         if detector.last_known_pose is not None:
             mean_pos_ee, mean_euler_ee = detector.last_known_pose
 
-            # 完整 6D 夹爪偏移补偿 (先平移再旋转)
-            pos_ee_compensated = R_fl2gr.T @ (np.array(mean_pos_ee) - t_fl2gr)
-            rot_ee = euler_to_rotation_matrix(*mean_euler_ee, order="zyx")
-            rot_ee_compensated = R_fl2gr.T @ rot_ee
+            # 位置补偿: t_grasp_ee = t_obj_ee - t_tool'_ee  (第二部分 Step 5)
+            pos_ee_compensated = np.array(mean_pos_ee) - t_fl2gr
 
-            # 末端坐标系 -> 基坐标系
-            pos_base = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
+            # 方向对齐: 根据物体朝向和抓取模式计算 R_grasp_ee (第二部分 Step 5)
+            R_obj_ee = euler_to_rotation_matrix(*mean_euler_ee, order="zyx")
             R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-            rot_base = R_ee_base @ rot_ee_compensated
+            R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, GRIPPER_R_OFFSET, R_ee_base)
+
+            # 转换到基坐标系 (第二部分 Step 6)
+            rot_base = R_ee_base @ R_grasp_ee
+            pos_base = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
             A_base, B_base, C_base = RealSenseYOLO6DPoseDetector.rotation_matrix_to_euler_angles(
                 rot_base
             )
 
-            # 根据 r_offset.C 调整 orientation_mode (C=-90/90 时 vertical<->horizontal 互换)
-            _C_offset = GRIPPER_R_OFFSET[2]
-            if _C_offset in (-90, 90):
-                _effective_ori_mode = (
-                    "horizontal" if ORIENTATION_MODE == "vertical" else
-                    "vertical" if ORIENTATION_MODE == "horizontal" else
-                    ORIENTATION_MODE
-                )
-            else:  # C = 0 or 180
-                _effective_ori_mode = ORIENTATION_MODE
-
+            # 可达性修正: 将 A/C 加减 180 度, 使其偏离当前末端位姿最小
             A_base, B_base, C_base = post_correct_angles(
-                A_base, B_base, C_base, robot_ABC, _effective_ori_mode
+                A_base, B_base, C_base, robot_ABC
             )
 
             # [Phase B.1] 发送目标位姿 (仅一次)

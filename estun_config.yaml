@@ -14,8 +14,7 @@ estun:
     window: 5                    # 稳定帧数窗口
     pos_threshold: 0.01          # 位置变化阈值(米)
     angle_threshold: 5.0         # 角度变化阈值(度)
-  send_interval: 0.1             # 最小发送间隔(秒)
   gripper_offset:
-    t_offset: [-0.02, 0, 0.10]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转
+    t_offset: [0.06, -0.04, 0.07]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转;可能有误，如y轴可能代表水平偏移，x为竖直偏移
     r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}
-  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free
+  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free,由于机械臂欧拉角限制，两个方向的限制有误
