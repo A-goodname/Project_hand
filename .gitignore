@@ -14,6 +14,7 @@ calib_data/images_annotated/
 calib_data/poses.csv
 
 # 日志文件
+logs/
 *.log
 
 # 文档 PDF

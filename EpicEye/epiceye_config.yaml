@@ -1,0 +1,11 @@
+# EpicEye 相机配置
+camera:
+  ip: "192.168.101.66"         # 相机IP，为空字符串时自动搜索
+  auto_search: true            # 未指定IP时是否自动搜索
+
+save:
+  dir: captures                # 保存目录（相对于 EpicEye/ 目录）
+
+log:
+  dir: logs                    # 日志目录（相对于项目根目录）
+  level: INFO                  # DEBUG / INFO / WARNING / ERROR

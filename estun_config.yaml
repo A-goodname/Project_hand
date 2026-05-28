@@ -4,7 +4,7 @@
 
 estun:
   tcp_server:
-    host: "192.168.101.99"       # 服务器 IP 地址
+    host: "192.168.101.2"       # 服务器 IP 地址(本机IP地址)
     port: 8080                   # 服务器端口
   hand:
     port: "COM5"                 # 灵巧手串口号
