@@ -28,5 +28,35 @@
         "pos_axis_7": 1484,
         "pos_axis_8": 4095,
         "pos_axis_9": 1861
+    },
+    {
+        "name": "GripDone",
+        "pos_axis_1": 4095,
+        "pos_axis_10": 0,
+        "pos_axis_11": 0,
+        "pos_axis_12": 0,
+        "pos_axis_2": 0,
+        "pos_axis_3": 4095,
+        "pos_axis_4": 0,
+        "pos_axis_5": 0,
+        "pos_axis_6": 0,
+        "pos_axis_7": 0,
+        "pos_axis_8": 0,
+        "pos_axis_9": 4095
+    },
+    {
+        "name": "PreGrip",
+        "pos_axis_1": 4095,
+        "pos_axis_10": 1675,
+        "pos_axis_11": 0,
+        "pos_axis_12": 0,
+        "pos_axis_2": 0,
+        "pos_axis_3": 4095,
+        "pos_axis_4": 0,
+        "pos_axis_5": 1861,
+        "pos_axis_6": 1835,
+        "pos_axis_7": 0,
+        "pos_axis_8": 1808,
+        "pos_axis_9": 4095
     }
 ]

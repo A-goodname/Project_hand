@@ -12,6 +12,7 @@ model/
 calib_data/images/
 calib_data/images_annotated/
 calib_data/poses.csv
+EpicEye/captures/
 
 # 日志文件
 logs/

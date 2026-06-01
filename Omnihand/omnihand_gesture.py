@@ -63,6 +63,8 @@ class Gesture(Enum):
     MIDDLE = 14     # 竖中指 (Middle Finger)
     POINT = 15      # 指人
     GRIP = 16       # 握住 (如握住水瓶/水杯)
+    GRIPDONE = 17    # 握住完成 (如水瓶被完全握住时的位姿)
+    PREGRIP = 18     # 握住预备 (如接近水瓶时的位姿)
     EXIT = 99       # 退出
 
 
@@ -219,6 +221,30 @@ class KinematicsConverter:
             3965,  # J8 Pinky Ab/Ad (axis_9)
             1622,  # J9 Pinky PIP (axis_10)
         ],
+        Gesture.GRIPDONE.value: [
+            4095,  # J0 Thumb Roll (axis_1)
+            0,  # J1 Thumb Ab/Ad (axis_2)
+            4095,  # J2 Thumb MCP (axis_3)
+            0,  # J3 Index Ab/Ad (axis_4)
+            0,  # J4 Index PIP (axis_5)
+            0,  # J5 Middle PIP (axis_6)
+            0,  # J6 Ring Ab/Ad (axis_7)
+            0,  # J7 Ring PIP (axis_8)
+            4095,  # J8 Pinky Ab/Ad (axis_9)
+            0,  # J9 Pinky PIP (axis_10)
+        ],
+        Gesture.PREGRIP.value: [
+            4095,  # J0 Thumb Roll (axis_1)
+            0,  # J1 Thumb Ab/Ad (axis_2)
+            4095,  # J2 Thumb MCP (axis_3)
+            0,  # J3 Index Ab/Ad (axis_4)
+            1861,  # J4 Index PIP (axis_5)
+            1835,  # J5 Middle PIP (axis_6)
+            0,  # J6 Ring Ab/Ad (axis_7)
+            1808,  # J7 Ring PIP (axis_8)
+            4095,  # J8 Pinky Ab/Ad (axis_9)
+            1675,  # J9 Pinky PIP (axis_10)
+        ],
     }
 
     @classmethod
@@ -267,6 +293,8 @@ GESTURE_NAMES: Dict[Gesture, str] = {
     Gesture.MIDDLE:  "竖中指",
     Gesture.POINT:   "指人",
     Gesture.GRIP:    "握住",
+    Gesture.GRIPDONE: "握住完成",
+    Gesture.PREGRIP:  "握住预备",
 }
 
 
@@ -493,6 +521,8 @@ def print_menu():
         (14, "竖中指"),
         (15, "指人"),
         (16, "握住"),
+        (17, "握住完成"),
+        (18, "握住预备"),
         (99, "退出程序"),
     ]
     for num, name in items:

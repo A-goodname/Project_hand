@@ -353,23 +353,6 @@ class EpicEyeCamera:
             self.logger.warning("获取点云失败 (frame_id=%s)", frame_id)
         return point_map
 
-    def get_point_cloud_with_time_stats(self, frame_id):
-        """
-        根据 frameID 获取点云，同时返回网络传输统计信息
-
-        参数:
-            frame_id : str, 待获取数据的 frameID
-
-        返回:
-            tuple: (point_map, network_transmit_time_ms, network_speed_mbps)
-            失败时返回 (None, None, None)
-        """
-        result = epiceye.get_point_cloud_with_time_stats(self.ip, frame_id=frame_id)
-        if result is None:
-            self.logger.warning("获取点云(含统计)失败 (frame_id=%s)", frame_id)
-            return None, None, None
-        return result
-
     # ----------------------------------------------------------
     # 数据获取：图像 + 点云（同时获取）
     # ----------------------------------------------------------
@@ -396,30 +379,6 @@ class EpicEyeCamera:
             image = cv2.convertScaleAbs(image, alpha=(255.0 / 1024.0))
         return image, point_map
 
-    def get_image_and_point_cloud_with_time_stats(self, frame_id):
-        """
-        根据 frameID 获取 2D 图像和点云，同时返回网络传输统计信息
-
-        参数:
-            frame_id : str, 待获取数据的 frameID
-
-        返回:
-            tuple: (image, point_map, network_transmit_time_ms, network_speed_mbps)
-            失败时返回 (None, None, None, None)
-        """
-        result = epiceye.get_image_and_point_cloud_with_time_stats(
-            self.ip, frame_id=frame_id
-        )
-        if result is None:
-            self.logger.warning(
-                "获取图像和点云(含统计)失败 (frame_id=%s)", frame_id
-            )
-            return None, None, None, None
-        image, point_map, transmit_time, speed = result
-        if image is not None:
-            image = cv2.convertScaleAbs(image, alpha=(255.0 / 1024.0))
-        return image, point_map, transmit_time, speed
-
     # ----------------------------------------------------------
     # 数据获取：深度图
     # ----------------------------------------------------------
@@ -438,62 +397,6 @@ class EpicEyeCamera:
         if depth is None:
             self.logger.warning("获取深度图失败 (frame_id=%s)", frame_id)
         return depth
-
-    def get_depth_with_time_stats(self, frame_id):
-        """
-        根据 frameID 获取深度图，同时返回网络传输统计信息
-
-        参数:
-            frame_id : str, 待获取数据的 frameID
-
-        返回:
-            tuple: (depth, network_transmit_time_ms, network_speed_mbps)
-            失败时返回 (None, None, None)
-        """
-        result = epiceye.get_depth_with_time_stats(self.ip, frame_id=frame_id)
-        if result is None:
-            self.logger.warning("获取深度图(含统计)失败 (frame_id=%s)", frame_id)
-            return None, None, None
-        return result
-
-    # ----------------------------------------------------------
-    # 数据获取：PLY 格式点云
-    # ----------------------------------------------------------
-
-    def get_point_cloud_in_ply(self, frame_id):
-        """
-        根据 frameID 获取 PLY 格式的点云数据
-
-        参数:
-            frame_id : str, 待获取数据的 frameID
-
-        返回:
-            bytes or None, PLY 格式的点云数据
-        """
-        ply_data = epiceye.get_point_cloud_in_ply(self.ip, frame_id=frame_id)
-        if ply_data is None:
-            self.logger.warning("获取 PLY 点云失败 (frame_id=%s)", frame_id)
-        return ply_data
-
-    # ----------------------------------------------------------
-    # 数据获取：帧头信息
-    # ----------------------------------------------------------
-
-    def get_header(self, frame_id, timeout=2000):
-        """
-        获取相机照片信息
-
-        参数:
-            frame_id : str, 相机的 frameId
-            timeout  : int, 超时时间，默认 2000ms
-
-        返回:
-            dict or None, 包含 width, height
-        """
-        header = epiceye.get_header(self.ip, frame_id=frame_id, timeout=timeout)
-        if header is None:
-            self.logger.warning("获取帧头信息失败 (frame_id=%s)", frame_id)
-        return header
 
     # ----------------------------------------------------------
     # 静态工具方法
@@ -575,7 +478,7 @@ class EpicEyeCamera:
 
     def save_point_cloud(self, frame_id, save_dir=None):
         """
-        保存点云为 PLY 文件（使用 SDK 原生 PLY 格式，不依赖 open3d）
+        保存点云为 ASCII PLY 文件（不依赖 open3d）
 
         参数:
             frame_id : str, 待获取数据的 frameID
@@ -584,20 +487,49 @@ class EpicEyeCamera:
         返回:
             str or None, 保存的文件路径；失败返回 None
         """
-        ply_data = self.get_point_cloud_in_ply(frame_id)
-        if ply_data is None:
+        point_map = self.get_point_cloud(frame_id)
+        if point_map is None:
             self.logger.error(
-                "保存点云失败：获取 PLY 数据返回 None (frame_id=%s)", frame_id
+                "保存点云失败：获取点云返回 None (frame_id=%s)", frame_id
             )
+            return None
+
+        # 展平有效点（z 值可能是米或毫米，自适应过滤）
+        points = point_map.reshape(-1, 3)
+        z_valid = points[np.isfinite(points[:, 2]), 2]
+        if len(z_valid) == 0:
+            self.logger.error("保存点云失败：z 全部为 NaN (frame_id=%s)", frame_id)
+            return None
+        z_median = float(np.median(z_valid))
+        # 根据中值判断单位：若中值 > 100 则视为毫米
+        if z_median > 100:
+            valid_mask = (points[:, 2] > z_median * 0.1) & (points[:, 2] < z_median * 5.0)
+        else:
+            valid_mask = (points[:, 2] > 0.01) & (points[:, 2] < 10.0)
+        valid_mask &= np.isfinite(points[:, 0]) & np.isfinite(points[:, 1]) & np.isfinite(points[:, 2])
+        valid_points = points[valid_mask]
+        if len(valid_points) == 0:
+            self.logger.error("保存点云失败：无有效点 (frame_id=%s)", frame_id)
             return None
 
         save_path = os.path.join(
             save_dir or self._get_save_dir(),
             f"cloud_{self._timestamp_str()}.ply",
         )
-        with open(save_path, "wb") as f:
-            f.write(ply_data)
-        self.logger.info("点云已保存: %s", save_path)
+
+        # 写入 ASCII PLY
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write("ply\n")
+            f.write("format ascii 1.0\n")
+            f.write(f"element vertex {len(valid_points)}\n")
+            f.write("property float x\n")
+            f.write("property float y\n")
+            f.write("property float z\n")
+            f.write("end_header\n")
+            for p in valid_points:
+                f.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
+
+        self.logger.info("点云已保存: %s (%d 点)", save_path, len(valid_points))
         return save_path
 
     def save_depth(self, frame_id, save_dir=None, scale=10.0):

@@ -5,16 +5,16 @@ EpicEye YOLOv8n 水瓶3D定位抓拍
 使用 EpicEye 3D 结构光相机 + YOLO 实现水瓶检测与 3D 定位
 
 工作模式:
-  本相机为 HTTP 触发式抓拍，非实时视频流。
-  每次触发拍照约耗时 3~5 秒（含网络传输），检测结果保持显示在窗口。
+  online=true (默认): 连接相机触发抓拍，检测后保存到 captures/
+  online=false:      从 captures/ 加载已有数据进行3D定位（无需相机）
 
 使用方法:
-  1. 连接 EpicEye 相机（需在同一网段）
+  1. 修改 EpicEye/epiceye_config.yaml 中的 mode.online 设置
   2. 运行: python EpicEye/test_3D.py
   3. 按键操作:
-       空格/回车  →  触发下一次抓拍
-       s          →  保存本次结果到 captures/
-       q / ESC    →  退出
+        空格/p  →  触发抓拍（online模式）
+        n       →  加载下一组数据（offline模式）
+        q       →  退出
 
 输入:
   - EpicEye/epiceye_config.yaml   : 相机/YOLO/深度配置
@@ -22,15 +22,12 @@ EpicEye YOLOv8n 水瓶3D定位抓拍
 输出:
   - 显示窗口: 灰度图 + 深度伪彩色（带检测框和3D坐标）
   - 控制台:   (x, y, z) 坐标
-  - EpicEye/captures/: 保存 image/point_cloud/depth
-
-架构:
-  - EpicEyeYOLO3DDetector: 封装相机操作 + YOLO 检测 + 3D 定位
-  - 主循环: 抓拍 → 检测 → 显示 → 等待按键
 """
 
 import os
+import re
 import sys
+import glob
 import yaml
 from datetime import datetime
 
@@ -44,6 +41,7 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+from typing import Optional
 from EpicEye.epiceye_camera import EpicEyeCamera
 
 
@@ -62,7 +60,8 @@ DEVICE_CFG = _cfg.get("model", {}).get("device", "gpu")
 DEPTH_MIN = _cfg.get("depth", {}).get("min", 0.15)
 DEPTH_MAX = _cfg.get("depth", {}).get("max", 1.5)
 DEPTH_Z_THRESHOLD = _cfg.get("depth", {}).get("z_threshold", 0.05)
-SMOOTH_ALPHA = _cfg.get("smoothing", {}).get("alpha", 0.4)
+MODE_ONLINE = _cfg.get("mode", {}).get("online", True)
+LOAD_TIMESTAMP = _cfg.get("mode", {}).get("load_timestamp", "")
 SAVE_DIR = _cfg.get("save", {}).get("dir", "captures")
 
 # 设备选择
@@ -71,47 +70,38 @@ if DEVICE_CFG == "gpu" and torch.cuda.is_available():
 else:
     DEVICE = "cpu"
 print(f"[INFO] Running on device: {DEVICE} (config: {DEVICE_CFG})")
+print(f"[INFO] Mode: {'online' if MODE_ONLINE else 'offline'}")
 
 
 # =============================================================
-# 辅助函数: 时间戳 / 保存目录
+# 辅助函数
 # =============================================================
+
+def _get_captures_dir():
+    """获取 captures 目录绝对路径"""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), SAVE_DIR)
+
 
 def _timestamp_str():
     """生成用于文件命名的时间戳字符串"""
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
 
-def _get_save_dir():
-    """获取保存目录（EpicEye/captures/）"""
-    epiceye_dir = os.path.dirname(os.path.abspath(__file__))
-    save_dir = os.path.join(epiceye_dir, SAVE_DIR)
-    os.makedirs(save_dir, exist_ok=True)
-    return save_dir
+def _list_captures(captures_dir):
+    """
+    列出 captures 目录下的所有抓拍时间戳（按时间排序）
 
-
-# =============================================================
-# 功能模块: 时域平滑
-# =============================================================
-
-class PositionSmoother:
-    """EMA 时域平滑器"""
-    def __init__(self, alpha=0.4):
-        self.alpha = alpha
-        self.filtered = None
-
-    def update(self, pos):
-        if pos is None:
-            return None
-        if self.filtered is None:
-            self.filtered = list(pos)
-        else:
-            for i in range(3):
-                self.filtered[i] = (1 - self.alpha) * self.filtered[i] + self.alpha * pos[i]
-        return tuple(self.filtered)
-
-    def reset(self):
-        self.filtered = None
+    返回:
+        list of str, 时间戳列表（按时间升序）
+    """
+    image_files = sorted(glob.glob(os.path.join(captures_dir, "image_*.png")))
+    timestamps = []
+    for f in image_files:
+        basename = os.path.basename(f)
+        match = re.match(r"image_(\d{8}_\d{6}_\d{3})\.png", basename)
+        if match:
+            timestamps.append(match.group(1))
+    return timestamps
 
 
 # =============================================================
@@ -122,24 +112,12 @@ class EpicEyeYOLO3DDetector:
     """
     EpicEye YOLO 3D 检测器
 
-    封装相机触发、YOLO 检测、3D 定位、显示、保存等完整流程。
-    每次触发拍照约 3~5 秒，结果保持显示在窗口。
-
-    使用示例:
-        detector = EpicEyeYOLO3DDetector()
-        detector.run()
+    online 模式连接相机抓拍，offline 模式从 captures/ 加载数据。
     """
 
-    def __init__(self, ip="", auto_search=True):
-        """
-        初始化检测器
-
-        参数:
-            ip          : str, 相机 IP，为空则根据配置或自动搜索决定
-            auto_search : bool, 是否自动搜索相机
-        """
-        # ---- 初始化相机 ----
-        self.camera = EpicEyeCamera(ip=ip or CAMERA_IP, auto_search=auto_search or AUTO_SEARCH)
+    def __init__(self):
+        """初始化检测器"""
+        self.is_online = MODE_ONLINE
 
         # ---- 加载 YOLO 模型 ----
         model_path = f"{MODEL_NAME}.pt"
@@ -148,7 +126,24 @@ class EpicEyeYOLO3DDetector:
         self.model = YOLO(model_path).to(DEVICE)
         print(f"[INFO] YOLO 模型已加载: {model_path} | 类别: {CLASS_ID} | 阈值: {CONF_THRESHOLD}")
 
-        # ---- 缓存相机内参 ----
+        # ---- 在线模式: 初始化相机 ----
+        self.camera: Optional[EpicEyeCamera] = None
+        if self.is_online:
+            self.camera = EpicEyeCamera(ip=CAMERA_IP, auto_search=AUTO_SEARCH)
+            self._cache_intrinsics()
+            print("[INFO] 按键: 空格/p=抓拍  q=退出")
+        else:
+            self.fx = self.fy = self.cx = self.cy = None
+            self.camera_matrix = None
+            print("[INFO] 按键: n=下一组  q=退出")
+
+    # ----------------------------------------------------------
+    # 相机内参缓存
+    # ----------------------------------------------------------
+
+    def _cache_intrinsics(self):
+        """缓存相机内参（仅 online 模式调用）"""
+        assert self.camera is not None
         self.camera_matrix = self.camera.get_camera_matrix()
         if self.camera_matrix is not None:
             self.fx = self.camera_matrix[0]
@@ -160,66 +155,121 @@ class EpicEyeYOLO3DDetector:
             print("[ERROR] 无法获取相机内参矩阵，3D 定位将不可用")
             self.fx = self.fy = self.cx = self.cy = None
 
-        # ---- 时域平滑 ----
-        self._smoother = PositionSmoother(alpha=SMOOTH_ALPHA)
-
-        # ---- 上次抓拍结果缓存（用于显示和保存） ----
-        self._last_color = None
-        self._last_depth = None
-        self._last_depth_colormap = None
-        self._last_frame_id = None
-        self._last_position = None
-
-        print("[INFO] EpicEye YOLO 3D 检测器初始化完成")
-        print("[INFO] 按键: 空格=抓拍  s=保存  q=退出")
-
     # ----------------------------------------------------------
-    # 帧获取
+    # Online 模式: 帧获取
     # ----------------------------------------------------------
 
-    def get_frames(self):
+    def get_frames_online(self):
         """
-        触发抓拍并获取 2D 图像和深度图
+        online 模式触发抓拍
 
         返回:
-            color_image     : numpy.ndarray, 8bit 灰度图 (H x W)，已转为3通道用于YOLO
-            depth_data      : numpy.ndarray or None, 原始深度数据 (H x W)
-            depth_colormap  : numpy.ndarray or None, 深度伪彩色图
+            color_image     : 3通道图像
+            depth_data      : 原始深度数据 (H x W) 或 None
+            depth_colormap  : 深度伪彩色图
         """
+        assert self.camera is not None
         self.camera.logger.info("触发抓拍...")
-
-        # 触发拍照
         frame_id = self.camera.trigger_frame(pointcloud=False)
         if frame_id is None:
             print("[ERROR] 触发拍照失败")
-            return None, None, None, None
+            return None, None, None
 
-        # 获取 2D 图像（10bit raw → 8bit）
         image_raw = self.camera.get_image(frame_id)
         if image_raw is None:
             print("[ERROR] 获取图像失败")
-            return None, None, None, None
+            return None, None, None
 
-        # 判断是否为单通道灰度图
+        # 灰度 → 3通道
         if len(image_raw.shape) == 2:
-            # 单通道灰度 → 复制为3通道（YOLO需要3通道输入）
             color_image = cv2.cvtColor(image_raw, cv2.COLOR_GRAY2BGR)
         else:
             color_image = image_raw
 
-        # 获取深度图
         depth_data = self.camera.get_depth(frame_id)
         depth_colormap = None
         if depth_data is not None:
-            # 深度伪彩色图
             depth_valid = (depth_data > DEPTH_MIN).astype(np.uint8) * 255
             depth_norm = cv2.normalize(depth_data, np.zeros_like(depth_data), 0, 255, cv2.NORM_MINMAX)
             depth_colormap = cv2.applyColorMap(depth_norm.astype(np.uint8), cv2.COLORMAP_JET)
             depth_colormap[depth_valid == 0] = 0
-        else:
-            print("[WARN] 获取深度图失败")
 
-        return color_image, depth_data, depth_colormap, frame_id
+        return color_image, depth_data, depth_colormap
+
+    # ----------------------------------------------------------
+    # Online 模式: 保存数据
+    # ----------------------------------------------------------
+
+    def _save_capture_online(self, color_image, depth_colormap):
+        """
+        online 模式下保存抓拍结果
+
+        保存内容:
+          - image_<timestamp>.png       : 灰度图
+          - depth_<timestamp>.png       : 深度伪彩色图
+
+        参数:
+            color_image     : 3通道图像
+            depth_colormap  : 深度伪彩色图或 None
+
+        返回:
+            str, 时间戳
+        """
+        captures_dir = _get_captures_dir()
+        os.makedirs(captures_dir, exist_ok=True)
+        ts = _timestamp_str()
+
+        # 保存灰度图
+        if len(color_image.shape) == 3:
+            gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = color_image
+        img_path = os.path.join(captures_dir, f"image_{ts}.png")
+        cv2.imwrite(img_path, gray)
+
+        # 保存深度伪彩色图
+        if depth_colormap is not None:
+            depth_path = os.path.join(captures_dir, f"depth_{ts}.png")
+            cv2.imwrite(depth_path, depth_colormap)
+
+        print(f"  [SAVE] 已保存到 captures/: {ts}")
+        return ts
+
+    # ----------------------------------------------------------
+    # Offline 模式: 加载数据
+    # ----------------------------------------------------------
+
+    def _load_capture_offline(self, timestamp):
+        """
+        offline 模式加载指定时间戳的抓拍数据
+
+        参数:
+            timestamp : str, 时间戳 (YYYYMMDD_HHMMSS_fff)
+
+        返回:
+            color_image     : 3通道图像
+            depth_colormap  : 深度伪彩色图或 None
+        """
+        captures_dir = _get_captures_dir()
+
+        # 加载灰度图
+        img_path = os.path.join(captures_dir, f"image_{timestamp}.png")
+        if not os.path.exists(img_path):
+            print(f"[ERROR] 图像不存在: {img_path}")
+            return None, None
+        gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            print(f"[ERROR] 图像加载失败: {img_path}")
+            return None, None
+        color_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+        # 加载深度伪彩色图
+        depth_colormap = None
+        depth_path = os.path.join(captures_dir, f"depth_{timestamp}.png")
+        if os.path.exists(depth_path):
+            depth_colormap = cv2.imread(depth_path)
+
+        return color_image, depth_colormap
 
     # ----------------------------------------------------------
     # YOLO 检测
@@ -257,7 +307,7 @@ class EpicEyeYOLO3DDetector:
         """
         计算目标 3D 位置（点云均值方案）
 
-        与 test_3D.py / Orbbec/test_3D.py 相同的算法:
+        算法:
           1. 锚点深度: bbox 中心附近取深度中值
           2. bbox 区域多点采样
           3. 深度离群过滤
@@ -336,211 +386,140 @@ class EpicEyeYOLO3DDetector:
         return (center[0], center[1], center[2])
 
     # ----------------------------------------------------------
-    # 保存结果
+    # 核心处理: 检测 + 3D定位 + 可视化
     # ----------------------------------------------------------
 
-    def save_results(self, color_image, depth_data, depth_colormap, frame_id, save_dir=None):
+    def process_and_display(self, color_image, depth_data, depth_colormap, win_name, display_label=""):
         """
-        保存抓拍结果到文件
-
-        保存内容:
-          - image_<timestamp>.png      : 灰度图
-          - depth_<timestamp>.png      : 深度伪彩色图
-          - position_<timestamp>.txt   : 3D 位置坐标
+        执行 YOLO 检测 → 3D定位 → 绘制结果 → 显示
 
         参数:
-            color_image     : numpy.ndarray, 3通道彩色图
-            depth_data      : numpy.ndarray, 深度数据
-            depth_colormap  : numpy.ndarray, 深度伪彩色图
-            frame_id        : str, 帧ID
-            save_dir        : str or None, 保存目录
+            color_image    : 3通道图像
+            depth_data     : 深度数据或 None（offline模式无原始深度）
+            depth_colormap : 深度伪彩色图或 None
+            win_name       : OpenCV 窗口名
+            display_label  : 显示标签（如时间戳）
 
         返回:
-            dict, 保存的文件路径
+            display_combined : 拼接后的显示图像
+            best_position    : (x, y, z) 或 None
         """
-        save_dir = save_dir or _get_save_dir()
-        ts = _timestamp_str()
+        # YOLO 检测
+        detections = self.detect_targets(color_image)
+        print(f"  YOLO 检测到 {len(detections)} 个目标")
 
-        # 保存灰度图（将3通道转回单通道）
-        if len(color_image.shape) == 3 and color_image.shape[2] == 3:
-            gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = color_image
-        img_path = os.path.join(save_dir, f"image_{ts}.png")
-        cv2.imwrite(img_path, gray)
+        display_img = color_image.copy()
+        best_position = None
 
-        # 保存深度伪彩色图
-        depth_path = None
+        for det in detections:
+            bbox = det[:4]
+
+            if depth_data is not None:
+                position = self.get_3d_position(bbox, depth_data)
+            else:
+                position = None
+
+            if position is not None:
+                best_position = position
+                print(f"  3D位置: x={position[0]:.3f}, y={position[1]:.3f}, z={position[2]:.3f} m")
+
+            # 绘制检测框
+            x1, y1, x2, y2 = map(int, bbox)
+            conf = det[4]
+            cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # 中心点
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
+            cv2.circle(display_img, (cx, cy), 4, (0, 0, 255), -1)
+
+            # 显示 3D 坐标
+            if position is not None:
+                text_pos = f"({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f})"
+                cv2.putText(display_img, text_pos, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                text_conf = f"conf: {conf:.2f}"
+                cv2.putText(display_img, text_conf, (x1, y1 - 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+        # 缩放 + 深度并排
+        h, w = display_img.shape[:2]
+        display_w = 640
+        display_h = int(h * display_w / w)
+        img_display = cv2.resize(display_img, (display_w, display_h))
+
         if depth_colormap is not None:
-            depth_path = os.path.join(save_dir, f"depth_{ts}.png")
-            cv2.imwrite(depth_path, depth_colormap)
+            depth_display = cv2.resize(depth_colormap, (display_w, display_h))
+            display_combined = np.hstack((img_display, depth_display))
+        else:
+            display_combined = img_display
 
-        # 保存 3D 位置
-        pos_path = None
-        if self._last_position is not None:
-            pos_path = os.path.join(save_dir, f"position_{ts}.txt")
-            with open(pos_path, "w", encoding="utf-8") as f:
-                f.write(f"x={self._last_position[0]:.4f}\n")
-                f.write(f"y={self._last_position[1]:.4f}\n")
-                f.write(f"z={self._last_position[2]:.4f}\n")
+        # 显示标签
+        if display_label:
+            cv2.putText(display_combined, display_label, (10, display_combined.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
-        print(f"\n[SAVE] 已保存:")
-        print(f"  图像:     {img_path}")
-        if depth_path:
-            print(f"  深度图:   {depth_path}")
-        if pos_path:
-            print(f"  位置:     {pos_path}")
+        if best_position is not None:
+            pos_text = f"3D: ({best_position[0]:.3f}, {best_position[1]:.3f}, {best_position[2]:.3f}) m"
+            cv2.putText(display_combined, pos_text, (10, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
-        return {
-            "image": img_path,
-            "depth": depth_path,
-            "position": pos_path,
-        }
+        cv2.imshow(win_name, display_combined)
+        return display_combined, best_position
 
     # ----------------------------------------------------------
-    # 运行主循环
+    # Online 主循环
     # ----------------------------------------------------------
 
-    def run(self):
-        """
-        运行主循环
-
-        流程:
-          1. 等待用户按键
-          2. 按空格 → 触发抓拍 → YOLO检测 → 3D定位 → 显示
-          3. 按 s → 保存结果
-          4. 按 q → 退出
-        """
-        WIN_NAME = "EpicEye YOLO 3D Detection"
+    def run_online(self):
+        """online 模式主循环"""
+        WIN_NAME = "EpicEye YOLO 3D Detection (Online)"
         cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WIN_NAME, 1280, 600)
 
         print("\n" + "=" * 60)
-        print("  EpicEye YOLO 3D 水瓶检测")
+        print("  EpicEye YOLO 3D 水瓶检测 [Online]")
         print("  " + "-" * 56)
-        print("  [空格] 触发抓拍  [s] 保存结果  [q] 退出")
+        print("  [空格/p] 触发抓拍并保存  [q] 退出")
         print("=" * 60)
 
-        # 初始显示提示界面
         hint_img = np.zeros((600, 1280, 3), dtype=np.uint8)
-        cv2.putText(hint_img, "EpicEye YOLO 3D Detection", (200, 200),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
-        cv2.putText(hint_img, "Press SPACE to capture", (200, 280),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
-        cv2.putText(hint_img, "Press S to save, Q to quit", (200, 330),
+        cv2.putText(hint_img, "Online Mode - Press SPACE or P to capture", (100, 280),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 200, 200), 2)
+        cv2.putText(hint_img, "Press Q to quit", (100, 330),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
         cv2.imshow(WIN_NAME, hint_img)
 
         try:
             while True:
-                # 检查窗口是否被关闭
                 if cv2.getWindowProperty(WIN_NAME, cv2.WND_PROP_VISIBLE) < 1:
                     break
 
                 key = cv2.waitKey(50) & 0xFF
 
-                # ---- 退出 ----
                 if key == ord("q") or key == ord("Q") or key == 27:
                     print("\n[INFO] 用户退出")
                     break
 
-                # ---- 保存 ----
-                if key == ord("s") or key == ord("S"):
-                    if self._last_color is not None:
-                        self.save_results(
-                            self._last_color,
-                            self._last_depth,
-                            self._last_depth_colormap,
-                            self._last_frame_id,
-                        )
-                    else:
-                        print("[WARN] 尚无抓拍结果，请先按空格触发抓拍")
-                    continue
-
-                # ---- 触发抓拍 ----
-                if key == ord(" ") or key == 13:  # 空格或回车
+                if key == ord(" ") or key == ord("p") or key == ord("P"):
                     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 触发抓拍...")
                     print("  等待相机响应...", end=" ", flush=True)
 
-                    color_image, depth_data, depth_colormap, frame_id = self.get_frames()
+                    color_image, depth_data, depth_colormap = self.get_frames_online()
 
                     if color_image is None:
                         print("[失败]")
                         continue
                     print("完成")
 
-                    # ---- YOLO 检测 ----
-                    print("  YOLO 检测...", end=" ", flush=True)
-                    detections = self.detect_targets(color_image)
-                    print(f"检测到 {len(detections)} 个目标")
+                    # 检测 + 3D定位 + 显示
+                    display_combined, best_position = self.process_and_display(
+                        color_image, depth_data, depth_colormap, WIN_NAME,
+                        display_label="[SPACE/p] Capture  [q] Quit"
+                    )
 
-                    # ---- 3D 定位与可视化 ----
-                    display_img = color_image.copy()
-                    best_position = None
-
-                    for det in detections:
-                        bbox = det[:4]
-
-                        # 计算 3D 位置
-                        position = self.get_3d_position(bbox, depth_data)
-                        if position is not None:
-                            smoothed = self._smoother.update(position)
-                            if smoothed is not None:
-                                best_position = smoothed
-                                print(f"  3D位置: x={smoothed[0]:.3f}, y={smoothed[1]:.3f}, z={smoothed[2]:.3f} m")
-
-                        # 绘制检测框
-                        x1, y1, x2, y2 = map(int, bbox)
-                        conf = det[4]
-                        cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                        # 中心点
-                        cx = int((x1 + x2) / 2)
-                        cy = int((y1 + y2) / 2)
-                        cv2.circle(display_img, (cx, cy), 4, (0, 0, 255), -1)
-
-                        # 显示 3D 坐标
-                        if position is not None and smoothed is not None:
-                            text_pos = f"({smoothed[0]:.2f}, {smoothed[1]:.2f}, {smoothed[2]:.2f})"
-                            cv2.putText(display_img, text_pos, (x1, y1 - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                            text_conf = f"conf: {conf:.2f}"
-                            cv2.putText(display_img, text_conf, (x1, y1 - 30),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-
-                    self._last_position = best_position
-
-                    # ---- 更新显示 ----
-                    # 缩放至合适显示尺寸
-                    h, w = display_img.shape[:2]
-                    display_w = 640
-                    display_h = int(h * display_w / w)
-                    img_display = cv2.resize(display_img, (display_w, display_h))
-
-                    if depth_colormap is not None:
-                        depth_display = cv2.resize(depth_colormap, (display_w, display_h))
-                        # 并排显示
-                        display_combined = np.hstack((img_display, depth_display))
-                    else:
-                        display_combined = img_display
-
-                    # 添加提示文字
-                    cv2.putText(display_combined, "[SPACE] Capture  [s] Save  [q] Quit",
-                                (10, display_combined.shape[0] - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-
-                    if best_position is not None:
-                        pos_text = f"3D: ({best_position[0]:.3f}, {best_position[1]:.3f}, {best_position[2]:.3f}) m"
-                        cv2.putText(display_combined, pos_text, (10, 25),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-                    cv2.imshow(WIN_NAME, display_combined)
-
-                    # 缓存当前结果
-                    self._last_color = color_image
-                    self._last_depth = depth_data
-                    self._last_depth_colormap = depth_colormap
-                    self._last_frame_id = frame_id
+                    # 保存到 captures/
+                    self._save_capture_online(color_image, depth_colormap)
 
                     print("  就绪，等待按键...")
 
@@ -548,15 +527,106 @@ class EpicEyeYOLO3DDetector:
             print("\n[INFO] 键盘中断")
         finally:
             cv2.destroyAllWindows()
-            self.close()
 
     # ----------------------------------------------------------
-    # 资源清理
+    # Offline 主循环
     # ----------------------------------------------------------
+
+    def run_offline(self):
+        """offline 模式主循环"""
+        captures_dir = _get_captures_dir()
+        if not os.path.exists(captures_dir):
+            print(f"[ERROR] captures 目录不存在: {captures_dir}")
+            return
+
+        timestamps = _list_captures(captures_dir)
+        if not timestamps:
+            print("[ERROR] captures 目录中没有找到抓拍数据")
+            return
+        print(f"[INFO] 找到 {len(timestamps)} 组抓拍数据")
+
+        if LOAD_TIMESTAMP:
+            if LOAD_TIMESTAMP in timestamps:
+                current_idx = timestamps.index(LOAD_TIMESTAMP)
+            else:
+                print(f"[WARN] 指定时间戳 {LOAD_TIMESTAMP} 未找到，加载最新")
+                current_idx = len(timestamps) - 1
+        else:
+            current_idx = len(timestamps) - 1
+
+        WIN_NAME = "EpicEye YOLO 3D Detection (Offline)"
+        cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN_NAME, 1280, 600)
+
+        print("\n" + "=" * 60)
+        print("  EpicEye YOLO 3D 水瓶检测 [Offline]")
+        print("  " + "-" * 56)
+        print("  [n] 下一组  [p] 上一组  [q] 退出")
+        print("=" * 60)
+
+        def load_and_show(idx):
+            """加载并显示指定索引的数据"""
+            ts = timestamps[idx]
+            print(f"\n[{ts}] 加载数据 ({idx + 1}/{len(timestamps)})...")
+            color_image, depth_colormap = self._load_capture_offline(ts)
+            if color_image is None:
+                print("[ERROR] 加载失败")
+                return
+
+            display_combined, best_position = self.process_and_display(
+                color_image, None, depth_colormap, WIN_NAME,
+                display_label=f"[{ts}]  [n] Next  [p] Prev  [q] Quit"
+            )
+            print("  就绪")
+
+        hint_img = np.zeros((600, 1280, 3), dtype=np.uint8)
+        cv2.putText(hint_img, f"Offline Mode - {len(timestamps)} captures found", (100, 250),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 200, 200), 2)
+        cv2.putText(hint_img, "Press N to load the latest capture", (100, 300),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        cv2.putText(hint_img, "Press Q to quit", (100, 350),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+        cv2.imshow(WIN_NAME, hint_img)
+
+        try:
+            while True:
+                if cv2.getWindowProperty(WIN_NAME, cv2.WND_PROP_VISIBLE) < 1:
+                    break
+
+                key = cv2.waitKey(50) & 0xFF
+
+                if key == ord("q") or key == ord("Q") or key == 27:
+                    print("\n[INFO] 用户退出")
+                    break
+
+                if key == ord("n") or key == ord("N"):
+                    current_idx = (current_idx + 1) % len(timestamps)
+                    load_and_show(current_idx)
+
+                if key == ord("p") or key == ord("P"):
+                    current_idx = (current_idx - 1) % len(timestamps)
+                    load_and_show(current_idx)
+
+        except KeyboardInterrupt:
+            print("\n[INFO] 键盘中断")
+        finally:
+            cv2.destroyAllWindows()
+
+    # ----------------------------------------------------------
+    # 统一运行入口
+    # ----------------------------------------------------------
+
+    def run(self):
+        """根据 mode.online 配置选择运行模式"""
+        if self.is_online:
+            self.run_online()
+        else:
+            self.run_offline()
+        self.close()
 
     def close(self):
-        """清理相机资源"""
-        if hasattr(self, "camera") and self.camera is not None:
+        """清理资源"""
+        if self.camera is not None:
             self.camera.close()
         print("[INFO] 资源已清理")
 

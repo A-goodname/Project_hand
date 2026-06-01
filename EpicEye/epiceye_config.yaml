@@ -1,6 +1,6 @@
 # EpicEye 相机配置
 camera:
-  ip: "192.168.101.66"         # 相机IP，为空字符串时自动搜索
+  ip: "192.168.101.66:5000"    # 相机IP（含端口），为空字符串时自动搜索
   auto_search: true            # 未指定IP时是否自动搜索
 
 # YOLO 检测模型配置
@@ -16,9 +16,10 @@ depth:
   max: 1.5                       # 深度有效最大值（米）
   z_threshold: 0.05              # 深度离群过滤阈值（米）
 
-# 时域平滑配置
-smoothing:
-  alpha: 0.4                     # EMA 平滑系数（0~1），值越小平滑越强
+# 运行模式
+mode:
+  online: true                   # true: 连接相机抓拍; false: 从captures加载已有数据
+  load_timestamp: ""             # offline时指定加载的capture时间戳，空则加载最新
 
 save:
   dir: captures                # 保存目录（相对于 EpicEye/ 目录）
