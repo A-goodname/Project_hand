@@ -20,7 +20,7 @@ resolution:
   fps: 30                        # 帧率
 
 sam:
-  model: "mobile_sam.pt"            # SAM 模型: sam_b.pt | mobile_sam.pt | FastSAM-s.pt
+  model: "model_sam.pt"            # SAM 模型: sam_b.pt | mobile_sam.pt | FastSAM-s.pt
   conf: 0.3                         # SAM 检测置信度阈值
   device: gpu                       # 运行设备: gpu(优先) | cpu(强制)
 

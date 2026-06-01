@@ -23,6 +23,7 @@ while true
                 SocketSendStr('RELEASE')
                 SocketReadStr(scoketstr6)
                 if scoketstr6 == '222'
+                    MovL P2 #避免回程碰撞
                     MovL Home
                     SocketClose
                     Return          

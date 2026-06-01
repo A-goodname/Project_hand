@@ -209,7 +209,7 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
 
     模式说明：
         free      : 仅叠加固定夹爪安装偏移 Rz(C)，
-                    将水瓶Y轴统一为竖直向下以消除PCA符号歧义
+                    将水瓶Y轴统一为向下以消除PCA符号歧义
         vertical  : 末端XY平面与基坐标系Z轴平行，
                     ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
         horizontal: 暂未实现
@@ -223,34 +223,46 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
     返回:
         R_grasp_ee : 3x3
     """
+    # 第一步: 统一 Y 轴指向为竖直向下 (消除 PCA 符号歧义)
+    R = R_obj_ee.copy()
+    if R_ee_base is not None:
+        y_base = R_ee_base @ R[:, 1]
+        if y_base[2] > 0:  # Y轴指向上方, 需要翻转
+            R[:, 1] *= -1
+            R[:, 0] *= -1
+
+    # 第二步: 按模式计算
     if mode == "free":
-        # 统一Y轴指向: 修正 PCA 符号歧义, 确保 Y 轴竖直向下
-        if R_ee_base is not None:
-            y_base = R_ee_base @ R_obj_ee[:, 1]
-            if y_base[2] > 0:  # Y轴指向上方, 需要翻转
-                R_obj_ee = R_obj_ee.copy()
-                R_obj_ee[:, 1] *= -1
-                R_obj_ee[:, 0] *= -1
         # 仅叠加固定夹爪安装偏移，不做方向修正
         R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
-        return R_obj_ee @ R_offset.T
+        return R @ R_offset.T
 
     if mode == "vertical":
-        # 工具(夹爪)的目标朝向: ee-X = 水瓶Y轴, ee-Y = 水瓶X轴, ee-Z = -水瓶Z轴
-        # 先统一 Y 轴指向向下
-        R_tmp = R_obj_ee.copy()
-        if R_ee_base is not None:
-            y_base = R_ee_base @ R_tmp[:, 1]
-            if y_base[2] > 0:  # Y轴指向上方, 翻转
-                R_tmp[:, 1] *= -1
-                R_tmp[:, 0] *= -1
-        # 工具目标朝向
-        R_tool = np.column_stack([
-            R_tmp[:, 1],   # 工具X轴 = 水瓶Y轴(向下)
-            R_tmp[:, 0],   # 工具Y轴 = 水瓶X轴
-            -R_tmp[:, 2]   # 工具Z轴 = -水瓶Z轴 (保持右手系)
-        ])
-        return R_tool
+        assert R_ee_base is not None, "vertical 模式需要 R_ee_base"
+        # 基系约束: 末端 XY 平面平行于基坐标 Z 轴 (即末端 Z 轴水平)
+        # 1. 水瓶在基系下的朝向
+        R_obj_base = R_ee_base @ R
+        y_obj_base = R_obj_base[:, 1]  # 水瓶Y轴(已统一向下, 瓶身轴线)
+        z_obj_base = R_obj_base[:, 2]  # 水瓶Z轴(指向相机)
+
+        # 2. 末端 Z 轴: 水平指向水瓶 (z_obj_base 在基系XY平面的投影)
+        ee_z_base = np.array([z_obj_base[0], z_obj_base[1], 0.0])
+        ee_z_base = ee_z_base / np.linalg.norm(ee_z_base)
+
+        # 3. 末端 X 轴: 沿瓶身轴线竖直向下
+        ee_x_base = y_obj_base
+
+        # 4. 末端 Y 轴: 右手系, 由 Z × X 确定
+        ee_y_base = np.cross(ee_z_base, ee_x_base)
+
+        # 5. 重新正交化: X = Y × Z, 确保严格右手系
+        ee_x_base = np.cross(ee_y_base, ee_z_base)
+
+        # 6. 基系下目标旋转矩阵
+        R_grasp_base = np.column_stack([ee_x_base, ee_y_base, ee_z_base])
+
+        # 7. 反推回末端系
+        return R_ee_base.T @ R_grasp_base
 
     elif mode == "horizontal":
         raise NotImplementedError("horizontal 抓取模式暂未实现")
