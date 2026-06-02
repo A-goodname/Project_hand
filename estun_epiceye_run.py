@@ -43,11 +43,10 @@ ESTUN EpicEye 6D 抓取系统
     [Phase C] CRP 指令循环: GRIP / RELEASE
 
 架构:
-  - 辅助函数: 从 estun_run.py 复制的纯函数, 无外部依赖
-  - 主循环: 有限状态机 (IDLE / CAPTURE / SUCCESS / FAILED)
-  - 检测器: 直接使用 EpicEye/test_6D.py 的 EpicEyeYOLO6DPoseDetector
+  - 辅助函数: 从 utils_shared 导入, 避免复制
+  - 检测器: EpicEyeSingleShotDetector 封装 YOLO 灰度 + PCA 6D
   - 窗口显示: cv2 单帧显示, 检测失败时提示空格重拍
-  - 灵巧手控制: 同 estun_run (OmniHand / 模拟)
+  - 数据保存: online 模式直接用 camera.save_all()
 """
 
 import os
@@ -68,14 +67,21 @@ _project_root = os.path.dirname(os.path.abspath(__file__))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+# ---- 从 utils_shared 导入共享辅助函数 ----
+from utils_shared import (
+    euler_to_rotation_matrix,
+    transform_pose_to_base,
+    compute_gripper_offset_transform,
+    compute_grasp_rotation,
+    post_correct_angles,
+)
+
 # ---- 导入自定义包 ----
 from EpicEye.epiceye_camera import EpicEyeCamera
-try:
-    from Omnihand.omnihand_gesture import OmniHandGesture, Gesture
-    OMNIHAND_AVAILABLE = True
-except ImportError:
-    OMNIHAND_AVAILABLE = False
-    print("[WARN] OmniHand 模块导入失败,将模拟灵巧手操作")
+from EpicEye.test_6D import _parse_ply, _filter_ply_by_bbox, _list_captures
+from utils_shared import (
+    init_hand, grip_object, release_object, disable_hand,
+)
 
 
 # ---- 全局退出事件 ----
@@ -129,6 +135,16 @@ DEPTH_MAX = _cfg_eye.get("depth", {}).get("max", 1.5)
 DEPTH_Z_THRESHOLD = _cfg_eye.get("depth", {}).get("z_threshold", 0.05)
 HANDEYE_MATRIX_RAW = _cfg_eye.get("handeye_matrix", None)
 
+# ---- 离线模式参数 ----
+MODE_ONLINE = _cfg_eye.get("mode", {}).get("online", True)
+MODE_LOAD_TS = _cfg_eye.get("mode", {}).get("load_timestamp", "")
+_CAM_INTR = _cfg_eye.get("camera_intrinsics", {})
+OFFLINE_FX = _CAM_INTR.get("fx", 2082.12)
+OFFLINE_FY = _CAM_INTR.get("fy", 2082.32)
+OFFLINE_CX = _CAM_INTR.get("cx", 975.08)
+OFFLINE_CY = _CAM_INTR.get("cy", 581.07)
+_CAPTURES_DIR = os.path.join(_project_root, "EpicEye", "captures")
+
 # ---- 设备选择 ----
 if DEVICE_CFG == "gpu" and torch.cuda.is_available():
     DEVICE = "cuda:0"
@@ -138,191 +154,8 @@ print(f"[INFO] Running on device: {DEVICE} (config: {DEVICE_CFG})")
 
 
 # =============================================================
-# 辅助函数 (从 estun_run.py 复制, 纯函数无副作用)
+# 功能模块: 手眼矩阵加载
 # =============================================================
-
-def euler_to_rotation_matrix(A, B, C, order="zyx"):
-    """
-    将欧拉角 (A, B, C) 转换为 3x3 旋转矩阵
-
-    参数:
-        A, B, C : float, 欧拉角 (度)
-        order   : str, 旋转顺序, 默认 "zyx"
-                  R = Rz(C) @ Ry(B) @ Rx(A)
-
-    返回:
-        np.ndarray, 3x3 旋转矩阵
-    """
-    a = np.deg2rad(A)
-    b = np.deg2rad(B)
-    c = np.deg2rad(C)
-
-    ca, sa = np.cos(a), np.sin(a)
-    cb, sb = np.cos(b), np.sin(b)
-    cc, sc = np.cos(c), np.sin(c)
-
-    Rx = np.array([[1, 0, 0],
-                   [0, ca, -sa],
-                   [0, sa,  ca]])
-    Ry = np.array([[cb, 0, sb],
-                   [0,  1, 0],
-                   [-sb, 0, cb]])
-    Rz = np.array([[cc, -sc, 0],
-                   [sc,  cc, 0],
-                   [0,  0,  1]])
-
-    if order == "zyx":
-        return Rz @ Ry @ Rx
-    elif order == "xyz":
-        return Rx @ Ry @ Rz
-    elif order == "zxz":
-        return Rz @ Rx @ Rz
-    elif order == "yzy":
-        return Ry @ Rz @ Ry
-    else:
-        raise ValueError(f"不支持的旋转顺序: {order}")
-
-
-def transform_pose_to_base(pose_ee, robot_xyz, robot_ABC):
-    """
-    将末端坐标系下的位置转换到机器人基坐标系
-
-    参数:
-        pose_ee   : (float, float, float), 末端坐标系下 3D 位置 (x, y, z), 米
-        robot_xyz : (float, float, float), 机器人末端在基坐标系下位置 (x, y, z), 米
-        robot_ABC : (float, float, float), 机器人末端欧拉角 (A, B, C), 度
-
-    返回:
-        np.ndarray, 基坐标系下 3D 位置 (x, y, z), 米
-    """
-    t_ee_base = np.array(robot_xyz, dtype=float)
-    R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-    pos_ee = np.array(pose_ee, dtype=float)
-    return R_ee_base @ pos_ee + t_ee_base
-
-
-def compute_gripper_offset_transform(t_offset_std, r_offset):
-    """
-    计算末端法兰 -> 夹爪 TCP 的变换矩阵
-
-    t_offset_std 是 C=0 (右手大拇指向上) 时的标准平移偏移
-    根据实际 r_offset.C 将标准偏移旋转到当前方向:
-        t_effective = R_z(C) @ t_offset_std
-        T_flange2gripper = Trans(t_effective) @ Rot_z(C)
-                        = [ R_offset | t_effective ]
-                          [ 0        | 1             ]
-        p_gripper = R_offset^T @ (p_flange - t_effective)
-
-    参数:
-        t_offset_std : np.ndarray, C=0 时标准平移偏移 [x, y, z], 米
-        r_offset     : np.ndarray, 旋转偏移 [A, B, C], 度 (A=B=0)
-
-    返回:
-        R_fl2gr : np.ndarray, 3x3 旋转矩阵 (法兰 -> 夹爪)
-        t_fl2gr : np.ndarray, 3x1 平移向量 (法兰 -> 夹爪, 已旋转到实际方向)
-    """
-    R = euler_to_rotation_matrix(*r_offset, order="zyx")  # = R_z(C)
-    t_effective = R @ np.array(t_offset_std, dtype=float)
-    return R, t_effective
-
-
-def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
-    """
-    计算末端系下的目标抓取旋转矩阵 R_grasp_ee
-
-    坐标约定 (YOLO 6D输出):
-        R_obj(:,0) = X轴 (Y x Z)
-        R_obj(:,1) = Y轴 (PCA主方向, 瓶身轴线)
-        R_obj(:,2) = Z轴 (指向相机)
-
-    模式说明:
-        free      : 仅叠加固定夹爪安装偏移 Rz(C),
-                    将水瓶Y轴统一为向下以消除PCA符号歧义
-        vertical  : 末端XY平面与基坐标系Z轴平行,
-                    ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
-        horizontal: 暂未实现
-
-    参数:
-        R_obj_ee : 3x3, 物体在末端系下的旋转矩阵
-        mode     : str, "vertical" | "horizontal" | "free"
-        r_offset : np.ndarray, 旋转偏移 [A, B, C], 度
-        R_ee_base : 3x3 or None, 末端在基系下的旋转矩阵, free模式下用于Y轴符号修正
-
-    返回:
-        R_grasp_ee : 3x3
-    """
-    # 第一步: 统一 Y 轴指向为竖直向下 (消除 PCA 符号歧义)
-    R = R_obj_ee.copy()
-    if R_ee_base is not None:
-        y_base = R_ee_base @ R[:, 1]
-        if y_base[2] > 0:  # Y轴指向上方, 需要翻转
-            R[:, 1] *= -1
-            R[:, 0] *= -1
-
-    # 第二步: 按模式计算
-    if mode == "free":
-        # 仅叠加固定夹爪安装偏移,不做方向修正
-        R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
-        return R @ R_offset.T
-
-    if mode == "vertical":
-        assert R_ee_base is not None, "vertical 模式需要 R_ee_base"
-        # 基系约束: 末端 XY 平面平行于基坐标 Z 轴 (即末端 Z 轴水平)
-        # 1. 水瓶在基系下的朝向
-        R_obj_base = R_ee_base @ R
-        y_obj_base = R_obj_base[:, 1]  # 水瓶Y轴(已统一向下, 瓶身轴线)
-        z_obj_base = R_obj_base[:, 2]  # 水瓶Z轴(指向相机)
-
-        # 2. 末端 Z 轴: 水平指向水瓶 (z_obj_base 在基系XY平面的投影)
-        ee_z_base = np.array([z_obj_base[0], z_obj_base[1], 0.0])
-        ee_z_base = ee_z_base / np.linalg.norm(ee_z_base)
-
-        # 3. 末端 X 轴: 沿瓶身轴线竖直向下
-        ee_x_base = y_obj_base
-
-        # 4. 末端 Y 轴: 右手系, 由 Z × X 确定
-        ee_y_base = np.cross(ee_z_base, ee_x_base)
-
-        # 5. 重新正交化: X = Y × Z, 确保严格右手系
-        ee_x_base = np.cross(ee_y_base, ee_z_base)
-
-        # 6. 基系下目标旋转矩阵
-        R_grasp_base = np.column_stack([ee_x_base, ee_y_base, ee_z_base])
-
-        # 7. 反推回末端系
-        return R_ee_base.T @ R_grasp_base
-
-    elif mode == "horizontal":
-        raise NotImplementedError("horizontal 抓取模式暂未实现")
-
-    else:
-        raise ValueError(f"不支持的抓取模式: {mode}")
-
-
-def post_correct_angles(A, B, C, robot_ABC):
-    """
-    对基坐标系欧拉角进行可达性修正
-
-    将 A (rx) 和 C (rz) 加减 180 度, 使其偏离当前末端位姿最小
-
-    参数:
-        A, B, C  : float, 基坐标系欧拉角 (度)
-        robot_ABC : (float, float, float), 机器人末端欧拉角 (度)
-
-    返回:
-        A, B, C : float, 修正后的欧拉角
-    """
-    while A - robot_ABC[0] > 90:
-        A -= 180
-    while robot_ABC[0] - A > 90:
-        A += 180
-    while C - robot_ABC[2] > 90:
-        C -= 180
-    while robot_ABC[2] - C > 90:
-        C += 180
-
-    return A, B, C
-
 
 def load_epiceye_cam2ee():
     """
@@ -349,81 +182,69 @@ def load_epiceye_cam2ee():
 
 
 # =============================================================
-# 功能模块: 灵巧手控制 (OmniHand)
+# 功能模块: 离线数据加载
 # =============================================================
 
-_hand = None
-
-
-def init_hand(hand_port=None):
+def load_offline_data():
     """
-    初始化并启用灵巧手
+    从 captures/ 目录加载离线数据
 
-    参数:
-        hand_port : str or None, 串口号; 默认使用 HAND_PORT 配置
+    根据 MODE_LOAD_TS 加载指定时间戳, 否则加载最新.
+    使用配置 camera_intrinsics 构建内参矩阵 K.
+
+    返回:
+        tuple: (gray_image_BGR, ply_points, K) 或 (None, None, None)
     """
-    global _hand
-    port = hand_port or HAND_PORT
-    if not OMNIHAND_AVAILABLE:
-        print("[HAND] OmniHand 不可用, 将模拟所有灵巧手操作")
-        _hand = None
-        return
-    try:
-        _hand = OmniHandGesture(port=port)
-        _hand.open()
-        _hand.enable()
-        _hand.do_gesture(Gesture.PAPER, delay=0.3)  # 确保初始手势
-        print("[INFO] 灵巧手已初始化并启用")
-    except Exception as e:
-        print(f"[WARN] 灵巧手初始化失败: {e}")
-        print("[WARN] 将模拟灵巧手操作")
-        if _hand is not None:
-            try:
-                _hand.close()
-            except Exception:
-                pass
-        _hand = None
+    if not os.path.isdir(_CAPTURES_DIR):
+        print(f"[ERROR] captures 目录不存在: {_CAPTURES_DIR}")
+        return None, None, None
+
+    timestamps = _list_captures(_CAPTURES_DIR)
+    if not timestamps:
+        print("[ERROR] captures 目录中没有找到抓拍数据")
+        return None, None, None
+
+    # 确定时间戳
+    if MODE_LOAD_TS:
+        if MODE_LOAD_TS in timestamps:
+            ts = MODE_LOAD_TS
+        else:
+            print(f"[WARN] 指定时间戳 {MODE_LOAD_TS} 未找到, 加载最新")
+            ts = timestamps[-1]
+    else:
+        ts = timestamps[-1]
+
+    img_path = os.path.join(_CAPTURES_DIR, f"image_{ts}.png")
+    ply_path = os.path.join(_CAPTURES_DIR, f"cloud_{ts}.ply")
+
+    if not os.path.exists(img_path):
+        print(f"[ERROR] 图像不存在: {img_path}")
+        return None, None, None
+    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        print(f"[ERROR] 图像加载失败: {img_path}")
+        return None, None, None
+    gray_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    ply_points = None
+    if os.path.exists(ply_path):
+        ply_points = _parse_ply(ply_path)
+        print(f"[INFO] 离线点云加载: {len(ply_points)} 点" if ply_points is not None else "[WARN] 点云为空")
+
+    K = np.array([
+        [OFFLINE_FX, 0,          OFFLINE_CX],
+        [0,          OFFLINE_FY, OFFLINE_CY],
+        [0,          0,          1         ]
+    ], dtype=float)
+
+    print(f"[INFO] 离线数据已加载: timestamp={ts}")
+    print(f"[INFO]   图像: {gray.shape[1]}x{gray.shape[0]}, 点云: {ply_points.shape if ply_points is not None else 'N/A'}")
+    print(f"[INFO]   内参: fx={OFFLINE_FX:.2f}, fy={OFFLINE_FY:.2f}, cx={OFFLINE_CX:.2f}, cy={OFFLINE_CY:.2f}")
+
+    return gray_image, ply_points, K
 
 
-def grip_object():
-    """执行抓取手势 (GRIP)"""
-    if _hand is None:
-        print("[HAND] 模拟抓取")
-        time.sleep(0.5)
-        return
-    try:
-        _hand.do_gesture(Gesture.GRIP, delay=1.0)
-        print("[HAND] 抓取完成")
-    except Exception as e:
-        print(f"[WARN] 抓取失败: {e}")
-
-
-def release_object():
-    """执行释放手势 (PAPER)"""
-    if _hand is None:
-        print("[HAND] 模拟释放")
-        time.sleep(0.5)
-        return
-    try:
-        _hand.do_gesture(Gesture.PAPER, delay=1.0)
-        print("[HAND] 释放完成")
-    except Exception as e:
-        print(f"[WARN] 释放失败: {e}")
-
-
-def disable_hand():
-    """关闭灵巧手 (RESET -> disable -> close)"""
-    global _hand
-    if _hand is not None:
-        try:
-            _hand.do_gesture(Gesture.RESET, delay=0.3)
-            time.sleep(0.5)
-            _hand.disable()
-            _hand.close()
-            print("[INFO] 灵巧手已禁用并关闭串口")
-        except Exception as e:
-            print(f"[WARN] 灵巧手禁用失败: {e}")
-        _hand = None
+# 灵巧手控制从 utils_shared 导入
 
 
 # =============================================================
@@ -439,14 +260,12 @@ class EpicEyeSingleShotDetector:
 
     def __init__(self):
         """初始化 YOLO 灰度模型"""
-        # ---- 加载 YOLO 模型 (固定灰度模型) ----
         model_path = f"{GRAY_MODEL_NAME}.pt"
         if not os.path.exists(model_path):
             model_path = GRAY_MODEL_NAME
         self.model = YOLO(model_path).to(DEVICE)
         print(f"[INFO] YOLO 灰度模型已加载: {model_path} | 类别: {CLASS_ID} | 阈值: {CONF_THRESHOLD}")
 
-        # ---- 相机内参 (online 模式从 SDK 获取, 稍后设置) ----
         self.camera_matrix = None
         self.fx = self.fy = self.cx = self.cy = None
 
@@ -486,11 +305,12 @@ class EpicEyeSingleShotDetector:
         """
         计算水瓶的 6D 位姿 (PCA 方法)
 
-        point_map 为 H×W×3 的点云图, 直接 bbox 区域采样
+        online 模式: point_map 为 H×W×3 点云, 直接 bbox 区域采样
+        offline 模式: point_map 为 N×3 PLY 点云, 反投影筛选 bbox 内点
 
         参数:
             bbox      : [x1, y1, x2, y2, conf, cls_id]
-            point_map : (H×W×3) 点云数据
+            point_map : online: (H×W×3), offline: (N×3)
 
         返回:
             position : (x, y, z) 重心坐标 (m)
@@ -500,50 +320,61 @@ class EpicEyeSingleShotDetector:
         if point_map is None or self.camera_matrix is None:
             return None, None, None
 
-        H, W = point_map.shape[:2]
-        x1 = max(0, min(int(bbox[0]), W - 1))
-        y1 = max(0, min(int(bbox[1]), H - 1))
-        x2 = max(0, min(int(bbox[2]), W - 1))
-        y2 = max(0, min(int(bbox[3]), H - 1))
+        # ---- 按点云格式分流 ----
+        if len(point_map.shape) == 2:
+            # offline 模式: N×3 PLY 点云 -> 反投影筛选 bbox 内点
+            K = self.camera_matrix.reshape(3, 3)
+            points = _filter_ply_by_bbox(point_map, bbox, K, (1200, 1920))
+            if len(points) < 10:
+                print(f"[WARN] PLY 投影到 bbox 后点数不足: {len(points)}")
+                return None, None, None
+            print(f"[INFO] PLY projected points in bbox: {len(points)}")
+        else:
+            # online 模式: H×W×3 -> bbox 区域直接采样
+            H, W = point_map.shape[:2]
+            x1 = max(0, min(int(bbox[0]), W - 1))
+            y1 = max(0, min(int(bbox[1]), H - 1))
+            x2 = max(0, min(int(bbox[2]), W - 1))
+            y2 = max(0, min(int(bbox[3]), H - 1))
 
-        # 锚点深度
-        cx_bbox = int((x1 + x2) / 2)
-        cy_bbox = int((y1 + y2) / 2)
-        half = 3
-        patch = point_map[
-            max(0, cy_bbox - half):min(H, cy_bbox + half + 1),
-            max(0, cx_bbox - half):min(W, cx_bbox + half + 1),
-            :
-        ]
-        z_vals = patch[:, :, 2].flatten()
-        valid_z = z_vals[(z_vals > DEPTH_MIN) & (z_vals < DEPTH_MAX) & np.isfinite(z_vals)]
-        if len(valid_z) < 3:
-            return None, None, None
-        center_depth = float(np.median(valid_z))
+            # 锚点深度
+            cx_bbox = int((x1 + x2) / 2)
+            cy_bbox = int((y1 + y2) / 2)
+            half = 3
+            patch = point_map[
+                max(0, cy_bbox - half):min(H, cy_bbox + half + 1),
+                max(0, cx_bbox - half):min(W, cx_bbox + half + 1),
+                :
+            ]
+            z_vals = patch[:, :, 2].flatten()
+            valid_z = z_vals[(z_vals > DEPTH_MIN) & (z_vals < DEPTH_MAX) & np.isfinite(z_vals)]
+            if len(valid_z) < 3:
+                return None, None, None
+            center_depth = float(np.median(valid_z))
 
-        # 采样 bbox 区域
-        region = point_map[y1:y2 + 1:2, x1:x2 + 1:2, :]
-        points_flat = region.reshape(-1, 3)
-        valid_mask = (
-            np.isfinite(points_flat[:, 2]) &
-            (points_flat[:, 2] > DEPTH_MIN) &
-            (points_flat[:, 2] < DEPTH_MAX) &
-            (np.abs(points_flat[:, 2] - center_depth) < DEPTH_Z_THRESHOLD)
-        )
-        points = points_flat[valid_mask]
-
-        if len(points) < 10:
-            valid_mask_wide = (
+            # 采样 bbox 区域
+            region = point_map[y1:y2 + 1:2, x1:x2 + 1:2, :]
+            points_flat = region.reshape(-1, 3)
+            valid_mask = (
                 np.isfinite(points_flat[:, 2]) &
                 (points_flat[:, 2] > DEPTH_MIN) &
-                (points_flat[:, 2] < DEPTH_MAX)
+                (points_flat[:, 2] < DEPTH_MAX) &
+                (np.abs(points_flat[:, 2] - center_depth) < DEPTH_Z_THRESHOLD)
             )
-            points = points_flat[valid_mask_wide]
+            points = points_flat[valid_mask]
+
             if len(points) < 10:
-                return None, None, None
-            print(f"[INFO] anchor depth: {center_depth:.3f}m, no-filter points: {len(points)}")
-        else:
-            print(f"[INFO] anchor depth: {center_depth:.3f}m, filtered points: {len(points)}")
+                valid_mask_wide = (
+                    np.isfinite(points_flat[:, 2]) &
+                    (points_flat[:, 2] > DEPTH_MIN) &
+                    (points_flat[:, 2] < DEPTH_MAX)
+                )
+                points = points_flat[valid_mask_wide]
+                if len(points) < 10:
+                    return None, None, None
+                print(f"[INFO] anchor depth: {center_depth:.3f}m, no-filter points: {len(points)}")
+            else:
+                print(f"[INFO] anchor depth: {center_depth:.3f}m, filtered points: {len(points)}")
 
         # ---- PCA 位姿 ----
         center = np.mean(points, axis=0)
@@ -554,7 +385,7 @@ class EpicEyeSingleShotDetector:
         idx = np.argsort(eig_val)[::-1]
         eig_vec = eig_vec[:, idx]
 
-        # 主方向 (最大特征值)-> Y轴 (水瓶纵向)
+        # 主方向 (最大特征值) -> Y轴 (水瓶纵向)
         target_y_main = np.real(eig_vec[:, 0])
         # 最小方差方向 -> Z轴 (指向相机)
         target_z = np.real(eig_vec[:, 2])
@@ -562,7 +393,7 @@ class EpicEyeSingleShotDetector:
         if target_z[2] > 0:
             target_z = -target_z
 
-        # X轴 = Y x Z,确保右手系
+        # X轴 = Y x Z, 确保右手系
         target_x = np.cross(target_y_main, target_z)
         target_x = target_x / np.linalg.norm(target_x)
         target_y = np.cross(target_z, target_x)
@@ -686,7 +517,6 @@ def handle_client(conn, addr, T_cam2ee, gripper_t_offset, gripper_r_offset, orie
         return
 
     # ---- [Phase B] 轮询 last_known_pose -> 基坐标转换 -> 补偿偏移 (30s 超时) ----
-    # 预计算夹爪偏移变换 (常量, 在循环外执行一次)
     _, t_fl2gr = compute_gripper_offset_transform(gripper_t_offset, gripper_r_offset)
     print("[INFO] 等待检测位姿...", flush=True)
     target_sent = False
@@ -800,48 +630,63 @@ def main():
 
     # ---- [Init 1] 加载手眼矩阵 (cam -> ee) ----
     T_cam2ee = load_epiceye_cam2ee()
-    if np.allclose(T_cam2ee, np.eye(4)):
-        print("[INFO] 手眼矩阵为单位矩阵 (直接发送相机坐标系位姿)")
-    else:
-        print("[INFO] 手眼矩阵已加载, 位姿将转换到末端坐标系")
-        print("[INFO] 后续还将叠加 gripper_offset 得到夹爪 TCP 位姿")
 
-    # ---- [Init 2] 初始化灵巧手 (OmniHand / 模拟) ----
+    # ---- [Init 2] 初始化灵巧手 ----
     init_hand()
 
-    # ---- [Init 3] 初始化 EpicEye 相机 ----
-    print(f"\n[INFO] 正在连接 EpicEye 相机...")
+    print(f"\n[INFO] 运行模式: {'online' if MODE_ONLINE else 'offline'}")
+
+    # ---- [Init 3] 相机/数据源初始化 ----
     camera = None
-    try:
-        camera = EpicEyeCamera(ip=CAMERA_IP, auto_search=AUTO_SEARCH)
-        print("[INFO] EpicEye 相机已连接")
-    except Exception as e:
-        print(f"[FATAL] EpicEye 相机连接失败: {e}")
-        print("[FATAL] 请确认已连接 EpicEye 相机并检查 IP 配置")
-        disable_hand()
-        return
+    gray_image = None
+    point_map = None
+    K = None
+
+    if MODE_ONLINE:
+        print("[INFO] 正在连接 EpicEye 相机...")
+        try:
+            camera = EpicEyeCamera(ip=CAMERA_IP, auto_search=AUTO_SEARCH)
+            print("[INFO] EpicEye 相机已连接")
+        except Exception as e:
+            print(f"[FATAL] EpicEye 相机连接失败: {e}")
+            disable_hand()
+            return
+    else:
+        print("[INFO] 从 captures/ 加载离线数据...")
+        gray_image, point_map, K = load_offline_data()
+        if gray_image is None:
+            print("[FATAL] 离线数据加载失败")
+            disable_hand()
+            return
 
     # ---- [Init 4] 初始化 YOLO 灰度检测器 ----
-    print(f"[INFO] 正在初始化 YOLO 灰度检测器...")
+    print("[INFO] 正在初始化 YOLO 灰度检测器...")
     try:
         detector = EpicEyeSingleShotDetector()
     except Exception as e:
         print(f"[FATAL] YOLO 模型加载失败: {e}")
-        camera.close()
+        if camera is not None:
+            camera.close()
         disable_hand()
         return
 
-    # 从 SDK 获取相机内参
-    K = camera.get_camera_matrix()
-    if K is not None:
-        detector.set_camera_matrix(K)
-        print(f"[INFO] 相机内参已从 SDK 获取: fx={detector.fx:.2f}, fy={detector.fy:.2f}, "
-              f"cx={detector.cx:.2f}, cy={detector.cy:.2f}")
+    # 获取内参
+    if MODE_ONLINE:
+        assert camera is not None
+        K = camera.get_camera_matrix()
+        if K is not None:
+            detector.set_camera_matrix(K)
+            print(f"[INFO] 相机内参已从 SDK 获取: fx={detector.fx:.2f}, fy={detector.fy:.2f}, "
+                  f"cx={detector.cx:.2f}, cy={detector.cy:.2f}")
+        else:
+            print("[FATAL] 无法从 SDK 获取相机内参")
+            camera.close()
+            disable_hand()
+            return
     else:
-        print("[FATAL] 无法从 SDK 获取相机内参")
-        camera.close()
-        disable_hand()
-        return
+        detector.set_camera_matrix(K)
+        print(f"[INFO] 使用配置内参: fx={OFFLINE_FX:.2f}, fy={OFFLINE_FY:.2f}, "
+              f"cx={OFFLINE_CX:.2f}, cy={OFFLINE_CY:.2f}")
 
     # ---- [Init 5] 启动 TCP 服务器 (非阻塞) ----
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -854,71 +699,99 @@ def main():
 
     cv2.namedWindow("ESTUN EpicEye 6D Pose", cv2.WINDOW_NORMAL)
 
+    # ---- 离线模式: 启动即执行一次检测 ----
+    if not MODE_ONLINE and gray_image is not None and point_map is not None:
+        print("[INFO] 离线模式: 执行 YOLO 检测...")
+        gray_input = cv2.cvtColor(gray_image, cv2.COLOR_BGR2GRAY)
+        detections = detector.detect_targets(gray_input)
+        print(f"  YOLO 检测到 {len(detections)} 个目标")
+
+        if detections:
+            best_det = max(detections, key=lambda d: d[4])
+            bbox = best_det[:4]
+            position, rotation, points = detector.compute_6d_pose(bbox, point_map)
+
+            if position is not None and rotation is not None:
+                A, B, C = detector.rotation_matrix_to_euler_angles(rotation)
+                print(f"  6D位姿: (X={position[0]:.3f}, Y={position[1]:.3f}, "
+                      f"Z={position[2]:.3f}, A={A:.1f}, B={B:.1f}, C={C:.1f})", flush=True)
+                set_last_known_pose((position, rotation))
+                last_display_ready = True
+            else:
+                print("  [WARN] 点云不足,无法计算位姿")
+        else:
+            print("  [WARN] 未检测到目标")
+
     # ---- 主循环状态 ----
     client_connected = False
-    need_trigger = False       # 是否需要触发拍照
-    last_gray_image = None     # 用于显示的灰度图
-    last_display_ready = False # 是否有结果显示
-
+    last_display_ready = False
+    need_trigger = MODE_ONLINE  # online 模式等待客户端连接后触发拍照
     running = True
+
     try:
         while running:
-            # ---- [Step 1] 需要时触发 EpicEye 拍照 ----
-            if need_trigger and camera is not None:
+            # ---- [Step 1] online 模式: 需要时触发拍照 ----
+            if MODE_ONLINE and need_trigger and camera is not None:
                 print("[INFO] 触发拍照...", flush=True)
-                data = camera.capture_all(pointcloud=True)
-                if data["image"] is None:
-                    print("[WARN] 拍照返回图像为空", flush=True)
+                frame_id = camera.trigger_frame(pointcloud=True)
+                if frame_id is None:
+                    print("[WARN] 触发拍照失败", flush=True)
                 else:
-                    last_gray_image = data["image"]  # 3通道BGR (用于显示)
-                    point_map = data["point_cloud"]
+                    # 使用 camera.save_all() 保存抓拍数据
+                    paths = camera.save_all(frame_id)
+                    if paths["image"] is not None:
+                        print(f"  [SAVE] 图像已保存: {os.path.basename(paths['image'])}")
+                    if paths["point_cloud"] is not None:
+                        print(f"  [SAVE] 点云已保存: {os.path.basename(paths['point_cloud'])}")
 
-                    # ---- [Step 2] YOLO 检测 -> PCA 6D 位姿 ----
-                    print("[INFO] 执行检测...", flush=True)
-                    # YOLO 灰度模型需要灰度输入
-                    gray_input = cv2.cvtColor(last_gray_image, cv2.COLOR_BGR2GRAY)
-                    detections = detector.detect_targets(gray_input)
-                    print(f"  YOLO 检测到 {len(detections)} 个目标")
-
-                    if detections:
-                        best_det = max(detections, key=lambda d: d[4])
-                        bbox = best_det[:4]
-                        conf = best_det[4]
-
-                        position, rotation, points = detector.compute_6d_pose(bbox, point_map)
-
-                        if position is not None and rotation is not None:
-                            A, B, C = detector.rotation_matrix_to_euler_angles(rotation)
-                            print(f"  6D位姿: (X={position[0]:.3f}, Y={position[1]:.3f}, "
-                                  f"Z={position[2]:.3f}, A={A:.1f}, B={B:.1f}, C={C:.1f})", flush=True)
-
-                            # 更新 last_known_pose (相机坐标系)
-                            set_last_known_pose((position, rotation))
-                            last_display_ready = True
-                            need_trigger = False
-                        else:
-                            print("  [WARN] 点云不足,无法计算位姿", flush=True)
-                            last_display_ready = False
+                    # 获取数据用于检测
+                    image_data, point_map = camera.get_image_and_point_cloud(frame_id)
+                    if image_data is None:
+                        print("[WARN] 获取图像数据为空", flush=True)
                     else:
-                        print("  [WARN] 未检测到目标", flush=True)
-                        last_display_ready = False
+                        gray_image = image_data  # H×W×3 BGR (灰度图以3通道形式返回)
 
-                need_trigger = False  # 无论成功失败, 标记清零
+                        # ---- [Step 2] YOLO 检测 -> PCA 6D 位姿 ----
+                        print("[INFO] 执行检测...", flush=True)
+                        gray_input = cv2.cvtColor(gray_image, cv2.COLOR_BGR2GRAY)
+                        detections = detector.detect_targets(gray_input)
+                        print(f"  YOLO 检测到 {len(detections)} 个目标")
+
+                        if detections:
+                            best_det = max(detections, key=lambda d: d[4])
+                            bbox = best_det[:4]
+
+                            position, rotation, points = detector.compute_6d_pose(bbox, point_map)
+
+                            if position is not None and rotation is not None:
+                                A, B, C = detector.rotation_matrix_to_euler_angles(rotation)
+                                print(f"  6D位姿: (X={position[0]:.3f}, Y={position[1]:.3f}, "
+                                      f"Z={position[2]:.3f}, A={A:.1f}, B={B:.1f}, C={C:.1f})", flush=True)
+
+                                # 更新 last_known_pose (相机坐标系)
+                                set_last_known_pose((position, rotation))
+                                last_display_ready = True
+                            else:
+                                print("  [WARN] 点云不足,无法计算位姿", flush=True)
+                                last_display_ready = False
+                        else:
+                            print("  [WARN] 未检测到目标", flush=True)
+                            last_display_ready = False
+
+                need_trigger = False
 
             # ---- [Step 3] 显示窗口 ----
             display_img = None
-            if last_gray_image is not None:
-                display_img = last_gray_image.copy()
+            if gray_image is not None:
+                display_img = gray_image.copy()
                 h, w = display_img.shape[:2]
                 display_w = 960
                 display_h = int(h * display_w / w)
 
                 if last_display_ready:
-                    # 绘制检测结果
                     last_pose = get_last_known_pose()
                     if last_pose is not None:
                         position, rotation = last_pose
-                        # 在图像上绘制 6D 坐标轴
                         detector.visualize_pose(display_img, position, rotation, K, scale=0.08)
                         A, B, C = detector.rotation_matrix_to_euler_angles(rotation)
                         text_pos = f"Pos: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f})"
@@ -928,20 +801,22 @@ def main():
                         cv2.putText(display_img, text_euler, (30, 70),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                    # 状态: 等待机器人
-                    status_text = "Waiting for robot..." if not client_connected else "Target acquired, waiting for robot..."
+                    mode_label = "ONLINE" if MODE_ONLINE else "OFFLINE"
+                    status_text = f"[{mode_label}] " + ("Waiting for robot..." if not client_connected else "Target ready, waiting for robot...")
                     cv2.putText(display_img, status_text, (30, display_img.shape[0] - 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
                 elif need_trigger is False:
-                    # 检测失败提示
                     cv2.putText(display_img, "No target detected", (30, 40),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    cv2.putText(display_img, "Press SPACE to retry capture", (30, 70),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    if MODE_ONLINE:
+                        cv2.putText(display_img, "Press SPACE to retry capture", (30, 70),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    else:
+                        cv2.putText(display_img, "Offline mode: cannot retry", (30, 70),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
                 display_img = cv2.resize(display_img, (display_w, display_h))
             else:
-                # 无图像时的占位
                 display_img = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(display_img, "Waiting for robot connection...", (50, 240),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
@@ -956,22 +831,25 @@ def main():
                 break
 
             if key == ord(" "):  # 空格重拍
-                if not last_display_ready:
+                if MODE_ONLINE and not last_display_ready:
                     print("[INFO] 用户按空格重新触发拍照", flush=True)
                     need_trigger = True
+                elif not MODE_ONLINE:
+                    print("[INFO] offline 模式无法重新拍照", flush=True)
 
             # ---- [Step 4] 非阻塞 accept -> 子线程 handle_client ----
             try:
                 conn, addr = server.accept()
             except BlockingIOError:
-                # 无客户端连接, 继续循环
                 pass
             else:
-                # 有新客户端连接
                 client_connected = True
-                set_last_known_pose(None)  # 清除旧数据
-                need_trigger = True        # 触发拍照
-                last_display_ready = False
+                if MODE_ONLINE:
+                    set_last_known_pose(None)
+                    need_trigger = True
+                    last_display_ready = False
+                else:
+                    print("  [INFO] 位姿已存在, 等待机器人连接确认")
 
                 t = threading.Thread(
                     target=handle_client,
@@ -985,9 +863,6 @@ def main():
                 )
                 t.start()
                 print("\n[INFO] 等待下一次连接...", flush=True)
-
-            # 检查客户端是否已断开 (子线程结束后 client_connected 保持 True, 但子线程已结束)
-            # 通过检查是否有新连接来更新状态 - 当 accept 成功时重置
 
     except KeyboardInterrupt:
         print("\n[INFO] 键盘中断 (Ctrl+C)")
