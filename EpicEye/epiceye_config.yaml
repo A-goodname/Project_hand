@@ -3,12 +3,19 @@ camera:
   ip: "192.168.101.66:5000"    # 相机IP（含端口），为空字符串时自动搜索
   auto_search: true            # 未指定IP时是否自动搜索
 
-# YOLO 检测模型配置
+# YOLO 检测模型配置（仅使用灰度模型）
 model:
-  path: ../model/yolov8n        # 模型路径（不带 .pt 后缀）
+  gray_path: ../model/yolo11n-grayscale  # 灰度模型（不带 .pt 后缀）
   class_id: 39                   # COCO 水瓶类别 ID
   conf_threshold: 0.5            # 检测置信度阈值
   device: gpu                    # 运行设备: gpu 优先, cpu 强制cpu
+
+# 相机内参（offline 模式使用，online 模式自动从相机获取）
+camera_intrinsics:
+  fx: 2082.12
+  fy: 2082.32
+  cx: 975.08
+  cy: 581.07
 
 # 深度范围配置
 depth:
@@ -18,7 +25,7 @@ depth:
 
 # 运行模式
 mode:
-  online: true                   # true: 连接相机抓拍; false: 从captures加载已有数据
+  online: false                   # true: 连接相机抓拍; false: 从captures加载已有数据
   load_timestamp: ""             # offline时指定加载的capture时间戳，空则加载最新
 
 save:

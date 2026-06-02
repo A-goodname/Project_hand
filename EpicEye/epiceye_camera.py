@@ -452,13 +452,14 @@ class EpicEyeCamera:
         """生成用于文件命名的时间戳字符串"""
         return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
-    def save_image(self, frame_id, save_dir=None):
+    def save_image(self, frame_id, save_dir=None, ts=None):
         """
         保存 2D 图像到文件
 
         参数:
             frame_id : str, 待获取数据的 frameID
             save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
+            ts       : str or None, 文件命名时间戳，None 则自动生成
 
         返回:
             str or None, 保存的文件路径；失败返回 None
@@ -468,21 +469,23 @@ class EpicEyeCamera:
             self.logger.error("保存图像失败：获取图像返回 None (frame_id=%s)", frame_id)
             return None
 
+        ts = ts or self._timestamp_str()
         save_path = os.path.join(
             save_dir or self._get_save_dir(),
-            f"image_{self._timestamp_str()}.png",
+            f"image_{ts}.png",
         )
         cv2.imwrite(save_path, image)
         self.logger.info("图像已保存: %s", save_path)
         return save_path
 
-    def save_point_cloud(self, frame_id, save_dir=None):
+    def save_point_cloud(self, frame_id, save_dir=None, ts=None):
         """
         保存点云为 ASCII PLY 文件（不依赖 open3d）
 
         参数:
             frame_id : str, 待获取数据的 frameID
             save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
+            ts       : str or None, 文件命名时间戳，None 则自动生成
 
         返回:
             str or None, 保存的文件路径；失败返回 None
@@ -512,9 +515,10 @@ class EpicEyeCamera:
             self.logger.error("保存点云失败：无有效点 (frame_id=%s)", frame_id)
             return None
 
+        ts = ts or self._timestamp_str()
         save_path = os.path.join(
             save_dir or self._get_save_dir(),
-            f"cloud_{self._timestamp_str()}.ply",
+            f"cloud_{ts}.ply",
         )
 
         # 写入 ASCII PLY
@@ -532,7 +536,7 @@ class EpicEyeCamera:
         self.logger.info("点云已保存: %s (%d 点)", save_path, len(valid_points))
         return save_path
 
-    def save_depth(self, frame_id, save_dir=None, scale=10.0):
+    def save_depth(self, frame_id, save_dir=None, scale=10.0, ts=None):
         """
         保存深度伪彩色图到文件
 
@@ -540,6 +544,7 @@ class EpicEyeCamera:
             frame_id : str, 待获取数据的 frameID
             save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
             scale    : float, 深度值缩放比例
+            ts       : str or None, 文件命名时间戳，None 则自动生成
 
         返回:
             str or None, 保存的文件路径；失败返回 None
@@ -552,9 +557,10 @@ class EpicEyeCamera:
             return None
 
         pseudo_color = self.depth_to_colormap(depth, scale=scale)
+        ts = ts or self._timestamp_str()
         save_path = os.path.join(
             save_dir or self._get_save_dir(),
-            f"depth_{self._timestamp_str()}.png",
+            f"depth_{ts}.png",
         )
         cv2.imwrite(save_path, pseudo_color)
         self.logger.info("深度伪彩色图已保存: %s", save_path)
@@ -563,6 +569,8 @@ class EpicEyeCamera:
     def save_all(self, frame_id, save_dir=None):
         """
         一次性保存图像、点云、深度图到文件
+
+        所有文件使用同一时间戳命名，确保数据组一致性。
 
         参数:
             frame_id : str, 待获取数据的 frameID
@@ -576,10 +584,11 @@ class EpicEyeCamera:
                 "depth": str or None,
             }
         """
+        ts = self._timestamp_str()
         return {
-            "image": self.save_image(frame_id, save_dir=save_dir),
-            "point_cloud": self.save_point_cloud(frame_id, save_dir=save_dir),
-            "depth": self.save_depth(frame_id, save_dir=save_dir),
+            "image": self.save_image(frame_id, save_dir=save_dir, ts=ts),
+            "point_cloud": self.save_point_cloud(frame_id, save_dir=save_dir, ts=ts),
+            "depth": self.save_depth(frame_id, save_dir=save_dir, ts=ts),
         }
 
     # ----------------------------------------------------------
