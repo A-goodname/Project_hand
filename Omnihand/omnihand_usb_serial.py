@@ -2,7 +2,7 @@
 """
 OmniHand 2025 - USB/RS485 串口通信封装库
 =========================================
-基于项目 C++ SDK (rs_485_device / c_agibot_hand_rs) 和官方文档逆向实现的纯 Python 通信库。
+基于项目 C++ SDK (rs_485_device / c_agibot_hand_rs) 和官方文档逆向实现的纯 Python 通信库.
 
 协议规范
 --------
@@ -230,7 +230,7 @@ class OmniHandSerial:
 
     def attach(self, ser: "serial.Serial") -> "OmniHandSerial":
         """
-        附加到外部已打开的串口对象（不拥有所有权，不会自动关闭）
+        附加到外部已打开的串口对象 (不拥有所有权,不会自动关闭)
         """
         self._ser = ser
         self._is_owner = False
@@ -435,7 +435,7 @@ class OmniHandSerial:
             try:
                 rsp = self.recv_frame(timeout=left)
             except (TimeoutError, CrcError):
-                # 接收超时或CRC错误，继续等待
+                # 接收超时或CRC错误,继续等待
                 continue
 
             # 过滤: CMD 必须匹配
@@ -523,7 +523,7 @@ class OmniHandSerial:
         """设置使能状态: 0=失能, 1=使能, 2=校准
 
         设备对 CMD_ENABLE 回复 ACK (data[0]=0x01) 即表示命令已送达,
-        本方法仅确认 ACK, 不额外查询实际状态。
+        本方法仅确认 ACK, 不额外查询实际状态.
         """
         if enable not in (DISABLE, ENABLE, CALIBRATE):
             raise ProtocolError("enable 仅支持 0/1/2")

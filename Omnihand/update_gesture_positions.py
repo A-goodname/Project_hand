@@ -3,7 +3,7 @@
 OmniHand 手势位置更新工具
 ========================
 读取 actlist.json (上位机导出的编码器位置), 
-更新 omnihand_gesture.py 中 DIRECT_POSITIONS 字典。
+更新 omnihand_gesture.py 中 DIRECT_POSITIONS 字典.
 
 用法:
     python update_gesture_positions.py
@@ -81,7 +81,7 @@ def read_actlist(json_path: Path) -> dict:
 
 def find_block_boundaries(lines: list, marker: str) -> tuple:
     """
-    查找代码块的起止行号。
+    查找代码块的起止行号.
     marker: 块起始行的特征字符串 (如 'DIRECT_POSITIONS:')
     返回: (start_line, end_line), 找不到返回 (-1, -1)
     """
@@ -112,7 +112,7 @@ def find_block_boundaries(lines: list, marker: str) -> tuple:
 
 def parse_existing_entries(block_lines: list) -> dict:
     """
-    解析现有 DIRECT_POSITIONS 块中的条目。
+    解析现有 DIRECT_POSITIONS 块中的条目.
     返回: {GestureName: [pos_0..pos_9]}
     """
     entries = {}
@@ -135,8 +135,8 @@ def parse_existing_entries(block_lines: list) -> dict:
 
 def build_new_block(entries: dict, old_comment_lines: list) -> str:
     """
-    构建新的 DIRECT_POSITIONS 代码块。
-    保留原有注释行，更新/新增手势条目。
+    构建新的 DIRECT_POSITIONS 代码块.
+    保留原有注释行,更新/新增手势条目.
     """
     lines = list(old_comment_lines)  # 保留原始注释
     lines.append("    DIRECT_POSITIONS: Dict[int, List[int]] = {")

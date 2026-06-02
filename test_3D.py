@@ -2,24 +2,24 @@
 """
 RealSense YOLOv8m 水瓶3D定位监控
 
-使用方法：
+使用方法:
 1. 连接Intel RealSense相机
-2. 运行：python test_3D.py
+2. 运行:python test_3D.py
 3. 按 'q' 键退出
 
-注意：
-- 使用COCO数据集预训练的YOLOv8m模型，水瓶类别ID为39
-- 3D位置计算：锚点深度 + bbox采样 + 深度离群过滤 + 点云均值
+注意:
+- 使用COCO数据集预训练的YOLOv8m模型,水瓶类别ID为39
+- 3D位置计算:锚点深度 + bbox采样 + 深度离群过滤 + 点云均值
 
-- 原方案：单点映射 → 单点反投影，受单个像素噪声影响大
-- 新方案：锚点深度 + bbox内多点采样 + 深度离群过滤 + 全部点云均值
+- 原方案:单点映射 → 单点反投影,受单个像素噪声影响大
+- 新方案:锚点深度 + bbox内多点采样 + 深度离群过滤 + 全部点云均值
 """
 
 model_name = './model/yolov8n'
 class_id = 39
-depth_min = 0.15   # 最小有效深度（米）
-depth_max = 1.5    # 最大有效深度（米）
-DEPTH_Z_THRESHOLD = 0.05  # 深度离群过滤阈值（米）
+depth_min = 0.15   # 最小有效深度 (米)
+depth_max = 1.5    # 最大有效深度 (米)
+DEPTH_Z_THRESHOLD = 0.05  # 深度离群过滤阈值 (米)
 
 import cv2
 import numpy as np
@@ -71,7 +71,7 @@ class RealSenseYOLO3DDetector:
         self.depth_scale = depth_sensor.get_depth_scale()
         print(f"[INFO] depth_scale = {self.depth_scale}")
 
-        # 激光功率设适中，减少近距光斑过曝
+        # 激光功率设适中,减少近距光斑过曝
         try:
             depth_sensor.set_option(rs.option.laser_power, 150)
             print("[INFO] laser_power set to 150")
@@ -86,10 +86,10 @@ class RealSenseYOLO3DDetector:
         self.depth_intrinsics = depth_profile.get_intrinsics()
         print(f"[INFO] depth intrinsics: {self.depth_intrinsics}")
 
-        # --- 彩色相机内参（延迟初始化） ---
+        # --- 彩色相机内参 (延迟初始化) ---
         self.color_intrinsics = None
 
-        # --- 彩色→深度 外参（用于精确像素映射） ---
+        # --- 彩色→深度 外参 (用于精确像素映射) ---
         self.color_to_depth_extrinsics = None
 
         # --- YOLO ---
@@ -131,7 +131,7 @@ class RealSenseYOLO3DDetector:
 
     # ------------------------------------------------------------
     def get_frames(self):
-        """获取彩色帧、对齐深度帧、原始深度帧"""
+        """获取彩色帧,对齐深度帧,原始深度帧"""
         frames = self.pipeline.wait_for_frames()
         aligned_frames = self.align.process(frames)
 
@@ -187,7 +187,7 @@ class RealSenseYOLO3DDetector:
                 print(f"[DIAG] aligned valid: {aligned_valid_ratio*100:.1f}% ({self._aligned_zero_count}/{self._total_count} zero)")
                 print(f"[DIAG] raw valid: {100*raw_valid/raw_data.size:.1f}%")
 
-        # 选择深度帧：优先用对齐帧，无效则回退到原始帧
+        # 选择深度帧:优先用对齐帧,无效则回退到原始帧
         if use_aligned:
             depth_frame = aligned_depth_frame
         else:
@@ -219,8 +219,8 @@ class RealSenseYOLO3DDetector:
     # ------------------------------------------------------------
     def _get_anchor_depth(self, bbox, depth_frame):
         """
-        获取 bbox 中心的锚点深度（单点）
-        优先用 rs2_project_color_pixel_to_depth_pixel 精确映射，
+        获取 bbox 中心的锚点深度 (单点)
+        优先用 rs2_project_color_pixel_to_depth_pixel 精确映射,
         失败则用 _fallback_search_single 回退
 
         返回 (center_x, center_y, center_depth) 或 None
@@ -228,7 +228,7 @@ class RealSenseYOLO3DDetector:
         cx_color = (int(bbox[0]) + int(bbox[2])) // 2
         cy_color = (int(bbox[1]) + int(bbox[3])) // 2
 
-        # ---- 尝试精确映射（彩色→深度） ----
+        # ---- 尝试精确映射 (彩色→深度) ----
         if self.color_to_depth_extrinsics is not None and self.color_intrinsics is not None:
             try:
                 depth_data = depth_frame.as_frame().get_data()
@@ -252,12 +252,12 @@ class RealSenseYOLO3DDetector:
             except Exception:
                 pass
 
-        # ---- 单点回退：在 bbox 周围搜索最近有效深度 ----
+        # ---- 单点回退:在 bbox 周围搜索最近有效深度 ----
         return self._fallback_search_single(bbox, depth_frame)
 
     def _fallback_search_single(self, bbox, depth_frame):
         """
-        单点回退：在 bbox 周围 ±80px 搜索最近的有效深度点
+        单点回退:在 bbox 周围 ±80px 搜索最近的有效深度点
         返回 (cx_color, cy_color, depth_val) 或 None
         """
         w = depth_frame.get_width()
@@ -299,13 +299,13 @@ class RealSenseYOLO3DDetector:
     # ------------------------------------------------------------
     def get_3d_position(self, bbox, depth_frame, use_aligned):
         """
-        计算目标3D位置（点云均值方案）
+        计算目标3D位置 (点云均值方案)
 
-        改进点（vs 原单点映射方案）：
-        1. 锚点深度：映射 bbox 中心获取 center_depth（同原方案）
-        2. 多点采样：在 bbox 区域内密集采样，反投影为 3D 点云
-        3. 深度离群过滤：|d - center_depth| < 0.05，剔除背景/前景噪声
-        4. 统计平均：全部点云取均值作为最终位置，大幅降低单像素噪声
+        改进点 (vs 原单点映射方案):
+        1. 锚点深度:映射 bbox 中心获取 center_depth (同原方案)
+        2. 多点采样:在 bbox 区域内密集采样,反投影为 3D 点云
+        3. 深度离群过滤:|d - center_depth| < 0.05,剔除背景/前景噪声
+        4. 统计平均:全部点云取均值作为最终位置,大幅降低单像素噪声
         """
         # ---- Step 1: 获取锚点深度 ----
         anchor = self._get_anchor_depth(bbox, depth_frame)
@@ -330,7 +330,7 @@ class RealSenseYOLO3DDetector:
                 d = depth_frame.get_distance(vx, vy)
                 if not (depth_min < d < depth_max):
                     continue
-                # 深度离群过滤：只保留与锚点深度相近的点
+                # 深度离群过滤:只保留与锚点深度相近的点
                 if abs(d - center_depth) > DEPTH_Z_THRESHOLD:
                     continue
                 depth_x = (vx - ppx) * d / fx
@@ -338,7 +338,7 @@ class RealSenseYOLO3DDetector:
                 points.append([depth_x, depth_y, d])
 
         if len(points) < 10:
-            # 点太少，不做过滤再试一次
+            # 点太少,不做过滤再试一次
             points_wide = []
             for vy in range(y1, y2 + 1, 2):
                 for vx in range(x1, x2 + 1, 2):

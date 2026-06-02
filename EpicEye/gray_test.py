@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-灰度 YOLO 2D 检测测试 — 直接检测 image* 图片，OpenCV 显示结果
+灰度 YOLO 2D 检测测试 — 直接检测 image* 图片,OpenCV 显示结果
 ==============================================================
 用法:
     python EpicEye/gray_test.py
@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# ---- COCO 类别名称（id -> name） ----
+# ---- COCO 类别名称 (id -> name) ----
 COCO_NAMES = {
     0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane",
     5: "bus", 6: "train", 7: "truck", 8: "boat", 9: "traffic light",

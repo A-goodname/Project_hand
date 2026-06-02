@@ -2,8 +2,8 @@
 """
 ESTUN RealSense 6D 抓取系统
 ===========================
-整合 RealSense YOLO 6D 检测器、手眼标定、TCP 服务器与灵巧手，实现
-实时水瓶检测、位姿转换与机器人抓取控制
+整合 RealSense YOLO 6D 检测器,手眼标定,TCP 服务器与灵巧手,实现
+实时水瓶检测,位姿转换与机器人抓取控制
 
 使用说明:
   1. 连接 RealSense 相机
@@ -55,7 +55,7 @@ import numpy as np
 import yaml
 
 
-# ---- 将项目根目录加入 sys.path，以导入 RealSense_R / Omnihand 包 ----
+# ---- 将项目根目录加入 sys.path,以导入 RealSense_R / Omnihand 包 ----
 _project_root = os.path.dirname(os.path.abspath(__file__))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -67,7 +67,7 @@ try:
     OMNIHAND_AVAILABLE = True
 except ImportError:
     OMNIHAND_AVAILABLE = False
-    print("[WARN] OmniHand 模块导入失败，将模拟灵巧手操作")
+    print("[WARN] OmniHand 模块导入失败,将模拟灵巧手操作")
 
 # ---- 全局退出事件 ----
 stop_event = threading.Event()
@@ -99,13 +99,13 @@ GRIPPER_T_OFFSET = np.array(_cfg_estun["gripper_offset"]["t_offset"], dtype=floa
 GRIPPER_R_OFFSET = np.array(_cfg_estun["gripper_offset"]["r_offset"], dtype=float)
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
 
-# ---- 防御性检查：确保 orientation_mode 合法 ----
+# ---- 防御性检查:确保 orientation_mode 合法 ----
 VALID_MODES = {"vertical", "horizontal", "free"}
 if ORIENTATION_MODE not in VALID_MODES:
-    print(f"[WARN] 未知的 orientation_mode: {ORIENTATION_MODE}，将使用 free 模式")
+    print(f"[WARN] 未知的 orientation_mode: {ORIENTATION_MODE},将使用 free 模式")
     ORIENTATION_MODE = "free"
 elif ORIENTATION_MODE == "horizontal":
-    print("[WARN] horizontal 模式暂未实现，将使用 free 模式")
+    print("[WARN] horizontal 模式暂未实现,将使用 free 模式")
     ORIENTATION_MODE = "free"
 
 
@@ -202,15 +202,15 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
     """
     计算末端系下的目标抓取旋转矩阵 R_grasp_ee
 
-    坐标约定（YOLO 6D输出）：
+    坐标约定 (YOLO 6D输出):
         R_obj(:,0) = X轴 (Y x Z)
         R_obj(:,1) = Y轴 (PCA主方向, 瓶身轴线)
         R_obj(:,2) = Z轴 (指向相机)
 
-    模式说明：
-        free      : 仅叠加固定夹爪安装偏移 Rz(C)，
+    模式说明:
+        free      : 仅叠加固定夹爪安装偏移 Rz(C),
                     将水瓶Y轴统一为向下以消除PCA符号歧义
-        vertical  : 末端XY平面与基坐标系Z轴平行，
+        vertical  : 末端XY平面与基坐标系Z轴平行,
                     ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
         horizontal: 暂未实现
 
@@ -233,7 +233,7 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
 
     # 第二步: 按模式计算
     if mode == "free":
-        # 仅叠加固定夹爪安装偏移，不做方向修正
+        # 仅叠加固定夹爪安装偏移,不做方向修正
         R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
         return R @ R_offset.T
 

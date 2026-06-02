@@ -214,7 +214,7 @@ class RealSenseYOLO6DPoseDetector:
         self._pos_smoother = PositionSmoother(alpha=SMOOTH_ALPHA)
         self._pose_smoother = PoseSmoother(alpha=0.3)
 
-        # --- estun_run.py 外部使用的属性（定义于此以消除 Pylance 报错） ---
+        # --- estun_run.py 外部使用的属性 (定义于此以消除 Pylance 报错) ---
         self.last_known_pose: Optional[tuple] = None  # 存储上次稳定的 (pos, euler)
         self._cached_raw_depth = None                  # 缓存原始深度帧
 

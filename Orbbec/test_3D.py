@@ -4,15 +4,15 @@ Orbbec YOLOv8m 水瓶3D定位监控
 ==============================
 使用 Orbbec Gemini 215 相机 + pyorbbecsdk2
 
-使用方法：
+使用方法:
 1. 连接 Orbbec Gemini 215 相机
-2. 运行：python Orbbec/test_3D.py
+2. 运行:python Orbbec/test_3D.py
 3. 按 'q' 键退出
 
-注意：
-- 使用COCO数据集预训练的YOLOv8m模型，水瓶类别ID为39
-- 3D位置计算：锚点深度 + bbox采样 + 深度离群过滤 + 点云均值
-- 使用 AlignFilter（软对齐），将深度图对齐到彩色坐标系
+注意:
+- 使用COCO数据集预训练的YOLOv8m模型,水瓶类别ID为39
+- 3D位置计算:锚点深度 + bbox采样 + 深度离群过滤 + 点云均值
+- 使用 AlignFilter (软对齐),将深度图对齐到彩色坐标系
 """
 
 import yaml
@@ -42,7 +42,7 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-# ---- GPU/CPU 设备选择（优先读取 config.yaml 的 device 字段） ----
+# ---- GPU/CPU 设备选择 (优先读取 config.yaml 的 device 字段) ----
 device_cfg = cfg["model"].get("device", "gpu")
 if device_cfg == "gpu" and torch.cuda.is_available():
     DEVICE = "cuda:0"
@@ -88,7 +88,7 @@ class OrbbecYOLO3DDetector:
             model_path = model_name
         self.model = YOLO(model_path).to(DEVICE)
 
-        # --- 内参占位（在 get_frames 中首次填充） ---
+        # --- 内参占位 (在 get_frames 中首次填充) ---
         self.color_intrinsics = None
         self.depth_intrinsics = None
 
@@ -101,8 +101,8 @@ class OrbbecYOLO3DDetector:
 
         config = Config()
 
-        # 使用 get_stream_profile_list 自动获取可用的 RGB profile（hw_d2c_align.py 样式）
-        # 但 Gemini 215 上 get_stream_profile_list 在 start 前可能返回空，
+        # 使用 get_stream_profile_list 自动获取可用的 RGB profile (hw_d2c_align.py 样式)
+        # 但 Gemini 215 上 get_stream_profile_list 在 start 前可能返回空,
         # 所以我们手动使用已知支持的配置
         config.enable_video_stream(OBSensorType.COLOR_SENSOR, COLOR_W, COLOR_H, COLOR_FPS, OBFormat.RGB)
         config.enable_video_stream(OBSensorType.DEPTH_SENSOR, DEPTH_W, DEPTH_H, DEPTH_FPS, OBFormat.Y16)
@@ -112,10 +112,10 @@ class OrbbecYOLO3DDetector:
 
         self.pipeline.start(config)
 
-        # --- 使用自动曝光（默认开启） ---
+        # --- 使用自动曝光 (默认开启) ---
         print("[INFO] exposure: auto")
 
-        # --- 对齐滤波器：将深度图 warp 到彩色坐标系 ---
+        # --- 对齐滤波器:将深度图 warp 到彩色坐标系 ---
         self.align_filter = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
 
         # --- 平滑 ---
@@ -155,7 +155,7 @@ class OrbbecYOLO3DDetector:
         # ---- 初始化内参 ----
         self._init_intrinsics()
 
-        # ---- 软对齐（AlignFilter） ----
+        # ---- 软对齐 (AlignFilter) ----
         frames = self.align_filter.process(frames)
         if frames is None:
             return None, None, None
@@ -171,12 +171,12 @@ class OrbbecYOLO3DDetector:
             return None, None, None
 
         # ---- 对齐后的深度数据 ----
-        # 对齐后深度图分辨率 = 彩色图分辨率（1280x720）
+        # 对齐后深度图分辨率 = 彩色图分辨率 (1280x720)
         depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape(
             (depth_frame.get_height(), depth_frame.get_width()))
-        # 原始单位为毫米，转为米
+        # 原始单位为毫米,转为米
         depth_data = depth_data.astype(np.float32) * depth_frame.get_depth_scale()
-        # 实际 Orbbec depth_scale 通常为 1.0（毫米），所以 * 0.001 转米
+        # 实际 Orbbec depth_scale 通常为 1.0 (毫米),所以 * 0.001 转米
         depth_data = depth_data * 0.001
 
         # ---- 深度伪彩图 ----
@@ -207,8 +207,8 @@ class OrbbecYOLO3DDetector:
     # ------------------------------------------------------------
     def get_3d_position(self, bbox, depth_data):
         """
-        计算目标3D位置（点云均值方案）
-        使用对齐深度图 + rgb_intrinsics（对齐后深度在彩色坐标系下）
+        计算目标3D位置 (点云均值方案)
+        使用对齐深度图 + rgb_intrinsics (对齐后深度在彩色坐标系下)
         """
         # ---- Step 1: 获取锚点深度 ----
         cx = int((bbox[0] + bbox[2]) / 2)
@@ -277,15 +277,15 @@ class OrbbecYOLO3DDetector:
     def run(self):
         print("按 'q' 键退出程序...")
 
-        # ---- 创建窗口（只执行一次） ----
+        # ---- 创建窗口 (只执行一次) ----
         WIN_NAME = 'Orbbec YOLOv8m 3D Position'
-        display_w, display_h = 640, 360  # 显示缩放尺寸（原始为 1280x720 / 1280x800）
+        display_w, display_h = 640, 360  # 显示缩放尺寸 (原始为 1280x720 / 1280x800)
         cv2.namedWindow(WIN_NAME, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WIN_NAME, display_w * 2, display_h)
 
         try:
             while True:
-                # 检查窗口是否被手动关闭（点 X）
+                # 检查窗口是否被手动关闭 (点 X)
                 if cv2.getWindowProperty(WIN_NAME, cv2.WND_PROP_VISIBLE) < 1:
                     break
 
@@ -302,14 +302,14 @@ class OrbbecYOLO3DDetector:
                 for det in detections:
                     bbox = det[:4]
 
-                    # ---- 始终画检测框和中心点（不论深度是否有效） ----
+                    # ---- 始终画检测框和中心点 (不论深度是否有效) ----
                     x1, y1, x2, y2 = map(int, bbox)
                     cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cx = int((x1 + x2) / 2)
                     cy = int((y1 + y2) / 2)
                     cv2.circle(display_img, (cx, cy), 4, (0, 0, 255), -1)
 
-                    # ---- 计算 3D 位置（深度有效时才标注文字） ----
+                    # ---- 计算 3D 位置 (深度有效时才标注文字) ----
                     position = self.get_3d_position(bbox, depth_data)
 
                     if position is not None:
@@ -336,7 +336,7 @@ class OrbbecYOLO3DDetector:
                     break
 
         finally:
-            # 先销毁 OpenCV 窗口并刷新事件队列，再停止 pipeline，避免死锁
+            # 先销毁 OpenCV 窗口并刷新事件队列,再停止 pipeline,避免死锁
             cv2.destroyAllWindows()
             for _ in range(3):
                 cv2.waitKey(1)

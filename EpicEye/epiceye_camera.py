@@ -2,13 +2,13 @@
 """
 EpicEye Camera Wrapper
 =====================
-功能描述: 封装 EpicEye SDK 相机操作，提供统一的接口
+功能描述: 封装 EpicEye SDK 相机操作,提供统一的接口
 
 输入:
   - EpicEye/epiceye_config.yaml     : 相机IP等配置参数
 
 输出:
-  - logs/epiceye_*.log              : 运行日志（每次实例化一个文件）
+  - logs/epiceye_*.log              : 运行日志 (每次实例化一个文件)
   - captures/                       : 保存图像/点云/深度图的目录
 
 架构:
@@ -27,7 +27,7 @@ import numpy as np
 import epiceye
 
 
-# ---- 加载配置（模块级，遵循 template 风格） ----
+# ---- 加载配置 (模块级,遵循 template 风格) ----
 _config_path = os.path.join(os.path.dirname(__file__), "epiceye_config.yaml")
 if os.path.exists(_config_path):
     with open(_config_path, "r", encoding="utf-8") as f:
@@ -53,12 +53,12 @@ _log_level_num = LOG_LEVEL_MAP.get(LOG_LEVEL.upper(), logging.INFO)
 
 
 # =============================================================
-# 辅助函数：获取项目根目录
+# 辅助函数:获取项目根目录
 # =============================================================
 
 def _get_project_root():
     """
-    获取项目根目录（Project_hand）
+    获取项目根目录 (Project_hand)
 
     返回:
         str, 项目根目录绝对路径
@@ -67,16 +67,16 @@ def _get_project_root():
 
 
 # =============================================================
-# 功能模块：EpicEye 相机封装
+# 功能模块:EpicEye 相机封装
 # =============================================================
 
 class EpicEyeCamera:
     """
     EpicEye 相机封装类
 
-    封装 SDK 的所有相机操作，提供统一的接口。
-    实例化时自动连接相机（指定IP或自动搜索），
-    并缓存在 __init__ 期间即可获得的设备信息（info、内参等）。
+    封装 SDK 的所有相机操作,提供统一的接口.
+    实例化时自动连接相机 (指定IP或自动搜索),
+    并缓存在 __init__ 期间即可获得的设备信息 (info,内参等).
 
     使用示例:
         camera = EpicEyeCamera("192.168.1.100")
@@ -91,7 +91,7 @@ class EpicEyeCamera:
         初始化相机连接
 
         参数:
-            ip          : str, 相机IP地址。为空字符串时根据配置文件或 auto_search 决定
+            ip          : str, 相机IP地址.为空字符串时根据配置文件或 auto_search 决定
             auto_search : bool, 未指定IP时是否自动搜索网络中的相机
         """
         # ---- 解析最终 IP ----
@@ -100,10 +100,10 @@ class EpicEyeCamera:
             self.ip = self._search_camera()
         if not self.ip:
             raise RuntimeError(
-                "未指定相机IP且自动搜索失败。请检查相机连接或手动指定IP。"
+                "未指定相机IP且自动搜索失败.请检查相机连接或手动指定IP."
             )
 
-        # ---- 初始化日志（仅写入文件，不输出到控制台） ----
+        # ---- 初始化日志 (仅写入文件,不输出到控制台) ----
         self.logger = self._setup_logger()
 
         # ---- 获取并缓存设备信息 ----
@@ -131,25 +131,25 @@ class EpicEyeCamera:
         """
         设置日志记录器
 
-        日志仅写入文件，不输出到控制台。
-        每次实例化创建一个独立的日志文件（带时间戳）。
+        日志仅写入文件,不输出到控制台.
+        每次实例化创建一个独立的日志文件 (带时间戳).
 
         Returns:
             logging.Logger
         """
         logger = logging.getLogger(f"EpicEyeCamera_{id(self)}")
         logger.setLevel(_log_level_num)
-        logger.propagate = False  # 阻止传播到根日志，避免控制台输出
+        logger.propagate = False  # 阻止传播到根日志,避免控制台输出
 
-        # 清除已有 handler（确保每个实例干净）
+        # 清除已有 handler (确保每个实例干净)
         logger.handlers.clear()
 
-        # 构建日志目录路径（相对于项目根目录）
+        # 构建日志目录路径 (相对于项目根目录)
         project_root = _get_project_root()
         log_dir = os.path.join(project_root, LOG_DIR)
         os.makedirs(log_dir, exist_ok=True)
 
-        # 日志文件名：epiceye_YYYYMMDD_HHMMSS.log
+        # 日志文件名:epiceye_YYYYMMDD_HHMMSS.log
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(log_dir, f"epiceye_{timestamp}.log")
 
@@ -163,7 +163,7 @@ class EpicEyeCamera:
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-        # 将 handler 引用保存在实例上，方便 close 时关闭
+        # 将 handler 引用保存在实例上,方便 close 时关闭
         self._log_handler = file_handler
         self._log_path = log_path
 
@@ -179,7 +179,7 @@ class EpicEyeCamera:
         搜索网络中的可用相机
 
         Returns:
-            str, 第一个找到的相机IP；搜索失败返回空字符串
+            str, 第一个找到的相机IP;搜索失败返回空字符串
         """
         found = epiceye.search_camera()
         if found is not None and len(found) > 0:
@@ -194,7 +194,7 @@ class EpicEyeCamera:
         """
         获取并缓存在初始化时可获得的设备信息
 
-        包括 info (序列号/IP/型号/别名/分辨率)、内参矩阵、畸变系数
+        包括 info (序列号/IP/型号/别名/分辨率),内参矩阵,畸变系数
         """
         # 获取设备基本信息
         info = epiceye.get_info(self.ip)
@@ -203,7 +203,7 @@ class EpicEyeCamera:
             self._width = info.get("width")
             self._height = info.get("height")
         else:
-            self.logger.warning("获取相机信息失败，部分功能可能受限")
+            self.logger.warning("获取相机信息失败,部分功能可能受限")
 
         # 获取内参矩阵
         self.camera_matrix = epiceye.get_camera_matrix(self.ip)
@@ -226,7 +226,7 @@ class EpicEyeCamera:
 
     def get_info(self):
         """
-        获取相机基本信息（已缓存）
+        获取相机基本信息 (已缓存)
 
         返回:
             dict or None, 包含 sn/ip/model/alias/width/height
@@ -235,19 +235,19 @@ class EpicEyeCamera:
 
     def get_camera_matrix(self):
         """
-        获取相机内参矩阵（已缓存）
+        获取相机内参矩阵 (已缓存)
 
         返回:
-            numpy.ndarray or None, 3x3 相机内参矩阵，与 OpenCV 兼容
+            numpy.ndarray or None, 3x3 相机内参矩阵,与 OpenCV 兼容
         """
         return self.camera_matrix
 
     def get_distortion(self):
         """
-        获取相机畸变系数（已缓存）
+        获取相机畸变系数 (已缓存)
 
         返回:
-            numpy.ndarray or None, 畸变参数，与 OpenCV 兼容
+            numpy.ndarray or None, 畸变参数,与 OpenCV 兼容
         """
         return self.distortion
 
@@ -260,7 +260,7 @@ class EpicEyeCamera:
         获取相机当前或指定帧的配置参数
 
         参数:
-            frame_id : str, 待获取数据的 frameID，为空字符串则返回最新配置
+            frame_id : str, 待获取数据的 frameID,为空字符串则返回最新配置
 
         返回:
             dict or None, 相机配置参数
@@ -275,7 +275,7 @@ class EpicEyeCamera:
         更新相机参数配置
 
         参数:
-            config : dict, 配置参数，定义同 get_config
+            config : dict, 配置参数,定义同 get_config
 
         返回:
             dict or None, 更新后的相机当前配置
@@ -295,10 +295,10 @@ class EpicEyeCamera:
         """
         触发拍摄一个 Frame
 
-        一个 Frame 可能同时包含 2D 图像和点云数据，通过 frameID 进行索引。
+        一个 Frame 可能同时包含 2D 图像和点云数据,通过 frameID 进行索引.
 
         参数:
-            pointcloud : bool, 是否请求点云数据。设为 False 则仅包含 2D 图像
+            pointcloud : bool, 是否请求点云数据.设为 False 则仅包含 2D 图像
 
         返回:
             str or None, 此次触发拍照返回的 frame_id
@@ -311,14 +311,14 @@ class EpicEyeCamera:
         return frame_id
 
     # ----------------------------------------------------------
-    # 数据获取：图像
+    # 数据获取:图像
     # ----------------------------------------------------------
 
     def get_image(self, frame_id):
         """
         根据 frameID 获取 2D 图像
 
-        自动将 10bit raw 图像转换为 8bit 图像。
+        自动将 10bit raw 图像转换为 8bit 图像.
 
         参数:
             frame_id : str, 待获取数据的 frameID
@@ -335,7 +335,7 @@ class EpicEyeCamera:
         return image
 
     # ----------------------------------------------------------
-    # 数据获取：点云
+    # 数据获取:点云
     # ----------------------------------------------------------
 
     def get_point_cloud(self, frame_id):
@@ -346,7 +346,7 @@ class EpicEyeCamera:
             frame_id : str, 待获取数据的 frameID
 
         返回:
-            numpy.ndarray or None, 点云数据 (H x W x 3)，和 2D 图像逐像素对齐
+            numpy.ndarray or None, 点云数据 (H x W x 3),和 2D 图像逐像素对齐
         """
         point_map = epiceye.get_point_cloud(self.ip, frame_id=frame_id)
         if point_map is None:
@@ -354,7 +354,7 @@ class EpicEyeCamera:
         return point_map
 
     # ----------------------------------------------------------
-    # 数据获取：图像 + 点云（同时获取）
+    # 数据获取:图像 + 点云 (同时获取)
     # ----------------------------------------------------------
 
     def get_image_and_point_cloud(self, frame_id):
@@ -380,7 +380,7 @@ class EpicEyeCamera:
         return image, point_map
 
     # ----------------------------------------------------------
-    # 数据获取：深度图
+    # 数据获取:深度图
     # ----------------------------------------------------------
 
     def get_depth(self, frame_id):
@@ -391,7 +391,7 @@ class EpicEyeCamera:
             frame_id : str, 待获取数据的 frameID
 
         返回:
-            numpy.ndarray or None, 深度数据，和 2D 图像逐像素对齐
+            numpy.ndarray or None, 深度数据,和 2D 图像逐像素对齐
         """
         depth = epiceye.get_depth(self.ip, frame_id=frame_id)
         if depth is None:
@@ -422,7 +422,7 @@ class EpicEyeCamera:
 
         参数:
             depth : numpy.ndarray, 深度数据
-            scale : float, 深度值缩放比例，默认 10.0
+            scale : float, 深度值缩放比例,默认 10.0
 
         返回:
             numpy.ndarray, 伪彩色深度图
@@ -438,7 +438,7 @@ class EpicEyeCamera:
 
     def _get_save_dir(self):
         """
-        获取保存目录路径（相对于 EpicEye/ 目录）
+        获取保存目录路径 (相对于 EpicEye/ 目录)
 
         Returns:
             str, 绝对路径
@@ -458,15 +458,15 @@ class EpicEyeCamera:
 
         参数:
             frame_id : str, 待获取数据的 frameID
-            save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
-            ts       : str or None, 文件命名时间戳，None 则自动生成
+            save_dir : str or None, 保存目录,默认使用配置中的 saves 目录
+            ts       : str or None, 文件命名时间戳,None 则自动生成
 
         返回:
-            str or None, 保存的文件路径；失败返回 None
+            str or None, 保存的文件路径;失败返回 None
         """
         image = self.get_image(frame_id)
         if image is None:
-            self.logger.error("保存图像失败：获取图像返回 None (frame_id=%s)", frame_id)
+            self.logger.error("保存图像失败:获取图像返回 None (frame_id=%s)", frame_id)
             return None
 
         ts = ts or self._timestamp_str()
@@ -480,31 +480,31 @@ class EpicEyeCamera:
 
     def save_point_cloud(self, frame_id, save_dir=None, ts=None):
         """
-        保存点云为 ASCII PLY 文件（不依赖 open3d）
+        保存点云为 ASCII PLY 文件 (不依赖 open3d)
 
         参数:
             frame_id : str, 待获取数据的 frameID
-            save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
-            ts       : str or None, 文件命名时间戳，None 则自动生成
+            save_dir : str or None, 保存目录,默认使用配置中的 saves 目录
+            ts       : str or None, 文件命名时间戳,None 则自动生成
 
         返回:
-            str or None, 保存的文件路径；失败返回 None
+            str or None, 保存的文件路径;失败返回 None
         """
         point_map = self.get_point_cloud(frame_id)
         if point_map is None:
             self.logger.error(
-                "保存点云失败：获取点云返回 None (frame_id=%s)", frame_id
+                "保存点云失败:获取点云返回 None (frame_id=%s)", frame_id
             )
             return None
 
-        # 展平有效点（z 值可能是米或毫米，自适应过滤）
+        # 展平有效点 (z 值可能是米或毫米,自适应过滤)
         points = point_map.reshape(-1, 3)
         z_valid = points[np.isfinite(points[:, 2]), 2]
         if len(z_valid) == 0:
-            self.logger.error("保存点云失败：z 全部为 NaN (frame_id=%s)", frame_id)
+            self.logger.error("保存点云失败:z 全部为 NaN (frame_id=%s)", frame_id)
             return None
         z_median = float(np.median(z_valid))
-        # 根据中值判断单位：若中值 > 100 则视为毫米
+        # 根据中值判断单位:若中值 > 100 则视为毫米
         if z_median > 100:
             valid_mask = (points[:, 2] > z_median * 0.1) & (points[:, 2] < z_median * 5.0)
         else:
@@ -512,7 +512,7 @@ class EpicEyeCamera:
         valid_mask &= np.isfinite(points[:, 0]) & np.isfinite(points[:, 1]) & np.isfinite(points[:, 2])
         valid_points = points[valid_mask]
         if len(valid_points) == 0:
-            self.logger.error("保存点云失败：无有效点 (frame_id=%s)", frame_id)
+            self.logger.error("保存点云失败:无有效点 (frame_id=%s)", frame_id)
             return None
 
         ts = ts or self._timestamp_str()
@@ -542,17 +542,17 @@ class EpicEyeCamera:
 
         参数:
             frame_id : str, 待获取数据的 frameID
-            save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
+            save_dir : str or None, 保存目录,默认使用配置中的 saves 目录
             scale    : float, 深度值缩放比例
-            ts       : str or None, 文件命名时间戳，None 则自动生成
+            ts       : str or None, 文件命名时间戳,None 则自动生成
 
         返回:
-            str or None, 保存的文件路径；失败返回 None
+            str or None, 保存的文件路径;失败返回 None
         """
         depth = self.get_depth(frame_id)
         if depth is None:
             self.logger.error(
-                "保存深度图失败：获取深度返回 None (frame_id=%s)", frame_id
+                "保存深度图失败:获取深度返回 None (frame_id=%s)", frame_id
             )
             return None
 
@@ -568,13 +568,13 @@ class EpicEyeCamera:
 
     def save_all(self, frame_id, save_dir=None):
         """
-        一次性保存图像、点云、深度图到文件
+        一次性保存图像,点云,深度图到文件
 
-        所有文件使用同一时间戳命名，确保数据组一致性。
+        所有文件使用同一时间戳命名,确保数据组一致性.
 
         参数:
             frame_id : str, 待获取数据的 frameID
-            save_dir : str or None, 保存目录，默认使用配置中的 saves 目录
+            save_dir : str or None, 保存目录,默认使用配置中的 saves 目录
 
         返回:
             dict, 包含已保存文件的路径映射:
@@ -597,10 +597,10 @@ class EpicEyeCamera:
 
     def capture_all(self, pointcloud=True):
         """
-        触发拍照并获取所有数据（图像、点云、深度图）
+        触发拍照并获取所有数据 (图像,点云,深度图)
 
-        一个便捷方法：触发 → 获取 (image, point_cloud, depth) 三件套。
-        如果需要更多控制，可以分别调用 trigger_frame 和 get_xxx 方法。
+        一个便捷方法:触发 → 获取 (image, point_cloud, depth) 三件套.
+        如果需要更多控制,可以分别调用 trigger_frame 和 get_xxx 方法.
 
         参数:
             pointcloud : bool, 是否请求点云数据
@@ -641,8 +641,8 @@ class EpicEyeCamera:
         """
         清理资源
 
-        关闭日志文件句柄。SDK 本身是无状态的 HTTP 通信，无需释放连接。
-        调用后实例仍可继续调用 SDK 方法，但日志写入已停止。
+        关闭日志文件句柄.SDK 本身是无状态的 HTTP 通信,无需释放连接.
+        调用后实例仍可继续调用 SDK 方法,但日志写入已停止.
         """
         if hasattr(self, "_log_handler") and self._log_handler is not None:
             self._log_handler.close()
@@ -668,9 +668,9 @@ if __name__ == "__main__":
     print("=" * 60)
 
     print("\n[INFO] 正在初始化相机...")
-    print("[INFO] 使用说明: 可传入 IP 参数，如: python epiceye_camera.py 192.168.1.100\n")
+    print("[INFO] 使用说明: 可传入 IP 参数,如: python epiceye_camera.py 192.168.1.100\n")
 
-    # ---- 初始化（默认自动搜索相机） ----
+    # ---- 初始化 (默认自动搜索相机) ----
     camera = EpicEyeCamera()
 
     # ---- 获取 SDK 版本 ----
@@ -686,7 +686,7 @@ if __name__ == "__main__":
     # ---- 触发拍照 ----
     frame_id = camera.trigger_frame(pointcloud=True)
     if frame_id is not None:
-        # 保存图像、点云、深度图
+        # 保存图像,点云,深度图
         paths = camera.save_all(frame_id)
         print(f"[INFO] 图像已保存:   {paths['image']}")
         print(f"[INFO] 点云已保存:   {paths['point_cloud']}")

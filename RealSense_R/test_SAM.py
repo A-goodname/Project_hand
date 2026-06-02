@@ -2,13 +2,13 @@
 """
 RealSense YOLO+SAM 水瓶6D位姿估计 (RealSense_R 版)
 =================================================
-使用 YOLO(GPU) 检测 + SAM(CPU) 精分割，计算 6D 位姿。
+使用 YOLO(GPU) 检测 + SAM(CPU) 精分割,计算 6D 位姿.
 
 策略:
   - YOLO → GPU (cuda:0) 快速检测 bbox
   - SAM  → CPU (sam_b.pt) 精确分割 mask
-  - 在 mask 区域内手动映射到深度坐标，反投影生成点云
-  - PCA 计算 6D 位姿（与 test_6D.py 一致，仅修正 Z 轴指向）
+  - 在 mask 区域内手动映射到深度坐标,反投影生成点云
+  - PCA 计算 6D 位姿 (与 test_6D.py 一致,仅修正 Z 轴指向)
 
 使用方法:
   1. 连接 Intel RealSense D435i 相机
@@ -202,7 +202,7 @@ class RealSenseYOLOSAM6DPoseDetector:
         except Exception as e:
             print(f"[WARN] laser_power set failed: {e}")
 
-        # 不使用 rs.align，改为手动映射
+        # 不使用 rs.align,改为手动映射
 
         # --- 相机参数: 全部从 D435i_info.yaml 加载 ---
         self.depth_intrinsics = _cam_params['depth_intr']
@@ -512,7 +512,7 @@ class RealSenseYOLOSAM6DPoseDetector:
                         # 旋转矩阵 → ZYX 欧拉角
                         A, B, C = self.rotation_matrix_to_euler_angles(smooth_rot)
 
-                        # 输出（包含耗时）
+                        # 输出 (包含耗时)
                         print(f"\n[RESULT] SAM Pose: "
                               f"({smooth_pos[0]:.3f}, {smooth_pos[1]:.3f}, {smooth_pos[2]:.3f}, "
                               f"{A:.1f}, {B:.1f}, {C:.1f})")

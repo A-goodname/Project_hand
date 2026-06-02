@@ -11,8 +11,8 @@ OmniHand O10 灵巧手 USB/RS485 通信 Demo
 
 安全注意事项:
     - 首次使用请确认灵巧手已正确连接电源
-    - 使能 (enable) 前确保手部处于安全位置，防止意外动作
-    - 按下 Ctrl+C 可随时中断程序，会执行失能操作
+    - 使能 (enable) 前确保手部处于安全位置,防止意外动作
+    - 按下 Ctrl+C 可随时中断程序,会执行失能操作
 """
 
 import sys
@@ -119,7 +119,7 @@ def main():
             print_device_info(info)
         except (TimeoutError, ProtocolError) as e:
             print(f"[WARN] 查询设备信息失败: {e}")
-            print("[INFO] 请确认串口号/波特率是否正确，灵巧手是否已连接")
+            print("[INFO] 请确认串口号/波特率是否正确,灵巧手是否已连接")
             return
 
         # ---- 查询使能状态 ----
@@ -251,7 +251,7 @@ def main():
         traceback.print_exc()
         try:
             hand.disable()
-            print("[OK] 设备已失能（异常清理）")
+            print("[OK] 设备已失能 (异常清理)")
         except Exception:
             pass
 

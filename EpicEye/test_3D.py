@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-EpicEye YOLO 水瓶3D定位（灰度版）
+EpicEye YOLO 水瓶3D定位 (灰度版)
 ===============================
-使用 EpicEye 3D 结构光相机 + YOLO（灰度模型）实现水瓶检测与 3D 定位
+使用 EpicEye 3D 结构光相机 + YOLO (灰度模型)实现水瓶检测与 3D 定位
 
 工作模式:
-  online=true (默认): 连接相机触发抓拍，检测后保存到 captures/
-  online=false:      从 captures/ 加载已有数据进行3D定位（无需相机）
+  online=true (默认): 连接相机触发抓拍,检测后保存到 captures/
+  online=false:      从 captures/ 加载已有数据进行3D定位 (无需相机)
 
-数据文件（一组数据）:
+数据文件 (一组数据):
   - image_<ts>.png  : 灰度图
-  - depth_<ts>.png  : 深度伪彩色图（用于可视化显示）
-  - cloud_<ts>.ply  : 点云（ASCII PLY, N×3, 单位毫米）
+  - depth_<ts>.png  : 深度伪彩色图 (用于可视化显示)
+  - cloud_<ts>.ply  : 点云 (ASCII PLY, N×3, 单位毫米)
 
-3D 定位方案（online/offline 算法统一，仅数据来源不同）:
+3D 定位方案 (online/offline 算法统一,仅数据来源不同):
   - online 模式: 用点云 H×W×3 直接 bbox 区域采样
   - offline 模式: 用 PLY 点云投影筛选 bbox 内点取均值
 
@@ -21,17 +21,17 @@ EpicEye YOLO 水瓶3D定位（灰度版）
   1. 修改 EpicEye/epiceye_config.yaml 中的 mode.online 设置
   2. 运行: python EpicEye/test_3D.py
   3. 按键操作:
-        空格/p  →  触发抓拍（online模式）
-        n       →  加载下一组数据（offline模式）
-        p       →  加载上一组数据（offline模式）
+        空格/p  →  触发抓拍 (online模式)
+        n       →  加载下一组数据 (offline模式)
+        p       →  加载上一组数据 (offline模式)
         q       →  退出
 
 输入:
   - EpicEye/epiceye_config.yaml   : 相机/YOLO/深度配置
 
 输出:
-  - 显示窗口: 图像（带检测框和3D坐标）
-  - 控制台:   (x, y, z) 坐标（单位米）
+  - 显示窗口: 图像 (带检测框和3D坐标)
+  - 控制台:   (x, y, z) 坐标 (单位米)
 """
 
 import os
@@ -100,10 +100,10 @@ def _timestamp_str():
 
 def _list_captures(captures_dir):
     """
-    列出 captures 目录下的所有抓拍时间戳（按时间排序）
+    列出 captures 目录下的所有抓拍时间戳 (按时间排序)
 
     返回:
-        list of str, 时间戳列表（按时间升序）
+        list of str, 时间戳列表 (按时间升序)
     """
     image_files = sorted(glob.glob(os.path.join(captures_dir, "image_*.png")))
     timestamps = []
@@ -117,11 +117,11 @@ def _list_captures(captures_dir):
 
 def _save_depth_png(filepath, depth_meters):
     """
-    将深度数据（米）保存为 16-bit PNG（毫米）
+    将深度数据 (米)保存为 16-bit PNG (毫米)
 
     参数:
         filepath     : str, 保存路径
-        depth_meters : numpy.ndarray, 深度数据（米）
+        depth_meters : numpy.ndarray, 深度数据 (米)
     """
     depth_mm = np.clip(depth_meters * 1000, 0, 65535).astype(np.uint16)
     cv2.imwrite(filepath, depth_mm)
@@ -129,28 +129,28 @@ def _save_depth_png(filepath, depth_meters):
 
 def _load_depth_png(filepath):
     """
-    从 PNG 加载深度数据（转换为米）
+    从 PNG 加载深度数据 (转换为米)
 
     支持两种格式:
-      - 3通道伪彩色图（由 epiceye_camera.save_depth 保存, scale=10.0）
-      - 单通道 16-bit 原始深度（由 _save_depth_png 保存, 单位毫米）
+      - 3通道伪彩色图 (由 epiceye_camera.save_depth 保存, scale=10.0)
+      - 单通道 16-bit 原始深度 (由 _save_depth_png 保存, 单位毫米)
 
     参数:
         filepath : str, 文件路径
 
     返回:
-        numpy.ndarray or None, 深度数据（米）
+        numpy.ndarray or None, 深度数据 (米)
     """
     img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
 
-    # 3通道 → 伪彩色深度图（还原为米）
+    # 3通道 → 伪彩色深度图 (还原为米)
     if len(img.shape) == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         return gray.astype(np.float32) / 10.0
 
-    # 单通道 → 16-bit 原始深度（毫米转米）
+    # 单通道 → 16-bit 原始深度 (毫米转米)
     return img.astype(np.float32) / 1000.0
 
 
@@ -199,16 +199,16 @@ def _parse_ply(filepath):
 
 def _filter_ply_by_bbox(ply_points, bbox, K, img_shape):
     """
-    将 PLY 点云投影回图像，筛选出落在 bbox 内的点（单位转换）
+    将 PLY 点云投影回图像,筛选出落在 bbox 内的点 (单位转换)
 
     参数:
-        ply_points : N×3 点云（相机坐标系，单位毫米）
+        ply_points : N×3 点云 (相机坐标系,单位毫米)
         bbox       : [x1, y1, x2, y2]
         K          : 3×3 相机内参矩阵
         img_shape  : (H, W) 图像尺寸
 
     返回:
-        N'×3 点云（单位米），仅 bbox 内且在深度范围内的点
+        N'×3 点云 (单位米),仅 bbox 内且在深度范围内的点
     """
     fx, fy = K[0, 0], K[1, 1]
     cx, cy = K[0, 2], K[1, 2]
@@ -220,7 +220,7 @@ def _filter_ply_by_bbox(ply_points, bbox, K, img_shape):
     y_vals = ply_points[:, 1]
     z_vals = ply_points[:, 2]
 
-    # PLY 单位为毫米，投影公式中需用毫米，但深度过滤用米
+    # PLY 单位为毫米,投影公式中需用毫米,但深度过滤用米
     z_vals_m = z_vals / 1000.0
 
     u = np.round(fx * x_vals / z_vals + cx).astype(int)
@@ -250,8 +250,8 @@ class EpicEyeYOLO3DDetector:
     """
     EpicEye YOLO 3D 检测器
 
-    online 模式连接相机抓拍，offline 模式从 captures/ 加载数据。
-    3D 定位方案（算法统一，仅数据来源不同）:
+    online 模式连接相机抓拍,offline 模式从 captures/ 加载数据.
+    3D 定位方案 (算法统一,仅数据来源不同):
       - online: 点云 H×W×3 直接 bbox 区域采样
       - offline: PLY 点云投影筛选 bbox 内点取均值
     """
@@ -260,7 +260,7 @@ class EpicEyeYOLO3DDetector:
         """初始化检测器"""
         self.is_online = MODE_ONLINE
 
-        # ---- 加载 YOLO 模型（固定灰度模型） ----
+        # ---- 加载 YOLO 模型 (固定灰度模型) ----
         model_path = f"{GRAY_MODEL_NAME}.pt"
         if not os.path.exists(model_path):
             model_path = GRAY_MODEL_NAME
@@ -281,7 +281,7 @@ class EpicEyeYOLO3DDetector:
             self.cx = ci.get("cx")
             self.cy = ci.get("cy")
             if None in (self.fx, self.fy, self.cx, self.cy):
-                print("[WARN] 配置文件缺少相机内参，3D 定位将不可用")
+                print("[WARN] 配置文件缺少相机内参,3D 定位将不可用")
                 self.camera_matrix = None
             else:
                 self.camera_matrix = np.array(
@@ -295,7 +295,7 @@ class EpicEyeYOLO3DDetector:
     # ----------------------------------------------------------
 
     def _cache_intrinsics(self):
-        """缓存相机内参（仅 online 模式调用）"""
+        """缓存相机内参 (仅 online 模式调用)"""
         assert self.camera is not None
         self.camera_matrix = self.camera.get_camera_matrix()
         if self.camera_matrix is not None:
@@ -305,7 +305,7 @@ class EpicEyeYOLO3DDetector:
             self.cy = self.camera_matrix[5]
             print(f"[INFO] 相机内参: fx={self.fx:.2f}, fy={self.fy:.2f}, cx={self.cx:.2f}, cy={self.cy:.2f}")
         else:
-            print("[ERROR] 无法获取相机内参矩阵，3D 定位将不可用")
+            print("[ERROR] 无法获取相机内参矩阵,3D 定位将不可用")
             self.fx = self.fy = self.cx = self.cy = None
 
     # ----------------------------------------------------------
@@ -353,7 +353,7 @@ class EpicEyeYOLO3DDetector:
 
         保存内容:
           - image_<timestamp>.png  : 灰度图
-          - cloud_<timestamp>.ply  : 点云（ASCII PLY）
+          - cloud_<timestamp>.ply  : 点云 (ASCII PLY)
           - depth_<timestamp>.png  : 深度伪彩色图
 
         参数:
@@ -376,7 +376,7 @@ class EpicEyeYOLO3DDetector:
         img_path = os.path.join(captures_dir, f"image_{ts}.png")
         cv2.imwrite(img_path, gray)
 
-        # 保存点云（PLY）
+        # 保存点云 (PLY)
         if point_map is not None:
             points = point_map.reshape(-1, 3)
             valid_mask = (
@@ -422,7 +422,7 @@ class EpicEyeYOLO3DDetector:
 
         返回:
             color_image : 3通道图像
-            point_cloud : N×3 点云（单位米）或 None
+            point_cloud : N×3 点云 (单位米)或 None
             depth_data  : 深度伪彩色图 (H x W) 或 None
         """
         captures_dir = _get_captures_dir()
@@ -438,7 +438,7 @@ class EpicEyeYOLO3DDetector:
             return None, None, None
         color_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        # 加载点云（PLY → N×3）
+        # 加载点云 (PLY → N×3)
         point_cloud = None
         ply_path = os.path.join(captures_dir, f"cloud_{timestamp}.ply")
         if os.path.exists(ply_path):
@@ -450,7 +450,7 @@ class EpicEyeYOLO3DDetector:
                 point_cloud[:, 1] /= 1000.0
                 point_cloud[:, 2] /= 1000.0
 
-        # 加载深度伪彩色图（用于显示）
+        # 加载深度伪彩色图 (用于显示)
         depth_data = None
         depth_path = os.path.join(captures_dir, f"depth_{timestamp}.png")
         if os.path.exists(depth_path):
@@ -464,7 +464,7 @@ class EpicEyeYOLO3DDetector:
 
     def detect_targets(self, color_image):
         """
-        YOLO 检测水瓶目标（固定灰度输入）
+        YOLO 检测水瓶目标 (固定灰度输入)
 
         参数:
             color_image : numpy.ndarray, 3通道图像 (H x W x 3)
@@ -489,24 +489,24 @@ class EpicEyeYOLO3DDetector:
         return detections
 
     # ----------------------------------------------------------
-    # 3D 位置计算（统一接口，支持两种点云格式）
+    # 3D 位置计算 (统一接口,支持两种点云格式)
     # ----------------------------------------------------------
 
     def get_3d_position(self, bbox, point_data):
         """
-        从点云计算目标 3D 位置（bbox 区域点云均值方案）
+        从点云计算目标 3D 位置 (bbox 区域点云均值方案)
 
-        online/offline 算法统一，仅数据来源不同:
-          - online:  point_data 为 H×W×3 点云图，直接 bbox 区域采样
-          - offline: point_data 为 N×3 PLY 点云，投影回图像筛选 bbox 内点
-        最终均取采样点均值作为 3D 位置。
+        online/offline 算法统一,仅数据来源不同:
+          - online:  point_data 为 H×W×3 点云图,直接 bbox 区域采样
+          - offline: point_data 为 N×3 PLY 点云,投影回图像筛选 bbox 内点
+        最终均取采样点均值作为 3D 位置.
 
         参数:
             bbox       : [x1, y1, x2, y2, conf, cls_id]
             point_data : online: (H×W×3), offline: (N×3)
 
         返回:
-            (x, y, z) or None, 3D 位置（米）
+            (x, y, z) or None, 3D 位置 (米)
         """
         if point_data is None:
             return None
@@ -562,7 +562,7 @@ class EpicEyeYOLO3DDetector:
             K = self.camera_matrix.reshape(3, 3)
             H_img, W_img = 1200, 1920  # EpicEye 默认分辨率
 
-            # point_data 单位为米，投影需毫米
+            # point_data 单位为米,投影需毫米
             ply_mm = point_data * 1000.0
 
             fx, fy = K[0, 0], K[1, 1]
@@ -610,7 +610,7 @@ class EpicEyeYOLO3DDetector:
             color_image   : 3通道图像
             point_data    : 点云数据 (H×W×3 or N×3) 或 None
             win_name      : OpenCV 窗口名
-            display_label : 显示标签（如时间戳）
+            display_label : 显示标签 (如时间戳)
 
         返回:
             display_img   : 显示图像
@@ -708,7 +708,7 @@ class EpicEyeYOLO3DDetector:
                         continue
                     print("完成")
 
-                    # 检测 + 3D定位 + 显示（传入点云数据）
+                    # 检测 + 3D定位 + 显示 (传入点云数据)
                     display_img, best_position = self.process_and_display(
                         color_image, point_map, WIN_NAME,
                         display_label="[SPACE/p] Capture  [q] Quit"
@@ -717,7 +717,7 @@ class EpicEyeYOLO3DDetector:
                     # 保存到 captures/
                     self._save_capture_online(color_image, point_map, depth_data)
 
-                    print("  就绪，等待按键...")
+                    print("  就绪,等待按键...")
 
         except KeyboardInterrupt:
             print("\n[INFO] 键盘中断")
@@ -745,7 +745,7 @@ class EpicEyeYOLO3DDetector:
             if LOAD_TIMESTAMP in timestamps:
                 current_idx = timestamps.index(LOAD_TIMESTAMP)
             else:
-                print(f"[WARN] 指定时间戳 {LOAD_TIMESTAMP} 未找到，加载最新")
+                print(f"[WARN] 指定时间戳 {LOAD_TIMESTAMP} 未找到,加载最新")
                 current_idx = len(timestamps) - 1
         else:
             current_idx = len(timestamps) - 1

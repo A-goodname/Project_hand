@@ -2,15 +2,15 @@
 """
 Orbbec Gemini 215 设备信息查询工具 (YAML 输出版)
 =================================================
-基于 pyorbbecsdk2，实现以下功能：
-1. 基本设备信息（名称、PID、UID、SN、固件版本等）
-2. 所有传感器支持的 stream profile 枚举（分辨率、格式、FPS）
+基于 pyorbbecsdk2,实现以下功能:
+1. 基本设备信息 (名称,PID,UID,SN,固件版本等)
+2. 所有传感器支持的 stream profile 枚举 (分辨率,格式,FPS)
 3. RGB 传感器流格式详细列表
 4. Depth 传感器流格式详细列表
 5. RGB 曝光相关属性详细查询
 6. 设备可读写属性列表及当前值查询
 
-输出：
+输出:
   - 终端显示进度摘要
   - 详细结果保存到 Orbbec/device_info.yaml
 """
@@ -51,7 +51,7 @@ def property_type_to_string(ptype):
 
 def obformat_to_string(fmt):
     """OBFormat 枚举值 -> SDK 原生字符串"""
-    # 直接使用 SDK 的 str() 转换，保留原生格式名称如 OBFormat.Y16
+    # 直接使用 SDK 的 str() 转换,保留原生格式名称如 OBFormat.Y16
     return str(fmt)
 
 
@@ -321,7 +321,7 @@ def main():
     dev_count = device_list.get_count()
 
     if dev_count < 1:
-        print("错误: 未检测到任何 Orbbec 设备！请确认设备已连接。")
+        print("错误: 未检测到任何 Orbbec 设备!请确认设备已连接.")
         sys.exit(1)
 
     print(f"已检测到 {dev_count} 台 Orbbec 设备:\n")

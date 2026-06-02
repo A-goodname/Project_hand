@@ -3,7 +3,7 @@
 OmniHand O10 手势控制模块
 =========================
 基于原项目 kinematics_solver 角度->编码器转换逻辑,
-使用 omnihand_usb_serial.py 实现 USB/RS485 通信的手势控制。
+使用 omnihand_usb_serial.py 实现 USB/RS485 通信的手势控制.
 
 关节映射 (10个主动关节):
   0: Thumb Roll       (拇指旋转)
@@ -122,7 +122,7 @@ class KinematicsConverter:
         Gesture.CLASPING.value:   [0.5, -0.8, 0.2, -0.16, 0.6, 0.6, 0.17, 0.6, 0.17, 0.6],
         # 竖中指: 握拳但中指伸直 (joint 5 = Middle PIP = 0.0)
         Gesture.MIDDLE.value:     [0.5, -1.0, 0.75, 0.0, 1.48, 0.0, 0.0, 1.48, 0.0, 1.48],
-        # 指人: 食指伸出，其他握拳
+        # 指人: 食指伸出,其他握拳
         Gesture.POINT.value:      [0.27, 0.0, 0.0, 0.0, 0.0, 1.48, 0.0, 1.48, 0.0, 1.48],
         # 握住 (如水瓶/水杯): 手指大幅度弯曲包裹 + 拇指环绕对握, 形成圆柱形抓握
         Gesture.GRIP.value:       [0.50, -0.6, 0.6, 0.0, 1.3, 1.3, 0.0, 1.3, 0.0, 1.2],
@@ -163,7 +163,7 @@ class KinematicsConverter:
         clamped = [cls.clamp(a, cls.ACTIVE_JOINT_MIN[i], cls.ACTIVE_JOINT_MAX[i])
                    for i, a in enumerate(angles)]
 
-        # 2. 多项式映射: 拇指MCP、各手指PIP
+        # 2. 多项式映射: 拇指MCP,各手指PIP
         hand_pos = list(clamped)
 
         # 拇指 MCP (joint 2) -> 拇指电机
@@ -254,7 +254,7 @@ class KinematicsConverter:
         获取指定手势的 10个编码器位置值
         
         优先使用 DIRECT_POSITIONS (已知标定值),
-        否则通过角度转换计算得到。
+        否则通过角度转换计算得到.
         
         返回:
             List[int]: 10 个 0~4096 的编码器位置
@@ -307,7 +307,7 @@ class OmniHandGesture:
     灵巧手手势控制封装
     
     基于 KinematicsConverter 将手势角度转换为编码器位置,
-    通过 OmniHandSerial 发送到灵巧手。
+    通过 OmniHandSerial 发送到灵巧手.
 
     使用示例::
     

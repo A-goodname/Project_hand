@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-EpicEye YOLO 水瓶6D位姿估计（灰度版）
+EpicEye YOLO 水瓶6D位姿估计 (灰度版)
 =====================================
-使用 EpicEye 3D 结构光相机 + YOLO（灰度模型）+ PCA 实现水瓶的 6D 位姿估计
+使用 EpicEye 3D 结构光相机 + YOLO (灰度模型)+ PCA 实现水瓶的 6D 位姿估计
 
 工作模式:
-  online=true (默认): 连接相机触发抓拍，检测后保存到 captures/
-  online=false:      从 captures/ 加载已有数据进行位姿估计（无需相机）
+  online=true (默认): 连接相机触发抓拍,检测后保存到 captures/
+  online=false:      从 captures/ 加载已有数据进行位姿估计 (无需相机)
 
-数据文件（一组数据）:
+数据文件 (一组数据):
   - image_<ts>.png  : 灰度图
-  - depth_<ts>.png  : 深度伪彩色图（用于可视化显示）
-  - cloud_<ts>.ply  : 点云（ASCII PLY, N×3, 单位毫米）
+  - depth_<ts>.png  : 深度伪彩色图 (用于可视化显示)
+  - cloud_<ts>.ply  : 点云 (ASCII PLY, N×3, 单位毫米)
 
-6D 位姿方案（PCA）:
+6D 位姿方案 (PCA):
   - online 模式: 用点云 H×W×3 直接 bbox 区域采样
   - offline 模式: 用 PLY 点云投影筛选 bbox 内点
   - PCA 主成分分析求主方向 → 构建右手系旋转矩阵
@@ -22,9 +22,9 @@ EpicEye YOLO 水瓶6D位姿估计（灰度版）
   1. 修改 EpicEye/epiceye_config.yaml 中的 mode.online 设置
   2. 运行: python EpicEye/test_6D.py
   3. 按键操作:
-        空格/p  →  触发抓拍（online模式）
-        n       →  加载下一组数据（offline模式）
-        p       →  加载上一组数据（offline模式）
+        空格/p  →  触发抓拍 (online模式)
+        n       →  加载下一组数据 (offline模式)
+        p       →  加载上一组数据 (offline模式)
         q       →  退出
 
 输入:
@@ -33,7 +33,7 @@ EpicEye YOLO 水瓶6D位姿估计（灰度版）
 输出:
   - online模式: 显示窗口 + 保存到 captures/
   - offline模式: 从 captures/ 加载并显示
-  - 控制台:     (x, y, z, A, B, C) 位姿（位置单位米，角度单位度）
+  - 控制台:     (x, y, z, A, B, C) 位姿 (位置单位米,角度单位度)
 """
 
 import os
@@ -165,11 +165,11 @@ def _save_ply(filepath, points):
 
 def _save_depth_png(filepath, depth_meters):
     """
-    将深度数据（米）保存为 16-bit PNG（毫米）
+    将深度数据 (米)保存为 16-bit PNG (毫米)
 
     参数:
         filepath     : str, 保存路径
-        depth_meters : numpy.ndarray, 深度数据（米）
+        depth_meters : numpy.ndarray, 深度数据 (米)
     """
     depth_mm = np.clip(depth_meters * 1000, 0, 65535).astype(np.uint16)
     cv2.imwrite(filepath, depth_mm)
@@ -177,43 +177,43 @@ def _save_depth_png(filepath, depth_meters):
 
 def _load_depth_png(filepath):
     """
-    从 PNG 加载深度数据（转换为米）
+    从 PNG 加载深度数据 (转换为米)
 
     支持两种格式:
-      - 3通道伪彩色图（由 epiceye_camera.save_depth 保存, scale=10.0）
-      - 单通道 16-bit 原始深度（由 _save_depth_png 保存, 单位毫米）
+      - 3通道伪彩色图 (由 epiceye_camera.save_depth 保存, scale=10.0)
+      - 单通道 16-bit 原始深度 (由 _save_depth_png 保存, 单位毫米)
 
     参数:
         filepath : str, 文件路径
 
     返回:
-        numpy.ndarray or None, 深度数据（米）
+        numpy.ndarray or None, 深度数据 (米)
     """
     img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
 
-    # 3通道 → 伪彩色深度图（还原为米）
+    # 3通道 → 伪彩色深度图 (还原为米)
     if len(img.shape) == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         return gray.astype(np.float32) / 10.0
 
-    # 单通道 → 16-bit 原始深度（毫米转米）
+    # 单通道 → 16-bit 原始深度 (毫米转米)
     return img.astype(np.float32) / 1000.0
 
 
 def _filter_ply_by_bbox(ply_points, bbox, K, img_shape):
     """
-    将 PLY 点云投影回图像，筛选出落在 bbox 内的点（单位转换）
+    将 PLY 点云投影回图像,筛选出落在 bbox 内的点 (单位转换)
 
     参数:
-        ply_points : N×3 点云（相机坐标系，单位毫米）
+        ply_points : N×3 点云 (相机坐标系,单位毫米)
         bbox       : [x1, y1, x2, y2]
         K          : 3×3 相机内参矩阵
         img_shape  : (H, W) 图像尺寸
 
     返回:
-        N'×3 点云（单位米），仅 bbox 内且在深度范围内的点
+        N'×3 点云 (单位米),仅 bbox 内且在深度范围内的点
     """
     fx, fy = K[0, 0], K[1, 1]
     cx, cy = K[0, 2], K[1, 2]
@@ -248,10 +248,10 @@ def _filter_ply_by_bbox(ply_points, bbox, K, img_shape):
 
 def _list_captures(captures_dir):
     """
-    列出 captures 目录下的所有抓拍时间戳（按时间排序）
+    列出 captures 目录下的所有抓拍时间戳 (按时间排序)
 
     返回:
-        list of str, 时间戳列表（按时间升序）
+        list of str, 时间戳列表 (按时间升序)
     """
     image_files = sorted(glob.glob(os.path.join(captures_dir, "image_*.png")))
     timestamps = []
@@ -271,7 +271,7 @@ class EpicEyeYOLO6DPoseDetector:
     """
     EpicEye YOLO 6D 位姿检测器
 
-    online 模式连接相机抓拍，offline 模式从 captures/ 加载数据。
+    online 模式连接相机抓拍,offline 模式从 captures/ 加载数据.
     6D 位姿方案: PCA 主成分分析 → 构建右手系旋转矩阵
     """
 
@@ -279,7 +279,7 @@ class EpicEyeYOLO6DPoseDetector:
         """初始化检测器"""
         self.is_online = MODE_ONLINE
 
-        # ---- 加载 YOLO 模型（固定灰度模型） ----
+        # ---- 加载 YOLO 模型 (固定灰度模型) ----
         model_path = f"{GRAY_MODEL_NAME}.pt"
         if not os.path.exists(model_path):
             model_path = GRAY_MODEL_NAME
@@ -300,7 +300,7 @@ class EpicEyeYOLO6DPoseDetector:
             self.cx = ci.get("cx")
             self.cy = ci.get("cy")
             if None in (self.fx, self.fy, self.cx, self.cy):
-                print("[WARN] 配置文件缺少相机内参，使用硬编码默认值")
+                print("[WARN] 配置文件缺少相机内参,使用硬编码默认值")
                 self.fx, self.fy = 2082.12, 2082.32
                 self.cx, self.cy = 975.08, 581.07
             self.camera_matrix = np.array(
@@ -314,7 +314,7 @@ class EpicEyeYOLO6DPoseDetector:
     # ----------------------------------------------------------
 
     def _cache_intrinsics(self):
-        """缓存相机内参（仅 online 模式调用）"""
+        """缓存相机内参 (仅 online 模式调用)"""
         assert self.camera is not None
         self.camera_matrix = self.camera.get_camera_matrix()
         if self.camera_matrix is not None:
@@ -324,7 +324,7 @@ class EpicEyeYOLO6DPoseDetector:
             self.cy = self.camera_matrix[5]
             print(f"[INFO] 相机内参: fx={self.fx:.2f}, fy={self.fy:.2f}, cx={self.cx:.2f}, cy={self.cy:.2f}")
         else:
-            print("[ERROR] 无法获取相机内参矩阵，6D 位姿可视化将使用默认内参")
+            print("[ERROR] 无法获取相机内参矩阵,6D 位姿可视化将使用默认内参")
             self.fx = self.fy = self.cx = self.cy = None
 
     # ----------------------------------------------------------
@@ -373,10 +373,10 @@ class EpicEyeYOLO6DPoseDetector:
 
         保存内容:
           - image_<timestamp>.png  : 灰度图
-          - cloud_<timestamp>.ply  : 点云（ASCII PLY）
+          - cloud_<timestamp>.ply  : 点云 (ASCII PLY)
           - depth_<timestamp>.png  : 深度伪彩色图
 
-        所有文件使用同一个时间戳，确保数据组一致性。
+        所有文件使用同一个时间戳,确保数据组一致性.
 
         参数:
             color_image : 3通道图像
@@ -398,7 +398,7 @@ class EpicEyeYOLO6DPoseDetector:
         img_path = os.path.join(captures_dir, f"image_{ts}.png")
         cv2.imwrite(img_path, gray)
 
-        # 保存点云（PLY）— 动态单位判断
+        # 保存点云 (PLY)— 动态单位判断
         if point_map is not None:
             points = point_map.reshape(-1, 3)
             finite_mask = np.isfinite(points[:, 0]) & np.isfinite(points[:, 1]) & np.isfinite(points[:, 2])
@@ -441,7 +441,7 @@ class EpicEyeYOLO6DPoseDetector:
 
         返回:
             color_image : 3通道图像
-            point_cloud : N×3 点云（单位毫米）或 None
+            point_cloud : N×3 点云 (单位毫米)或 None
             depth_data  : 深度伪彩色图 (H x W) 或 None
         """
         captures_dir = _get_captures_dir()
@@ -457,7 +457,7 @@ class EpicEyeYOLO6DPoseDetector:
             return None, None, None
         color_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        # 加载点云（PLY → N×3）
+        # 加载点云 (PLY → N×3)
         point_cloud = None
         ply_path = os.path.join(captures_dir, f"cloud_{timestamp}.ply")
         if os.path.exists(ply_path):
@@ -477,7 +477,7 @@ class EpicEyeYOLO6DPoseDetector:
 
     def detect_targets(self, color_image):
         """
-        YOLO 检测水瓶目标（固定灰度输入）
+        YOLO 检测水瓶目标 (固定灰度输入)
 
         参数:
             color_image : numpy.ndarray, 3通道图像 (H x W x 3)
@@ -507,15 +507,15 @@ class EpicEyeYOLO6DPoseDetector:
 
     def compute_6d_pose(self, bbox, point_cloud, depth_data=None):
         """
-        计算水瓶的 6D 位姿（PCA 方法）
+        计算水瓶的 6D 位姿 (PCA 方法)
 
-        online 模式: point_cloud 为 H×W×3 点云图，直接 bbox 区域采样
-        offline 模式: point_cloud 为 N×3 PLY 点云，投影回图像筛选 bbox 内点
+        online 模式: point_cloud 为 H×W×3 点云图,直接 bbox 区域采样
+        offline 模式: point_cloud 为 N×3 PLY 点云,投影回图像筛选 bbox 内点
 
         参数:
             bbox        : [x1, y1, x2, y2, conf, cls_id]
             point_cloud : online: (H×W×3), offline: (N×3)
-            depth_data  : 深度图（online 不需要，offline 用于锚点深度）
+            depth_data  : 深度图 (online 不需要,offline 用于锚点深度)
 
         返回:
             position: (x, y, z) 重心坐标 (m)
@@ -600,15 +600,15 @@ class EpicEyeYOLO6DPoseDetector:
         idx = np.argsort(eig_val)[::-1]
         eig_vec = eig_vec[:, idx]
 
-        # 主方向（最大特征值）-> Y轴（水瓶纵向）
+        # 主方向 (最大特征值)-> Y轴 (水瓶纵向)
         target_y_main = np.real(eig_vec[:, 0])
-        # 最小方差方向 -> Z轴（指向相机）
+        # 最小方差方向 -> Z轴 (指向相机)
         target_z = np.real(eig_vec[:, 2])
 
         if target_z[2] > 0:
             target_z = -target_z
 
-        # X轴 = Y x Z，确保右手系
+        # X轴 = Y x Z,确保右手系
         target_x = np.cross(target_y_main, target_z)
         target_x = target_x / np.linalg.norm(target_x)
         target_y = np.cross(target_z, target_x)
@@ -654,7 +654,7 @@ class EpicEyeYOLO6DPoseDetector:
         """
         在图像上绘制 6D 位姿坐标轴
 
-        红=X轴, 绿=Y轴（主方向，水瓶纵向）, 蓝=Z轴
+        红=X轴, 绿=Y轴 (主方向,水瓶纵向), 蓝=Z轴
         """
         center_2d = K @ np.array(center_3d)
         center_2d = center_2d / center_2d[2]
@@ -688,9 +688,9 @@ class EpicEyeYOLO6DPoseDetector:
         参数:
             color_image  : 3通道图像
             point_data   : online=point_map (H×W×3), offline=point_cloud (N×3)
-            depth_data   : 深度图（online 不需要，offline 用于锚点深度）
+            depth_data   : 深度图 (online 不需要,offline 用于锚点深度)
             win_name     : OpenCV 窗口名
-            display_label: 显示标签（如时间戳）
+            display_label: 显示标签 (如时间戳)
 
         返回:
             display_img  : 显示图像
@@ -708,7 +708,7 @@ class EpicEyeYOLO6DPoseDetector:
             conf = det[4]
             x1, y1, x2, y2 = map(int, bbox)
 
-            # 始终绘制检测框（不依赖位姿计算结果）
+            # 始终绘制检测框 (不依赖位姿计算结果)
             cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             position, rotation, points = self.compute_6d_pose(bbox, point_data, depth_data)
@@ -731,7 +731,7 @@ class EpicEyeYOLO6DPoseDetector:
                     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=float)
                 self.visualize_pose(display_img, position, rotation, K, scale=0.08)
 
-                # 显示位姿文本（仅在物体框上方）
+                # 显示位姿文本 (仅在物体框上方)
                 text_pos = f"Pos: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f})"
                 cv2.putText(display_img, text_pos, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
@@ -739,7 +739,7 @@ class EpicEyeYOLO6DPoseDetector:
                 cv2.putText(display_img, text_euler, (x1, y1 - 28),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             else:
-                print("  [WARN] 点云不足，无法计算位姿")
+                print("  [WARN] 点云不足,无法计算位姿")
                 # 即使无位姿也显示 conf
                 text_conf = f"conf: {conf:.2f}"
                 cv2.putText(display_img, text_conf, (x1, y1 - 10),
@@ -806,7 +806,7 @@ class EpicEyeYOLO6DPoseDetector:
                     # 保存到 captures/
                     self._save_capture_online(color_image, point_map, depth_data)
 
-                    print("  就绪，等待按键...")
+                    print("  就绪,等待按键...")
 
         except KeyboardInterrupt:
             print("\n[INFO] 键盘中断")
@@ -835,7 +835,7 @@ class EpicEyeYOLO6DPoseDetector:
             if LOAD_TIMESTAMP in timestamps:
                 current_idx = timestamps.index(LOAD_TIMESTAMP)
             else:
-                print(f"[WARN] 指定时间戳 {LOAD_TIMESTAMP} 未找到，加载最新")
+                print(f"[WARN] 指定时间戳 {LOAD_TIMESTAMP} 未找到,加载最新")
                 current_idx = len(timestamps) - 1
         else:
             current_idx = len(timestamps) - 1

@@ -24,8 +24,8 @@
 
 一致性评估原理:
   对同一物理标定板, 无论从哪个姿态观测,
-  board_in_base_i = baseHee_i @ camHee @ camHboard_i 应为常数。
-  平移标准差和旋转标准差越小 → 标定质量越好。
+  board_in_base_i = baseHee_i @ camHee @ camHboard_i 应为常数.
+  平移标准差和旋转标准差越小 → 标定质量越好.
 """
 
 import os
@@ -64,7 +64,7 @@ REPROJ_THRESHOLD = _data_cfg.get("reprojection_error_threshold", 0.5)
 
 def euler_zyx_to_rotation_matrix(rx, ry, rz):
     """
-    将 X-Y-Z 固定角 (Euler ZYX) 转为 3x3 旋转矩阵。
+    将 X-Y-Z 固定角 (Euler ZYX) 转为 3x3 旋转矩阵.
 
     参数:
         rx, ry, rz : 欧拉角 (角度制), 分别绕固定 X, Y, Z 轴旋转
@@ -90,7 +90,7 @@ def euler_zyx_to_rotation_matrix(rx, ry, rz):
 
 def rotation_matrix_to_euler_zyx(R):
     """
-    将 3x3 旋转矩阵转为 X-Y-Z 固定角 (Euler ZYX), 输出角度制。
+    将 3x3 旋转矩阵转为 X-Y-Z 固定角 (Euler ZYX), 输出角度制.
 
     参数:
         R : 3x3 旋转矩阵
@@ -112,7 +112,7 @@ def rotation_matrix_to_euler_zyx(R):
 
 def rotation_matrix_to_quaternion(R):
     """
-    将 3x3 旋转矩阵转为四元数 [x, y, z, w]。
+    将 3x3 旋转矩阵转为四元数 [x, y, z, w].
     """
     tr = R[0, 0] + R[1, 1] + R[2, 2]
     if tr > 0:
@@ -144,7 +144,7 @@ def rotation_matrix_to_quaternion(R):
 
 
 def make_2d_list(rows, cols, flat_data):
-    """将一维列表转为 rows x cols 的嵌套列表。"""
+    """将一维列表转为 rows x cols 的嵌套列表."""
     return [flat_data[i * cols:(i + 1) * cols] for i in range(rows)]
 
 
@@ -158,10 +158,10 @@ def compute_board_in_base_consistency(
     R_cam2ee, t_cam2ee
 ):
     """
-    用 Board-in-base 一致性评估手眼标定质量。
+    用 Board-in-base 一致性评估手眼标定质量.
 
     原理: 对同一物理标定板, board_in_base = baseHee @ camHee @ camHboard
-          在所有观测中应为常数。其离散程度反映标定误差。
+          在所有观测中应为常数.其离散程度反映标定误差.
 
     参数:
         R_gripper2base_list : 末端->基座旋转矩阵列表 (每项 3x3)
@@ -261,11 +261,11 @@ def compute_board_in_base_consistency(
 
 def assemble_handeye_data(obj_points, img_points, camera_matrix, dist_coeffs, poses, valid_indices):
     """
-    对每张图片执行 solvePnP 并组装手眼标定所需的输入列表。
+    对每张图片执行 solvePnP 并组装手眼标定所需的输入列表.
 
     solvePnP 得到 board->camera (target2cam);
     由 pose 解析 ee->base (gripper2base);
-    根据重投影误差阈值过滤不合格数据。
+    根据重投影误差阈值过滤不合格数据.
 
     参数:
         obj_points     : 世界坐标系角点列表 (用于 solvePnP)
@@ -341,7 +341,7 @@ def save_calibration_result(save_dir, camera_matrix, dist_coeffs,
                              filtered_indices, filtered_errors, reproj_error,
                              method_results, best_method):
     """
-    保存 calibration_result.yaml, 包含相机内参、手眼矩阵、过滤信息等。
+    保存 calibration_result.yaml, 包含相机内参,手眼矩阵,过滤信息等.
     输出格式兼容 estun_run.py 的 load_cam2gripper() 读取逻辑:
       calibration.hand_eye.use_method -> "Tsai"
       calibration.hand_eye.Tsai.T_cam_to_gripper -> 4x4 齐次矩阵
@@ -411,7 +411,7 @@ def save_calibration_result(save_dir, camera_matrix, dist_coeffs,
 def save_board_in_base(save_dir, board_in_base_list, index_list=None):
     """
     保存 board_in_base.yaml, 包含每张图片对应的标定板在基坐标系下的位姿,
-    以及位姿的统计评估 (均值/标准差/最小值/最大值)。
+    以及位姿的统计评估 (均值/标准差/最小值/最大值).
 
     参数:
         save_dir           : 保存目录

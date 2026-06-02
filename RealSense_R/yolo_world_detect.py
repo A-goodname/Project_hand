@@ -2,7 +2,7 @@
 """
 RealSense YOLO-World 零样本把手检测
 ====================================
-使用 YOLO-World v2 (yolov8m-worldv2.pt) 零样本检测水壶/水杯把手。
+使用 YOLO-World v2 (yolov8m-worldv2.pt) 零样本检测水壶/水杯把手.
 
 核心机制:
   - 加载 YOLO-World 模型后调用 set_classes() 设置自定义文本描述
@@ -86,10 +86,10 @@ print("[INFO] YOLO-World 运行设备: %s" % DEVICE)
 
 class YOLOWorldHandleDetector:
     """
-    RealSense + YOLO-World 把手零样本检测器。
+    RealSense + YOLO-World 把手零样本检测器.
 
     使用 YOLO-World v2 模型 + set_classes 自定义词汇表,
-    仅检测把手, 不依赖 COCO 预训练类别。
+    仅检测把手, 不依赖 COCO 预训练类别.
 
     属性:
         pipeline       : rs.pipeline, RealSense 数据管道 (仅彩色流)
@@ -100,7 +100,7 @@ class YOLOWorldHandleDetector:
     def __init__(self, model_path=MODEL_PATH,
                  classes=None, conf_threshold=CONF_THRESHOLD):
         """
-        初始化检测器。
+        初始化检测器.
 
         参数:
             model_path     : str, YOLO-World 模型路径 (含 .pt 后缀)
@@ -142,7 +142,7 @@ class YOLOWorldHandleDetector:
 
     def get_color_frame(self):
         """
-        获取一帧原始彩色图像。
+        获取一帧原始彩色图像.
 
         返回:
             color_image : np.ndarray, BGR 彩色图像, 或 None (获取失败时)
@@ -161,10 +161,10 @@ class YOLOWorldHandleDetector:
 
     def detect_best_handle(self, color_image):
         """
-        检测把手, 返回置信度最高的一个 (或 None)。
+        检测把手, 返回置信度最高的一个 (或 None).
 
         所有检测结果均属于把手类别 (因为 set_classes 限定了词汇表),
-        不需要额外过滤 class_id。
+        不需要额外过滤 class_id.
 
         参数:
             color_image : np.ndarray, BGR 彩色图像
@@ -207,7 +207,7 @@ class YOLOWorldHandleDetector:
     @staticmethod
     def draw_detection(image, detection):
         """
-        在图像上绘制检测框 + 标签文字。
+        在图像上绘制检测框 + 标签文字.
 
         参数:
             image     : np.ndarray, 待绘制的 BGR 图像 (会被修改)
@@ -249,10 +249,10 @@ class YOLOWorldHandleDetector:
 
     def run(self):
         """
-        主循环: 采集 -> YOLO-World 检测 -> 绘制 -> 显示。
+        主循环: 采集 -> YOLO-World 检测 -> 绘制 -> 显示.
 
-        按 'q' 或 Ctrl+C 退出。
-        检测到把手时打印结果到控制台。
+        按 'q' 或 Ctrl+C 退出.
+        检测到把手时打印结果到控制台.
         """
         print("=" * 60)
         print("  RealSense YOLO-World 零样本把手检测")
