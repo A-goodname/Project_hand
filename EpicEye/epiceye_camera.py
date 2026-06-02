@@ -195,6 +195,9 @@ class EpicEyeCamera:
         获取并缓存在初始化时可获得的设备信息
 
         包括 info (序列号/IP/型号/别名/分辨率),内参矩阵,畸变系数
+
+        抛出:
+            RuntimeError: 相机不可用或无法获取内参矩阵
         """
         # 获取设备基本信息
         info = epiceye.get_info(self.ip)
@@ -205,11 +208,19 @@ class EpicEyeCamera:
         else:
             self.logger.warning("获取相机信息失败,部分功能可能受限")
 
-        # 获取内参矩阵
+        # 获取内参矩阵 (关键: 获取失败说明相机不可用)
         self.camera_matrix = epiceye.get_camera_matrix(self.ip)
+        if self.camera_matrix is None:
+            self.logger.error("无法从 SDK 获取相机内参,相机可能未连接或不可用")
+            raise RuntimeError(
+                f"无法从 SDK 获取相机内参,相机可能未连接或不可用 (IP={self.ip})"
+            )
 
         # 获取畸变系数
         self.distortion = epiceye.get_distortion(self.ip)
+        if self.distortion is None:
+            self.logger.warning("获取畸变系数失败,将使用零畸变")
+            self.distortion = None
 
     # ----------------------------------------------------------
     # 信息查询

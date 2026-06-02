@@ -446,10 +446,10 @@ def init_hand(hand_port=None):
         _hand.open()
         _hand.enable()
         _hand.do_gesture(Gesture.PAPER, delay=0.3) # 确保初始手势
-        print("[INFO] 手爪已初始化并启用")
+        print("[INFO] 灵巧手已初始化并启用")
     except Exception as e:
-        print(f"[WARN] 手爪初始化失败: {e}")
-        print("[WARN] 将模拟手爪操作")
+        print(f"[WARN] 灵巧手初始化失败: {e}")
+        print("[WARN] 将模拟灵巧手操作")
         if _hand is not None:
             try:
                 _hand.close()
