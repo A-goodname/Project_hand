@@ -132,7 +132,6 @@ CONF_THRESHOLD = _cfg_eye.get("model", {}).get("conf_threshold", 0.5)
 DEVICE_CFG = _cfg_eye.get("model", {}).get("device", "gpu")
 DEPTH_MIN = _cfg_eye.get("depth", {}).get("min", 0.15)
 DEPTH_MAX = _cfg_eye.get("depth", {}).get("max", 1.5)
-DEPTH_Z_THRESHOLD = _cfg_eye.get("depth", {}).get("z_threshold", 0.05)
 HANDEYE_MATRIX_RAW = _cfg_eye.get("handeye_matrix", None)
 
 # ---- 离线模式参数 ----
@@ -271,11 +270,11 @@ class EpicEyeSingleShotDetector:
 
     def set_camera_matrix(self, K):
         """从相机 SDK 获取后设置内参矩阵"""
-        self.camera_matrix = K.reshape(3, 3)
-        self.fx = float(K[0, 0])
-        self.fy = float(K[1, 1])
-        self.cx = float(K[0, 2])
-        self.cy = float(K[1, 2])
+        self.camera_matrix = np.array(K, dtype=float).reshape(3, 3)
+        self.fx = float(self.camera_matrix[0, 0])
+        self.fy = float(self.camera_matrix[1, 1])
+        self.cx = float(self.camera_matrix[0, 2])
+        self.cy = float(self.camera_matrix[1, 2])
 
     def detect_targets(self, gray_image):
         """
@@ -301,80 +300,32 @@ class EpicEyeSingleShotDetector:
 
         return detections
 
-    def compute_6d_pose(self, bbox, point_map):
+    def compute_6d_pose(self, bbox, point_cloud):
         """
         计算水瓶的 6D 位姿 (PCA 方法)
 
-        online 模式: point_map 为 H×W×3 点云, 直接 bbox 区域采样
-        offline 模式: point_map 为 N×3 PLY 点云, 反投影筛选 bbox 内点
+        统一处理: 传入 N×3 有效点云 (单位毫米), 投影回图像筛选 bbox 内点.
 
         参数:
-            bbox      : [x1, y1, x2, y2, conf, cls_id]
-            point_map : online: (H×W×3), offline: (N×3)
+            bbox        : [x1, y1, x2, y2, conf, cls_id]
+            point_cloud : N×3 点云 (单位毫米)
 
         返回:
             position : (x, y, z) 重心坐标 (m)
             rotation : 3x3 旋转矩阵
-            points   : N×3 有效点云
+            points   : N'×3 有效点云
         """
-        if point_map is None or self.camera_matrix is None:
+        if point_cloud is None or self.camera_matrix is None:
             return None, None, None
 
-        # ---- 按点云格式分流 ----
-        if len(point_map.shape) == 2:
-            # offline 模式: N×3 PLY 点云 -> 反投影筛选 bbox 内点
-            K = self.camera_matrix.reshape(3, 3)
-            points = _filter_ply_by_bbox(point_map, bbox, K, (1200, 1920))
-            if len(points) < 10:
-                print(f"[WARN] PLY 投影到 bbox 后点数不足: {len(points)}")
-                return None, None, None
-            print(f"[INFO] PLY projected points in bbox: {len(points)}")
-        else:
-            # online 模式: H×W×3 -> bbox 区域直接采样
-            H, W = point_map.shape[:2]
-            x1 = max(0, min(int(bbox[0]), W - 1))
-            y1 = max(0, min(int(bbox[1]), H - 1))
-            x2 = max(0, min(int(bbox[2]), W - 1))
-            y2 = max(0, min(int(bbox[3]), H - 1))
+        # 投影筛选 bbox 内点 (内部做 mm->m 转换)
+        points = _filter_ply_by_bbox(point_cloud, bbox, self.camera_matrix, (1200, 1920))
 
-            # 锚点深度
-            cx_bbox = int((x1 + x2) / 2)
-            cy_bbox = int((y1 + y2) / 2)
-            half = 3
-            patch = point_map[
-                max(0, cy_bbox - half):min(H, cy_bbox + half + 1),
-                max(0, cx_bbox - half):min(W, cx_bbox + half + 1),
-                :
-            ]
-            z_vals = patch[:, :, 2].flatten()
-            valid_z = z_vals[(z_vals > DEPTH_MIN) & (z_vals < DEPTH_MAX) & np.isfinite(z_vals)]
-            if len(valid_z) < 3:
-                return None, None, None
-            center_depth = float(np.median(valid_z))
+        if len(points) < 10:
+            print(f"[WARN] 投影到 bbox 后点数不足: {len(points)}")
+            return None, None, None
 
-            # 采样 bbox 区域
-            region = point_map[y1:y2 + 1:2, x1:x2 + 1:2, :]
-            points_flat = region.reshape(-1, 3)
-            valid_mask = (
-                np.isfinite(points_flat[:, 2]) &
-                (points_flat[:, 2] > DEPTH_MIN) &
-                (points_flat[:, 2] < DEPTH_MAX) &
-                (np.abs(points_flat[:, 2] - center_depth) < DEPTH_Z_THRESHOLD)
-            )
-            points = points_flat[valid_mask]
-
-            if len(points) < 10:
-                valid_mask_wide = (
-                    np.isfinite(points_flat[:, 2]) &
-                    (points_flat[:, 2] > DEPTH_MIN) &
-                    (points_flat[:, 2] < DEPTH_MAX)
-                )
-                points = points_flat[valid_mask_wide]
-                if len(points) < 10:
-                    return None, None, None
-                print(f"[INFO] anchor depth: {center_depth:.3f}m, no-filter points: {len(points)}")
-            else:
-                print(f"[INFO] anchor depth: {center_depth:.3f}m, filtered points: {len(points)}")
+        print(f"[INFO] 投影到 bbox 内点: {len(points)}")
 
         # ---- PCA 位姿 ----
         center = np.mean(points, axis=0)
@@ -744,13 +695,21 @@ def main():
                     if paths["point_cloud"] is not None:
                         print(f"  [SAVE] 点云已保存: {os.path.basename(paths['point_cloud'])}")
 
-                    # 获取数据用于检测
-                    image_data, point_map = camera.get_image_and_point_cloud(frame_id)
-                    if image_data is None:
+                    # 从保存的 PLY 文件加载点云 (统一使用 offline 投影筛选流程)
+                    gray_image = None
+                    point_cloud_n3 = None
+                    if paths["image"] is not None:
+                        gray = cv2.imread(paths["image"], cv2.IMREAD_GRAYSCALE)
+                        if gray is not None:
+                            gray_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                    if paths["point_cloud"] is not None:
+                        point_cloud_n3 = _parse_ply(paths["point_cloud"])
+                        if point_cloud_n3 is not None:
+                            print(f"  [INFO] 加载 PLY 点云: {point_cloud_n3.shape[0]} 点")
+
+                    if gray_image is None:
                         print("[WARN] 获取图像数据为空", flush=True)
                     else:
-                        gray_image = image_data  # H×W×3 BGR (灰度图以3通道形式返回)
-
                         # ---- [Step 2] YOLO 检测 -> PCA 6D 位姿 ----
                         print("[INFO] 执行检测...", flush=True)
                         gray_input = cv2.cvtColor(gray_image, cv2.COLOR_BGR2GRAY)
@@ -761,7 +720,7 @@ def main():
                             best_det = max(detections, key=lambda d: d[4])
                             bbox = best_det[:4]
 
-                            position, rotation, points = detector.compute_6d_pose(bbox, point_map)
+                            position, rotation, points = detector.compute_6d_pose(bbox, point_cloud_n3)
 
                             if position is not None and rotation is not None:
                                 A, B, C = detector.rotation_matrix_to_euler_angles(rotation)
@@ -792,7 +751,7 @@ def main():
                     last_pose = get_last_known_pose()
                     if last_pose is not None:
                         position, rotation = last_pose
-                        detector.visualize_pose(display_img, position, rotation, K, scale=0.08)
+                        detector.visualize_pose(display_img, position, rotation, detector.camera_matrix, scale=0.08)
                         A, B, C = detector.rotation_matrix_to_euler_angles(rotation)
                         text_pos = f"Pos: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f})"
                         cv2.putText(display_img, text_pos, (30, 40),

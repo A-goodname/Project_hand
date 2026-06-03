@@ -20,3 +20,6 @@ logs/
 
 # 文档 PDF
 doc/*.pdf
+
+# 编译器文件
+.vscode/

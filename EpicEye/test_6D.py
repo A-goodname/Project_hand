@@ -14,8 +14,9 @@ EpicEye YOLO 水瓶6D位姿估计 (灰度版)
   - cloud_<ts>.ply  : 点云 (ASCII PLY, N×3, 单位毫米)
 
 6D 位姿方案 (PCA):
-  - online 模式: 用点云 H×W×3 直接 bbox 区域采样
-  - offline 模式: 用 PLY 点云投影筛选 bbox 内点
+  - 统一使用 PLY 点云投影筛选 bbox 内点的方案
+  - online 模式: 抓拍后保存为 PLY, 再按 offline 流程加载处理
+  - offline 模式: 直接从 captures/ 加载 PLY 点云
   - PCA 主成分分析求主方向 → 构建右手系旋转矩阵
 
 使用方法:
@@ -71,7 +72,6 @@ CONF_THRESHOLD = _cfg.get("model", {}).get("conf_threshold", 0.5)
 DEVICE_CFG = _cfg.get("model", {}).get("device", "gpu")
 DEPTH_MIN = _cfg.get("depth", {}).get("min", 0.15)
 DEPTH_MAX = _cfg.get("depth", {}).get("max", 1.5)
-DEPTH_Z_THRESHOLD = _cfg.get("depth", {}).get("z_threshold", 0.05)
 MODE_ONLINE = _cfg.get("mode", {}).get("online", True)
 LOAD_TIMESTAMP = _cfg.get("mode", {}).get("load_timestamp", "")
 SAVE_DIR = _cfg.get("save", {}).get("dir", "captures")
@@ -93,11 +93,6 @@ print(f"[INFO] Mode: {'online' if MODE_ONLINE else 'offline'}")
 def _get_captures_dir():
     """获取 captures 目录绝对路径"""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), SAVE_DIR)
-
-
-def _timestamp_str():
-    """生成用于文件命名的时间戳字符串"""
-    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
 
 def _parse_ply(filepath):
@@ -141,38 +136,6 @@ def _parse_ply(filepath):
         return None
 
     return np.array(vertices, dtype=np.float64)
-
-
-def _save_ply(filepath, points):
-    """
-    将 N×3 点云保存为 ASCII PLY 文件
-
-    参数:
-        filepath : str, 保存路径
-        points   : numpy.ndarray, N×3 点云
-    """
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {points.shape[0]}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("end_header\n")
-        for p in points:
-            f.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
-
-
-def _save_depth_png(filepath, depth_meters):
-    """
-    将深度数据 (米)保存为 16-bit PNG (毫米)
-
-    参数:
-        filepath     : str, 保存路径
-        depth_meters : numpy.ndarray, 深度数据 (米)
-    """
-    depth_mm = np.clip(depth_meters * 1000, 0, 65535).astype(np.uint16)
-    cv2.imwrite(filepath, depth_mm)
 
 
 def _load_depth_png(filepath):
@@ -263,6 +226,46 @@ def _list_captures(captures_dir):
     return timestamps
 
 
+def _load_capture_offline(timestamp):
+    """
+    加载指定时间戳的抓拍数据 (参考 offline 流程)
+
+    参数:
+        timestamp : str, 时间戳 (YYYYMMDD_HHMMSS_fff)
+
+    返回:
+        color_image : 3通道图像
+        point_cloud : N×3 点云 (单位毫米)或 None
+        depth_data  : 深度伪彩色图 (H x W) 或 None
+    """
+    captures_dir = _get_captures_dir()
+
+    # 加载灰度图
+    img_path = os.path.join(captures_dir, f"image_{timestamp}.png")
+    if not os.path.exists(img_path):
+        print(f"[ERROR] 图像不存在: {img_path}")
+        return None, None, None
+    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        print(f"[ERROR] 图像加载失败: {img_path}")
+        return None, None, None
+    color_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    # 加载点云 (PLY → N×3)
+    point_cloud = None
+    ply_path = os.path.join(captures_dir, f"cloud_{timestamp}.ply")
+    if os.path.exists(ply_path):
+        point_cloud = _parse_ply(ply_path)
+
+    # 加载深度伪彩色图
+    depth_data = None
+    depth_path = os.path.join(captures_dir, f"depth_{timestamp}.png")
+    if os.path.exists(depth_path):
+        depth_data = _load_depth_png(depth_path)
+
+    return color_image, point_cloud, depth_data
+
+
 # =============================================================
 # 功能模块: EpicEye YOLO 6D 位姿检测器
 # =============================================================
@@ -272,6 +275,7 @@ class EpicEyeYOLO6DPoseDetector:
     EpicEye YOLO 6D 位姿检测器
 
     online 模式连接相机抓拍,offline 模式从 captures/ 加载数据.
+    均使用 PLY 点云 + _filter_ply_by_bbox 投影筛选流程.
     6D 位姿方案: PCA 主成分分析 → 构建右手系旋转矩阵
     """
 
@@ -316,29 +320,33 @@ class EpicEyeYOLO6DPoseDetector:
     def _cache_intrinsics(self):
         """缓存相机内参 (仅 online 模式调用)"""
         assert self.camera is not None
-        self.camera_matrix = self.camera.get_camera_matrix()
-        if self.camera_matrix is not None:
-            self.fx = self.camera_matrix[0]
-            self.fy = self.camera_matrix[4]
-            self.cx = self.camera_matrix[2]
-            self.cy = self.camera_matrix[5]
+        camera_matrix = self.camera.get_camera_matrix()
+        if camera_matrix is not None:
+            self.camera_matrix = np.array(camera_matrix, dtype=float).reshape(3, 3)
+            self.fx = self.camera_matrix[0, 0]
+            self.fy = self.camera_matrix[1, 1]
+            self.cx = self.camera_matrix[0, 2]
+            self.cy = self.camera_matrix[1, 2]
             print(f"[INFO] 相机内参: fx={self.fx:.2f}, fy={self.fy:.2f}, cx={self.cx:.2f}, cy={self.cy:.2f}")
         else:
             print("[ERROR] 无法获取相机内参矩阵,6D 位姿可视化将使用默认内参")
             self.fx = self.fy = self.cx = self.cy = None
 
     # ----------------------------------------------------------
-    # Online 模式: 帧获取
+    # 帧获取 (online 模式通过 camera.save_all 保存,再加载 PLY)
     # ----------------------------------------------------------
 
-    def get_frames_online(self):
+    def trigger_and_save(self):
         """
-        online 模式触发抓拍
+        触发相机抓拍并保存到 captures/, 返回数据
+
+        使用 camera.save_all() 保存图像/点云/深度,
+        再按 offline 流程加载 PLY 点云, 统一处理流程.
 
         返回:
-            color_image     : 3通道图像
-            point_map       : 点云数据 (H×W×3) 或 None
-            depth_data      : 原始深度数据 (H x W) 或 None
+            color_image : 3通道图像
+            point_cloud : N×3 PLY 点云 (单位毫米),或 None
+            depth_data  : 深度图,或 None
         """
         assert self.camera is not None
         self.camera.logger.info("触发抓拍...")
@@ -347,127 +355,39 @@ class EpicEyeYOLO6DPoseDetector:
             print("[ERROR] 触发拍照失败")
             return None, None, None
 
-        image_raw = self.camera.get_image(frame_id)
-        if image_raw is None:
-            print("[ERROR] 获取图像失败")
+        # 使用 camera.save_all() 保存数据 (SDK 内部处理点云)
+        paths = self.camera.save_all(frame_id)
+        if paths["image"] is None:
+            print("[ERROR] 图像保存失败")
             return None, None, None
 
-        # 灰度 → 3通道
-        if len(image_raw.shape) == 2:
-            color_image = cv2.cvtColor(image_raw, cv2.COLOR_GRAY2BGR)
-        else:
-            color_image = image_raw
-
-        point_map = self.camera.get_point_cloud(frame_id)
-        depth_data = self.camera.get_depth(frame_id)
-
-        return color_image, point_map, depth_data
-
-    # ----------------------------------------------------------
-    # Online 模式: 保存数据
-    # ----------------------------------------------------------
-
-    def _save_capture_online(self, color_image, point_map, depth_data):
-        """
-        online 模式下保存抓拍结果
-
-        保存内容:
-          - image_<timestamp>.png  : 灰度图
-          - cloud_<timestamp>.ply  : 点云 (ASCII PLY)
-          - depth_<timestamp>.png  : 深度伪彩色图
-
-        所有文件使用同一个时间戳,确保数据组一致性.
-
-        参数:
-            color_image : 3通道图像
-            point_map   : 点云 (H×W×3) 或 None
-            depth_data  : 原始深度数据 (H x W) 或 None
-
-        返回:
-            str, 时间戳
-        """
-        captures_dir = _get_captures_dir()
-        os.makedirs(captures_dir, exist_ok=True)
-        ts = _timestamp_str()
-
-        # 保存灰度图
-        if len(color_image.shape) == 3:
-            gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = color_image
-        img_path = os.path.join(captures_dir, f"image_{ts}.png")
-        cv2.imwrite(img_path, gray)
-
-        # 保存点云 (PLY)— 动态单位判断
-        if point_map is not None:
-            points = point_map.reshape(-1, 3)
-            finite_mask = np.isfinite(points[:, 0]) & np.isfinite(points[:, 1]) & np.isfinite(points[:, 2])
-            finite_points = points[finite_mask]
-
-            if len(finite_points) > 0:
-                z_valid = finite_points[:, 2]
-                z_median = float(np.median(z_valid))
-                if z_median > 100:
-                    valid_mask = (finite_points[:, 2] > z_median * 0.1) & (finite_points[:, 2] < z_median * 5.0)
-                else:
-                    valid_mask = (finite_points[:, 2] > 0.01) & (finite_points[:, 2] < 10.0)
-                valid_points = finite_points[valid_mask]
-
-                if len(valid_points) > 0:
-                    ply_path = os.path.join(captures_dir, f"cloud_{ts}.ply")
-                    _save_ply(ply_path, valid_points)
-
-        # 保存深度伪彩色图
-        if depth_data is not None:
-            depth_path = os.path.join(captures_dir, f"depth_{ts}.png")
-            pseudo = cv2.applyColorMap(
-                (depth_data / 10.0).astype("uint8"), cv2.COLORMAP_JET
-            )
-            cv2.imwrite(depth_path, pseudo)
-
-        print(f"  [SAVE] 已保存到 captures/: {ts}")
-        return ts
-
-    # ----------------------------------------------------------
-    # Offline 模式: 加载数据
-    # ----------------------------------------------------------
-
-    def _load_capture_offline(self, timestamp):
-        """
-        offline 模式加载指定时间戳的抓拍数据
-
-        参数:
-            timestamp : str, 时间戳 (YYYYMMDD_HHMMSS_fff)
-
-        返回:
-            color_image : 3通道图像
-            point_cloud : N×3 点云 (单位毫米)或 None
-            depth_data  : 深度伪彩色图 (H x W) 或 None
-        """
-        captures_dir = _get_captures_dir()
+        img_path = paths["image"]
+        ply_path = paths["point_cloud"]
+        depth_path = paths["depth"]
 
         # 加载灰度图
-        img_path = os.path.join(captures_dir, f"image_{timestamp}.png")
-        if not os.path.exists(img_path):
-            print(f"[ERROR] 图像不存在: {img_path}")
-            return None, None, None
         gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         if gray is None:
-            print(f"[ERROR] 图像加载失败: {img_path}")
+            print("[ERROR] 图像加载失败")
             return None, None, None
         color_image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        # 加载点云 (PLY → N×3)
+        # 加载 PLY 点云
         point_cloud = None
-        ply_path = os.path.join(captures_dir, f"cloud_{timestamp}.ply")
-        if os.path.exists(ply_path):
+        if ply_path is not None and os.path.exists(ply_path):
             point_cloud = _parse_ply(ply_path)
 
-        # 加载深度伪彩色图
+        # 加载深度图
         depth_data = None
-        depth_path = os.path.join(captures_dir, f"depth_{timestamp}.png")
-        if os.path.exists(depth_path):
+        if depth_path is not None and os.path.exists(depth_path):
             depth_data = _load_depth_png(depth_path)
+
+        # 打印保存信息
+        print(f"  [SAVE] 图像: {os.path.basename(img_path)}")
+        if ply_path:
+            print(f"  [SAVE] 点云: {os.path.basename(ply_path)} ({point_cloud.shape[0]} 点)" if point_cloud is not None else "  [SAVE] 点云: 空")
+        if depth_path:
+            print(f"  [SAVE] 深度: {os.path.basename(depth_path)}")
 
         return color_image, point_cloud, depth_data
 
@@ -509,87 +429,27 @@ class EpicEyeYOLO6DPoseDetector:
         """
         计算水瓶的 6D 位姿 (PCA 方法)
 
-        online 模式: point_cloud 为 H×W×3 点云图,直接 bbox 区域采样
-        offline 模式: point_cloud 为 N×3 PLY 点云,投影回图像筛选 bbox 内点
-
         参数:
             bbox        : [x1, y1, x2, y2, conf, cls_id]
-            point_cloud : online: (H×W×3), offline: (N×3)
-            depth_data  : 深度图 (online 不需要,offline 用于锚点深度)
+            point_cloud : N×3 点云 (单位毫米)
+            depth_data  : 深度图 (未使用,保留兼容性)
 
         返回:
             position: (x, y, z) 重心坐标 (m)
             rotation: 3x3 旋转矩阵
-            points: Nx3 点云
+            points: N'x3 点云
         """
-        if point_cloud is None:
+        if point_cloud is None or self.camera_matrix is None:
             return None, None, None
 
-        # ---- 从点云中提取目标区域点 ----
-        if len(point_cloud.shape) == 3:
-            # online 模式: H×W×3 → bbox 区域直接采样
-            H, W = point_cloud.shape[:2]
-            x1 = max(0, min(int(bbox[0]), W - 1))
-            y1 = max(0, min(int(bbox[1]), H - 1))
-            x2 = max(0, min(int(bbox[2]), W - 1))
-            y2 = max(0, min(int(bbox[3]), H - 1))
+        # 投影筛选 bbox 内点 (内部做 mm->m 转换)
+        points = _filter_ply_by_bbox(point_cloud, bbox, self.camera_matrix, (1200, 1920))
 
-            # 锚点深度
-            cx_bbox = int((x1 + x2) / 2)
-            cy_bbox = int((y1 + y2) / 2)
-            half = 3
-            patch = point_cloud[
-                max(0, cy_bbox - half):min(H, cy_bbox + half + 1),
-                max(0, cx_bbox - half):min(W, cx_bbox + half + 1),
-                :
-            ]
-            z_vals = patch[:, :, 2].flatten()
-            valid_z = z_vals[(z_vals > DEPTH_MIN) & (z_vals < DEPTH_MAX) & np.isfinite(z_vals)]
-            if len(valid_z) < 3:
-                return None, None, None
-            center_depth = float(np.median(valid_z))
+        if len(points) < 10:
+            print(f"[WARN] 投影到 bbox 后点数不足: {len(points)}")
+            return None, None, None
 
-            # 采样 bbox 区域
-            region = point_cloud[y1:y2 + 1:2, x1:x2 + 1:2, :]
-            points_flat = region.reshape(-1, 3)
-            valid_mask = (
-                np.isfinite(points_flat[:, 2]) &
-                (points_flat[:, 2] > DEPTH_MIN) &
-                (points_flat[:, 2] < DEPTH_MAX) &
-                (np.abs(points_flat[:, 2] - center_depth) < DEPTH_Z_THRESHOLD)
-            )
-            points = points_flat[valid_mask]
-
-            if len(points) < 10:
-                valid_mask_wide = (
-                    np.isfinite(points_flat[:, 2]) &
-                    (points_flat[:, 2] > DEPTH_MIN) &
-                    (points_flat[:, 2] < DEPTH_MAX)
-                )
-                points = points_flat[valid_mask_wide]
-                if len(points) < 10:
-                    return None, None, None
-                print(f"[INFO] anchor depth: {center_depth:.3f}m, no-filter points: {len(points)}")
-            else:
-                print(f"[INFO] anchor depth: {center_depth:.3f}m, filtered points: {len(points)}")
-
-        else:
-            # offline 模式: PLY 点云 N×3 → 投影回图像筛选 bbox 区域
-            if self.camera_matrix is not None:
-                K = self.camera_matrix.reshape(3, 3)
-            else:
-                fx, fy = self.fx, self.fy
-                cx, cy = self.cx, self.cy
-                K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=float)
-
-            # 投影筛选 bbox 内点
-            points = _filter_ply_by_bbox(point_cloud, bbox, K, (1200, 1920))
-
-            if len(points) < 10:
-                print(f"[WARN] PLY 投影到 bbox 后点数不足: {len(points)}")
-                return None, None, None
-
-            print(f"[INFO] PLY projected points in bbox: {len(points)}")
+        print(f"[INFO] 投影到 bbox 内点: {len(points)}")
 
         # ---- Step: PCA 位姿 ----
         center = np.mean(points, axis=0)
@@ -687,8 +547,8 @@ class EpicEyeYOLO6DPoseDetector:
 
         参数:
             color_image  : 3通道图像
-            point_data   : online=point_map (H×W×3), offline=point_cloud (N×3)
-            depth_data   : 深度图 (online 不需要,offline 用于锚点深度)
+            point_data   : N×3 PLY 点云 (单位毫米)
+            depth_data   : 深度图 (未使用)
             win_name     : OpenCV 窗口名
             display_label: 显示标签 (如时间戳)
 
@@ -718,18 +578,12 @@ class EpicEyeYOLO6DPoseDetector:
                 best_pose = (position, (A, B, C))
 
                 print(f"  6D位姿: (X={position[0]:.3f}, Y={position[1]:.3f}, "
-                      f"Z={position[2]:.3f}, A={A:.1f}, B={B:.1f}, C={C:.1f})")
+                      f"Z={position[2]:.3f}, A={A:.1f}, B={B:.1f}, C={C:.1f})", flush=True)
                 assert points is not None
-                print(f"  点云点数: {points.shape[0]}")
+                print(f"  点云点数: {points.shape[0]}", flush=True)
 
                 # 可视化坐标轴
-                if self.camera_matrix is not None:
-                    K = self.camera_matrix.reshape(3, 3)
-                else:
-                    fx, fy = self.fx, self.fy
-                    cx, cy = self.cx, self.cy
-                    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=float)
-                self.visualize_pose(display_img, position, rotation, K, scale=0.08)
+                self.visualize_pose(display_img, position, rotation, self.camera_matrix, scale=0.08)
 
                 # 显示位姿文本 (仅在物体框上方)
                 text_pos = f"Pos: ({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f})"
@@ -760,7 +614,7 @@ class EpicEyeYOLO6DPoseDetector:
         return display_img, best_pose
 
     # ----------------------------------------------------------
-    # Online 主循环
+    # Online 主循环 (使用 trigger_and_save 替代直接操作 point_map)
     # ----------------------------------------------------------
 
     def run_online(self):
@@ -790,21 +644,19 @@ class EpicEyeYOLO6DPoseDetector:
                     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 触发抓拍...")
                     print("  等待相机响应...", end=" ", flush=True)
 
-                    color_image, point_map, depth_data = self.get_frames_online()
+                    # 触发拍照 → 保存到 captures/ → 加载 PLY 点云 (统一 offline 流程)
+                    color_image, point_cloud, depth_data = self.trigger_and_save()
 
                     if color_image is None:
                         print("[失败]")
                         continue
                     print("完成")
 
-                    # 检测 + 位姿
+                    # 检测 + 位姿 (传入 PLY 点云, 与 offline 一致)
                     display_img, best_pose = self.process_and_display(
-                        color_image, point_map, depth_data, WIN_NAME,
+                        color_image, point_cloud, depth_data, WIN_NAME,
                         display_label="[SPACE/p] Capture  [q] Quit"
                     )
-
-                    # 保存到 captures/
-                    self._save_capture_online(color_image, point_map, depth_data)
 
                     print("  就绪,等待按键...")
 
@@ -854,7 +706,7 @@ class EpicEyeYOLO6DPoseDetector:
             """加载并显示指定索引的数据"""
             ts = timestamps[idx]
             print(f"\n[{ts}] 加载数据 ({idx + 1}/{len(timestamps)})...")
-            color_image, point_cloud, depth_data = self._load_capture_offline(ts)
+            color_image, point_cloud, depth_data = _load_capture_offline(ts)
             if color_image is None:
                 print("[ERROR] 加载失败")
                 return
