@@ -2,9 +2,13 @@
 
 ## 概述
 
-本项目使用 YOLO-World v2 实现零样本目标检测，主要用于**水杯/水壶把手（handle）的检测**。
+本项目使用 YOLO-World v2 实现零样本**水壶本体检测**（kettle/teapot/jug），为后续的把手分割提供 bbox.
 
-YOLO-World 的核心优势在于：无需训练即可通过文本描述（prompt）检测任意类别物体。
+YOLO-World 的核心优势在于：无需训练即可通过文本描述（prompt）检测任意类别物体.
+
+**重要**: YOLO-World 不适合零样本把手（handle）检测——实测会将纸杯误检为 "cup handle"，且检测框无法分离把手与瓶身。因此本项目分两阶段处理:
+1. **YOLO-World 水壶本体检测** (本文件, `yolo_world_detect.py`)
+2. **SAM + 几何筛选把手分割** (后续 `test_SAM_handle.py`, 详见 `doc/GRIP_Process.md`)
 
 ## 模型文件
 
@@ -45,24 +49,25 @@ C:\Users\荒\.cache\ultralytics\
 
 ## 检测配置
 
-### 把手（Handle）检测 — 最终采用的 prompt
+### 水壶本体检测 — 当前使用的 prompt
 
 ```python
 from ultralytics import YOLO
 
 model = YOLO("model/yolov8m-worldv2.pt")
 model.set_classes([
-    "cup handle",               # id=0，杯子把手
-    "mug handle",               # id=1，马克杯把手
-    "jug handle",               # id=2，水壶把手
-    "handle of a water bottle", # id=3，水瓶把手
-    "teapot handle",            # id=4，茶壶把手
+    "kettle",           # id=0, 水壶 (主目标)
+    "electric kettle",  # id=1, 电热水壶
+    "water jug",        # id=2, 水罐
+    "teapot",           # id=3, 茶壶
 ])
 ```
 
-- 所有检测结果均为把手（无背景类），无需额外过滤
-- 只取最高置信度检测框作为抓取目标
-- 置信度阈值推荐 0.25（把手目标较小，阈值不宜过高）
+- 所有检测结果均为水壶本体（无背景类），无需额外过滤
+- prompt 中**不含任何 'handle' 或 'cup' 词汇**，避免语义干扰
+- 只取最高置信度检测框作为后续 SAM 分割的输入
+- 置信度阈值推荐 0.25（水壶置信度通常 ≤0.45，阈值不宜过高）
+- **注意**: 本阶段仅检测水壶本体 bbox，把手分离在后续 `test_SAM_handle.py` 中通过 SAM 多 mask + 几何筛选完成
 
 ### 注意事项
 

@@ -8,11 +8,13 @@ model/
 # 编译扩展
 *.pyd
 
-# 标定图像数据
+# 图像数据
 calib_data/images/
 calib_data/images_annotated/
 calib_data/poses.csv
 EpicEye/captures/
+*.jpg
+*.png
 
 # 日志文件
 logs/

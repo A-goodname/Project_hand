@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-RealSense YOLO-World 零样本把手检测
-====================================
-使用 YOLO-World v2 (yolov8m-worldv2.pt) 零样本检测水壶/水杯把手.
+RealSense YOLO-World 零样本水壶检测
+=====================================
+使用 YOLO-World v2 (yolov8m-worldv2.pt) 零样本检测水壶/茶壶/水罐本体.
 
 核心机制:
   - 加载 YOLO-World 模型后调用 set_classes() 设置自定义文本描述
@@ -15,9 +15,10 @@ RealSense YOLO-World 零样本把手检测
   3. 按 'q' 键退出
 
 检测策略:
-  - set_classes 限定了只有把手类, 所有检测结果均为把手
-  - 同一场景若检测到多个把手, 只返回最高置信度的一个
-  - 检测不到把手时不回退, 直接返回 None
+  - set_classes 限定了只有水壶本体类, 所有检测结果均为水壶
+  - 同一场景若检测到多个水壶, 只返回最高置信度的一个
+  - 检测不到水壶时不回退, 直接返回 None
+  - 本阶段仅检测水壶本体 bbox, 把手分离在后续 test_SAM_handle.py 中完成
 """
 
 import sys
@@ -37,64 +38,54 @@ from ultralytics import YOLO
 
 
 # ============================================================
-#  常量: 把手检测词汇表
-# ============================================================
-
-HANDLE_CLASSES = [
-    "cup handle",               # id=0
-    "mug handle",               # id=1
-    "jug handle",               # id=2
-    "handle of a water bottle", # id=3
-    "teapot handle",            # id=4
-]
-
-_WORLD_MODEL_RELPATH = "model/yolov8m-worldv2.pt"  # 相对于项目根目录
-_DEFAULT_CONF = 0.25                                # 默认置信度阈值
-
-
-# ============================================================
-#  配置加载 (复用 RealSense_R/config.yaml)
+#  配置加载 (从 RealSense_R/config.yaml 读取)
 # ============================================================
 
 _config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(_config_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
-# 分辨率 / 帧率沿用 config.yaml 中的配置
-FRAME_W = _cfg["resolution"]["width"]
-FRAME_H = _cfg["resolution"]["height"]
-FRAME_FPS = _cfg["resolution"]["fps"]
+# ---- 从 yolo_world 配置段读取 ----
+_yw_cfg = _cfg.get("yolo_world", {})
+if not _yw_cfg:
+    raise RuntimeError("config.yaml 缺少 yolo_world 配置段")
 
-# 模型路径 (相对 project_root)
-MODEL_PATH = os.path.join(_project_root, _WORLD_MODEL_RELPATH)
+KETTLE_CLASSES = _yw_cfg.get("classes", [
+    "kettle", "electric kettle", "water jug", "teapot"
+])
 
-# 置信度阈值 (用 config.yaml 中的值或使用默认值)
-CONF_THRESHOLD = _cfg["model"].get("world_conf_threshold", _DEFAULT_CONF)
+MODEL_PATH = os.path.join(_project_root, _yw_cfg.get("model", "./model/yolov8m-worldv2.pt"))
+CONF_THRESHOLD = _yw_cfg.get("conf_threshold", 0.25)
 
 # ---- 设备选择 ----
-_device_pref = _cfg["model"].get("device", "cpu")
+_device_pref = _yw_cfg.get("device", "cpu")
 if _device_pref == "gpu" and torch.cuda.is_available():
     DEVICE = 'cuda:0'
 else:
     DEVICE = 'cpu'
 print("[INFO] YOLO-World 运行设备: %s" % DEVICE)
 
+# ---- 分辨率 / 帧率沿用 config.yaml 中的配置 ----
+FRAME_W = _cfg["resolution"]["width"]
+FRAME_H = _cfg["resolution"]["height"]
+FRAME_FPS = _cfg["resolution"]["fps"]
+
 
 # ============================================================
 #  主检测器类
 # ============================================================
 
-class YOLOWorldHandleDetector:
+class YOLOWorldKettleDetector:
     """
-    RealSense + YOLO-World 把手零样本检测器.
+    RealSense + YOLO-World 水壶本体零样本检测器.
 
     使用 YOLO-World v2 模型 + set_classes 自定义词汇表,
-    仅检测把手, 不依赖 COCO 预训练类别.
+    检测水壶/茶壶/水罐本体, 不检测把手.
 
     属性:
         pipeline       : rs.pipeline, RealSense 数据管道 (仅彩色流)
         model          : YOLOWorld, 加载的 YOLO-World 模型
-        handle_classes : list[str], 当前设置的把手词汇表
+        kettle_classes : list[str], 当前设置的水壶词汇表
     """
 
     def __init__(self, model_path=MODEL_PATH,
@@ -104,11 +95,11 @@ class YOLOWorldHandleDetector:
 
         参数:
             model_path     : str, YOLO-World 模型路径 (含 .pt 后缀)
-            classes        : list[str] or None, 自定义词汇表 (默认 HANDLE_CLASSES)
+            classes        : list[str] or None, 自定义词汇表 (默认 KETTLE_CLASSES)
             conf_threshold : float, 检测置信度阈值
         """
         self.conf_threshold = conf_threshold
-        self.handle_classes = classes if classes is not None else HANDLE_CLASSES
+        self.kettle_classes = classes if classes is not None else KETTLE_CLASSES
 
         # ---- [Step 1] 初始化 RealSense (仅彩色流) ----
         print("[INFO] 初始化 RealSense 彩色流...")
@@ -129,14 +120,14 @@ class YOLOWorldHandleDetector:
         self.model.to(DEVICE)
 
         # ---- [Step 3] 设置自定义词汇表 ----
-        print("[INFO] 设置自定义词汇表 (%d 类):" % len(self.handle_classes))
-        for i, cls_name in enumerate(self.handle_classes):
+        print("[INFO] 设置自定义词汇表 (%d 类):" % len(self.kettle_classes))
+        for i, cls_name in enumerate(self.kettle_classes):
             print("       id=%d: %s" % (i, cls_name))
-        self.model.set_classes(self.handle_classes)
+        self.model.set_classes(self.kettle_classes)
 
         # 确认 names 已更新
         print("[INFO] 模型类别映射: %s" % str(self.model.names))
-        print("[INFO] 初始化完成, 仅检测把手目标.")
+        print("[INFO] 初始化完成, 仅检测水壶本体.")
 
     # ----------------------------------------------------------
 
@@ -159,11 +150,11 @@ class YOLOWorldHandleDetector:
 
     # ----------------------------------------------------------
 
-    def detect_best_handle(self, color_image):
+    def detect_best_kettle(self, color_image):
         """
-        检测把手, 返回置信度最高的一个 (或 None).
+        检测水壶, 返回置信度最高的一个 (或 None).
 
-        所有检测结果均属于把手类别 (因为 set_classes 限定了词汇表),
+        所有检测结果均属于水壶类别 (因为 set_classes 限定了词汇表),
         不需要额外过滤 class_id.
 
         参数:
@@ -177,7 +168,7 @@ class YOLOWorldHandleDetector:
                     "class_id": int,             # 类别索引
                     "label": str                 # 类别名称
                 }
-            若未检测到任何把手, 返回 None
+            若未检测到任何水壶, 返回 None
         """
         results = self.model(color_image, conf=self.conf_threshold, verbose=False)
 
@@ -211,13 +202,13 @@ class YOLOWorldHandleDetector:
 
         参数:
             image     : np.ndarray, 待绘制的 BGR 图像 (会被修改)
-            detection : dict, detect_best_handle() 返回值, 或 None
+            detection : dict, detect_best_kettle() 返回值, 或 None
 
         返回:
             np.ndarray, 绘制后的图像
         """
         if detection is None:
-            cv2.putText(image, "No handle detected", (10, 30),
+            cv2.putText(image, "No kettle detected", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             return image
 
@@ -228,7 +219,7 @@ class YOLOWorldHandleDetector:
         # 绘制检测框 (绿色)
         cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        # 标签: "cup handle 0.85"
+        # 标签: "kettle 0.85"
         text = "%s %.2f" % (label, conf)
         (text_w, text_h), baseline = cv2.getTextSize(
             text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
@@ -238,8 +229,8 @@ class YOLOWorldHandleDetector:
         cv2.putText(image, text, (x1, y1 - baseline - 2),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
 
-        # 显示置信度阈值信息
-        info = "Best handle: %.2f" % conf
+        # 显示检测信息
+        info = "Best kettle: %.2f" % conf
         cv2.putText(image, info, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
@@ -252,12 +243,12 @@ class YOLOWorldHandleDetector:
         主循环: 采集 -> YOLO-World 检测 -> 绘制 -> 显示.
 
         按 'q' 或 Ctrl+C 退出.
-        检测到把手时打印结果到控制台.
+        检测到水壶时打印结果到控制台.
         """
         print("=" * 60)
-        print("  RealSense YOLO-World 零样本把手检测")
+        print("  RealSense YOLO-World 零样本水壶检测")
         print("  模型: %s" % MODEL_PATH)
-        print("  词汇表: %s" % str(self.handle_classes))
+        print("  词汇表: %s" % str(self.kettle_classes))
         print("  分辨率: %dx%d @ %dfps" % (FRAME_W, FRAME_H, FRAME_FPS))
         print("  置信度阈值: %.2f" % self.conf_threshold)
         print("=" * 60)
@@ -270,8 +261,8 @@ class YOLOWorldHandleDetector:
                 if color_image is None:
                     continue
 
-                # ---- [Step 2] YOLO-World 把手检测 ----
-                best = self.detect_best_handle(color_image)
+                # ---- [Step 2] YOLO-World 水壶检测 ----
+                best = self.detect_best_kettle(color_image)
 
                 # ---- [Step 3] 绘制检测结果 ----
                 display_img = color_image.copy()
@@ -279,17 +270,17 @@ class YOLOWorldHandleDetector:
 
                 # ---- [Step 4] 控制台输出 ----
                 if best is not None:
-                    print("\r[HANDLE] %s | conf=%.3f | "
+                    print("\r[KETTLE] %s | conf=%.3f | "
                           "bbox=(%d,%d,%d,%d)     " % (
                               best["label"], best["conf"],
                               best["bbox"][0], best["bbox"][1],
                               best["bbox"][2], best["bbox"][3]
                           ), end="", flush=True)
                 else:
-                    print("\r[HANDLE] No handle detected     ", end="", flush=True)
+                    print("\r[KETTLE] No kettle detected     ", end="", flush=True)
 
                 # ---- [Step 5] 显示 ----
-                cv2.imshow("YOLO-World Handle Detection", display_img)
+                cv2.imshow("YOLO-World Kettle Detection", display_img)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
@@ -311,13 +302,13 @@ class YOLOWorldHandleDetector:
 # ============================================================
 
 def main():
-    print("[INFO] 正在初始化 YOLO-World 把手检测器...")
+    print("[INFO] 正在初始化 YOLO-World 水壶检测器...")
     print("[INFO] 首次加载会自动下载 CLIP 权重 (~338MB), 请耐心等待...")
     print("[INFO] CLIP 缓存位置: C:\\Users\\<username>\\.cache\\clip\\ViT-B-32.pt")
 
-    detector = YOLOWorldHandleDetector(
+    detector = YOLOWorldKettleDetector(
         model_path=MODEL_PATH,
-        classes=HANDLE_CLASSES,
+        classes=KETTLE_CLASSES,
         conf_threshold=CONF_THRESHOLD
     )
     detector.run()
