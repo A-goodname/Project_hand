@@ -23,6 +23,8 @@
 YOLO 6D 检测得到水瓶在相机系下的位姿：
 P_obj_cam = (x_cam, y_cam, z_cam, A_cam, B_cam, C_cam)
 
+**物体坐标系约定 (第1步)**: PCA 输出后, Z 轴强制指向相机 (target_z[2] > 0 时翻转) . 此操作在 test_6D.py 的 compute_6d_pose 内部完成.
+
 ### Step 2：转换到末端法兰坐标系
 
 P_obj_ee = T_cam_ee . P_obj_cam
@@ -55,6 +57,8 @@ YOLO 6D输出的坐标约定：
 - R_obj(:,0) = X轴 (Y x Z)
 - R_obj(:,1) = Y轴（PCA主方向，瓶身轴线）
 - R_obj(:,2) = Z轴（指向相机）
+
+**物体坐标系约定 (第2步)**: 在 compute_grasp_rotation 中, 通过基系 Z 分量判断 Y 轴符号, 统一指向竖直向下, 消除 PCA 符号歧义. 此操作在 utils_shared.py 的 compute_grasp_rotation 第一步完成.
 
 三种模式定义，均先统一水瓶 Y 轴指向为竖直向下（通过基系 Z 分量判断符号）：
 

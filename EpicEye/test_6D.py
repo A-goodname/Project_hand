@@ -72,6 +72,7 @@ CONF_THRESHOLD = _cfg.get("model", {}).get("conf_threshold", 0.5)
 DEVICE_CFG = _cfg.get("model", {}).get("device", "gpu")
 DEPTH_MIN = _cfg.get("depth", {}).get("min", 0.15)
 DEPTH_MAX = _cfg.get("depth", {}).get("max", 1.5)
+DEPTH_Z_THRESHOLD = _cfg.get("depth", {}).get("z_threshold", 0.05)
 MODE_ONLINE = _cfg.get("mode", {}).get("online", True)
 LOAD_TIMESTAMP = _cfg.get("mode", {}).get("load_timestamp", "")
 SAVE_DIR = _cfg.get("save", {}).get("dir", "captures")
@@ -200,6 +201,31 @@ def _filter_ply_by_bbox(ply_points, bbox, K, img_shape):
         (v >= 0) & (v < H) &
         (z_vals_m > DEPTH_MIN) & (z_vals_m < DEPTH_MAX)
     )
+
+    # ---- 离群过滤: 仅使用 bbox 中心 20% 区域 z_median 作为锚点 ----
+    if np.any(mask):
+        z_masked = z_vals_m[mask]
+        u_masked = u[mask]
+        v_masked = v[mask]
+
+        cx_bbox = (x1 + x2) / 2
+        cy_bbox = (y1 + y2) / 2
+        half_w = (x2 - x1) * 0.1
+        half_h = (y2 - y1) * 0.1
+
+        center_mask = (
+            (u_masked >= cx_bbox - half_w) & (u_masked <= cx_bbox + half_w) &
+            (v_masked >= cy_bbox - half_h) & (v_masked <= cy_bbox + half_h)
+        )
+
+        if np.any(center_mask):
+            anchor_depth = np.median(z_masked[center_mask])
+            z_dev = np.abs(z_masked - anchor_depth)
+            valid_z = z_dev < DEPTH_Z_THRESHOLD
+            sub_indices = np.where(mask)[0]
+            outlier_mask = np.ones(len(mask), dtype=bool)
+            outlier_mask[sub_indices[~valid_z]] = False
+            mask = mask & outlier_mask
 
     # 返回米单位
     result = ply_points[mask].astype(np.float64)
