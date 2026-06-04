@@ -36,5 +36,6 @@ handle:
   handle_max_ratio: 0.40        # 把手占壶身最大面积比 
   roi_expand_ratio: 0.3         # SAM ROI 左右拓展比例(相对 bbox 宽度), 弥补 YOLO 框过紧
   erode_max_iter: 15            # 空洞膨胀最大迭代次数
+  skip_frames: 10               # 跳帧数 (YOLO-World+SAM 较慢, 每 N 帧检测一次)
 
 # ESTUN 配置已迁移至 estun_config.yaml（项目根目录）

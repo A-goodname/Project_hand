@@ -24,6 +24,8 @@ if _project_root not in sys.path:
 
 import os
 import time
+from typing import Optional
+
 import yaml
 import cv2
 import numpy as np
@@ -180,10 +182,9 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
         self._yolo_time_ms = 0.0
         self._sam_time_ms = 0.0
 
-        # ---- 跳帧缓存 ----
-        self._frame_counter = 0
-        self._skip_frames = 10
-        self._cached_result = None  # (body_mask, handle_mask, stage, yolo_bbox, handle_pos, handle_rot)
+        # --- estun_handle_run.py 外部使用的属性 ---
+        self.last_known_pose: Optional[tuple] = None
+        self._cached_raw_depth = None
 
         # ---- 6D 位姿平滑 ----
         self._pose_smoother = PoseSmoother(alpha=0.3)

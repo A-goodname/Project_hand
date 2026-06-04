@@ -442,6 +442,7 @@ class BaseRealSenseDetector:
     HANDLE_MIN_RATIO = 0.05
     HANDLE_MAX_RATIO = 0.55
     ROI_EXPAND_RATIO = 0.3
+    SKIP_FRAMES = 10
 
     # ---- 设备默认值 ----
     DEVICE = 'cpu'
@@ -466,9 +467,9 @@ class BaseRealSenseDetector:
         self._yolo_time_ms = 0.0
         self._sam_time_ms = 0.0
 
-        # 跳帧缓存
+        # 跳帧缓存 (从类属性 SKIP_FRAMES 读取)
         self._frame_counter = 0
-        self._skip_frames = 10
+        self._skip_frames = self.SKIP_FRAMES
         self._cached_result = None
 
     # ------------------------------------------------------------
@@ -552,6 +553,8 @@ class BaseRealSenseDetector:
                 self.HANDLE_MAX_RATIO = _handle["handle_max_ratio"]
             if "roi_expand_ratio" in _handle:
                 self.ROI_EXPAND_RATIO = _handle["roi_expand_ratio"]
+            if "skip_frames" in _handle:
+                self.SKIP_FRAMES = _handle["skip_frames"]
 
         # ---- 打印设备信息 ----
         if self.USE_YOLO_WORLD:

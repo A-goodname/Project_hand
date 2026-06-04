@@ -15,6 +15,15 @@ estun:
     pos_threshold: 0.01          # 位置变化阈值(米)
     angle_threshold: 5.0         # 角度变化阈值(度)
   gripper_offset:
-    t_offset: [0.45, -0.055, 0.07]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转,考虑从安装位置旋转到C=0时的末端坐标（末端一起旋转）
-    r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}
+    t_offset: [0.055, -0.045, 0.075]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转,考虑从安装位置旋转到C=0时的末端坐标（末端一起旋转）
+    r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}; 当C = -90时, X增加=灵巧手向下, Y增加=灵巧手向左, Z增加=灵巧手向后
   orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free,由于机械臂欧拉角限制，两个方向的限制有误
+
+  # --- 把手抓取偏移 (独立于瓶身, 初始值同 t_offset, 后续微调) ---
+  handle_gripper_offset:
+    t_handle_offset: [0.055, -0.045, 0.075]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
+    r_handle_offset: [0, 0, -90]               # 灵巧手安装角度, 同瓶身
+
+  # --- 把手抓取参数 ---
+  handle_detection:
+    fine_tune_mode: false          # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移

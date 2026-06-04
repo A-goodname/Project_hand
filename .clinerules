@@ -11,12 +11,24 @@ Cline 接受新任务后, 第一步应阅读 `README.md` 了解项目整体结�
    ```bash
    git add -A && git commit -m "描述性的中文提交信息"
    ```
-3. 提交信息应简洁说明修改内容, 例如:
-   - "修复 YOLO 检测中的坐标偏移 bug"
-   - "添加 Orbbec 相机自动曝光功能"
-   - "重构标定数据采集流程"
-   - "更新 Estun 机器人通信协议配置"
-4. git 提交应积累一定工作量, 且实际成功运行后再提交
+3. 提交信息应包含标题行 + 详细 body (由于 Windows cmd 的 `-m` 不支持换行, 需用 Python 写临时文件方式):
+   ```python
+   # 1) 用 Python 生成提交信息文件
+   python -c "msg='''标题行\n\n1. 第1点...\n2. 第2点...'''; open('_commit_msg.txt','w',encoding='utf-8').write(msg)"
+   # 2) 从文件读取提交信息
+   git commit --amend -F _commit_msg.txt
+   # 或首次提交时:
+   git add -A && git commit -F _commit_msg.txt
+   # 3) 清理临时文件
+   del _commit_msg.txt
+   ```
+4. 提交信息示例:
+   - 标题: "修复 YOLO 检测中的坐标偏移 bug"
+   - 标题: "添加 Orbbec 相机自动曝光功能"
+   - 标题: "重构 RealSense_R 模块: 提取基类 + 配置后移 + 位姿坐标修复"
+   - body 详细列举各改动点 (编号列表)
+5. git 提交应积累一定工作量, 且实际成功运行后再提交
+6. 若要追加说明到上一次提交, 使用 `git commit --amend -F _commit_msg.txt` (不改变已暂存的文件)
 
 ## 3. 代码风格
 
