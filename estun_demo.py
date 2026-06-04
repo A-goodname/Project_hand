@@ -56,6 +56,14 @@ from utils_shared import (
 # 配置加载
 # =============================================================
 
+# ---- 加载 RealSense / YOLO 配置 ----
+_cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
+with open(_cfg_path, "r", encoding="utf-8") as f:
+    _cfg = yaml.safe_load(f)
+
+MODEL_NAME = os.path.join(_project_root, _cfg["model"]["name"])
+CONF_THRESHOLD = _cfg["model"]["conf_threshold"]
+
 # ---- 加载 ESTUN 配置 ----
 _estun_cfg_path = os.path.join(_project_root, "estun_config.yaml")
 if not os.path.exists(_estun_cfg_path):
@@ -234,13 +242,10 @@ def main():
 
     # ---- [Step 2] 初始化检测器 ----
     from RealSense_R.test_6D import RealSenseYOLO6DPoseDetector
-    from RealSense_R.test_6D import model_name, conf_threshold
 
     print("[INFO] 初始化 RealSense YOLO 检测器...")
     try:
-        detector = RealSenseYOLO6DPoseDetector(
-            model_name=model_name, conf_threshold=conf_threshold
-        )
+        detector = RealSenseYOLO6DPoseDetector(config_dict=_cfg)
     except Exception as e:
         print(f"[FATAL] RealSense 初始化失败: {e}")
         print("[FATAL] 请确认已连接 RealSense D400 系列相机")
@@ -311,12 +316,7 @@ def main():
                         x1, y1, x2, y2, conf = map(int, best_det[:5])
                         cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                        K = np.array([
-                            [detector.depth_intrinsics.fx, 0, detector.depth_intrinsics.ppx],
-                            [0, detector.depth_intrinsics.fy, detector.depth_intrinsics.ppy],
-                            [0, 0, 1]
-                        ], dtype=float)
-                        detector.visualize_pose(display_img, smooth_pos, smooth_rot, K, scale=0.08)
+                        detector.visualize_pose(display_img, smooth_pos, smooth_rot, scale=0.08)
 
                         text_pos = f"Pos: ({pos_ee[0]:.2f}, {pos_ee[1]:.2f}, {pos_ee[2]:.2f})"
                         cv2.putText(display_img, text_pos, (x1, y1 - 10),

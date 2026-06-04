@@ -116,14 +116,15 @@ class YOLOWorldKettleDetector:
         if not os.path.exists(model_path):
             raise FileNotFoundError("模型文件不存在: %s" % model_path)
 
-        self.model = YOLO(model_path)
-        self.model.to(DEVICE)
+        _model = YOLO(model_path)  # type: ignore[arg-type]
+        _model.to(DEVICE)  # type: ignore[union-attr]
+        _model.set_classes(self.kettle_classes)  # type: ignore[union-attr]
+        self.model = _model
 
         # ---- [Step 3] 设置自定义词汇表 ----
         print("[INFO] 设置自定义词汇表 (%d 类):" % len(self.kettle_classes))
         for i, cls_name in enumerate(self.kettle_classes):
             print("       id=%d: %s" % (i, cls_name))
-        self.model.set_classes(self.kettle_classes)
 
         # 确认 names 已更新
         print("[INFO] 模型类别映射: %s" % str(self.model.names))

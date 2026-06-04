@@ -32,8 +32,9 @@ yolo_world:
 
 handle:
   handle_side: "right"          # 把手在哪一侧: "right" / "left"
-  handle_min_ratio: 0.05        # 把手占壶身最小面积比 (5%)
-  handle_max_ratio: 0.55        # 把手占壶身最大面积比 (55%)
+  handle_min_ratio: 0.03        # 把手占壶身最小面积比 
+  handle_max_ratio: 0.40        # 把手占壶身最大面积比 
+  roi_expand_ratio: 0.3         # SAM ROI 左右拓展比例(相对 bbox 宽度), 弥补 YOLO 框过紧
   erode_max_iter: 15            # 空洞膨胀最大迭代次数
 
 # ESTUN 配置已迁移至 estun_config.yaml（项目根目录）

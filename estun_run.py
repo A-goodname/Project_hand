@@ -448,9 +448,7 @@ def main():
     # ---- [Init 3] 初始化 RealSense YOLO 6D 检测器 ----
     print(f"\n[INFO] 正在初始化 RealSense YOLO 检测器...")
     try:
-        detector = RealSenseYOLO6DPoseDetector(
-            model_name=MODEL_NAME, conf_threshold=CONF_THRESHOLD
-        )
+        detector = RealSenseYOLO6DPoseDetector(config_dict=_cfg)
     except Exception as e:
         print(f"[FATAL] RealSense 初始化失败: {e}")
         print("[FATAL] 请确认已连接 RealSense D400 系列相机")
@@ -536,7 +534,7 @@ def main():
                             [0, detector.depth_intrinsics.fy, detector.depth_intrinsics.ppy],
                             [0, 0, 1]
                         ], dtype=float)
-                        detector.visualize_pose(display_img, smooth_pos, smooth_rot, K, scale=0.08)
+                        detector.visualize_pose(display_img, smooth_pos, smooth_rot, scale=0.08)
 
                         text_pos = f"Pos: ({pos_ee[0]:.2f}, {pos_ee[1]:.2f}, {pos_ee[2]:.2f})"
                         cv2.putText(display_img, text_pos, (x1, y1 - 10),
