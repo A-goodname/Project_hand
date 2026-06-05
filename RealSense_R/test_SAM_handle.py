@@ -129,7 +129,8 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
             full_mask, bbox,
             handle_min_ratio=self.HANDLE_MIN_RATIO,
             handle_max_ratio=self.HANDLE_MAX_RATIO,
-            handle_side=self.HANDLE_SIDE
+            handle_side=self.HANDLE_SIDE,
+            handle_center_deviation_ratio=self.HANDLE_CENTER_DEVIATION_RATIO
         )
 
         if handle_mask is not None and body_mask is not None:

@@ -485,18 +485,20 @@ def main():
         f.write("  estun 把手位姿转换验证 Demo (RealSense Handle)\n")
         f.write("=" * 60 + "\n\n")
 
-        f.write(f"稳定末端位姿 (ee): pos=({mean_pos_ee[0]:.3f},{mean_pos_ee[1]:.3f},{mean_pos_ee[2]:.3f}), "
-                f"euler=({mean_euler_ee[0]:.1f},{mean_euler_ee[1]:.1f},{mean_euler_ee[2]:.1f})\n\n")
+        f.write(f"检测位姿 (cam): X={mean_pos_ee[0]:.3f}, Y={mean_pos_ee[1]:.3f}, Z={mean_pos_ee[2]:.3f}, "
+                f"A={mean_euler_ee[0]:.1f}, B={mean_euler_ee[1]:.1f}, C={mean_euler_ee[2]:.1f}\n\n")
 
         f.write(f"机械臂位姿: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) m, "
                 f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}) deg\n\n")
 
-        f.write(f"P1 (抓取点):   {msg_p1}\n")
-        f.write(f"P2 (预抓取点): {msg_p2}\n")
-        f.write(f"P3 (目标点):   {msg_p3}\n\n")
-        f.write(f"--- 中间结果 ---\n")
+        f.write("--- 中间结果 ---\n")
+        f.write(f"[cam->ee] pos_ee=({mean_pos_ee[0]:.4f},{mean_pos_ee[1]:.4f},{mean_pos_ee[2]:.4f}) "
+                f"A_ee={mean_euler_ee[0]:.2f}, B_ee={mean_euler_ee[1]:.2f}, C_ee={mean_euler_ee[2]:.2f}\n")
         f.write(f"[补偿] pos_ee_compensated=({pos_ee_compensated[0]:.4f},{pos_ee_compensated[1]:.4f},{pos_ee_compensated[2]:.4f})\n")
         f.write(f"[对齐] mode={ORIENTATION_MODE}\n")
+        f.write(f"\nP1 (抓取点):   {msg_p1}\n")
+        f.write(f"P2 (预抓取点): {msg_p2}\n")
+        f.write(f"P3 (目标点):   {msg_p3}\n")
 
     print(f"[LOG] 日志已保存: {log_path}")
 

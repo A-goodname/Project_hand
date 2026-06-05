@@ -158,7 +158,8 @@ def depth_median_around(dx, dy, depth_frame, half_size=3, depth_min=0.15, depth_
 
 def scanline_find_handle(full_mask, bbox,
                          handle_min_ratio=0.05, handle_max_ratio=0.55,
-                         handle_side="right"):
+                         handle_side="right",
+                         handle_center_deviation_ratio=0.3):
     """
     用水平扫描线在 mask 上找 mask|gap|mask 模式, 分离壶身与把手.
 
@@ -169,11 +170,13 @@ def scanline_find_handle(full_mask, bbox,
       所有行把手区域的并集 = handle_mask.
 
     参数:
-        full_mask         : np.ndarray (H, W), bool, SAM 生成的完整水壶 mask
-        bbox              : [x1, y1, x2, y2], YOLO 检测框
-        handle_min_ratio  : float, 把手面积/壶身面积 最小比例
-        handle_max_ratio  : float, 把手面积/壶身面积 最大比例
-        handle_side       : "right" 或 "left", 把手预期侧
+        full_mask                     : np.ndarray (H, W), bool, SAM 生成的完整水壶 mask
+        bbox                          : [x1, y1, x2, y2], YOLO 检测框
+        handle_min_ratio              : float, 把手面积/壶身面积 最小比例
+        handle_max_ratio              : float, 把手面积/壶身面积 最大比例
+        handle_side                   : "right" 或 "left", 把手预期侧
+        handle_center_deviation_ratio : float, 把手 x 中心偏差容差(相对把手宽度比例),
+                                        从底部向上检查, 剔除偏差过大的行
 
     返回:
         (body_mask, handle_mask) 或 (None, None)
@@ -278,6 +281,27 @@ def scanline_find_handle(full_mask, bbox,
         areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
         largest_label = max(areas, key=lambda x: x[1])[0]
         handle_mask = (labels == largest_label)
+
+    # ---- X 中心一致性: 从底部向上剔除偏离过大的行 ----
+    row_centers = []  # (y, center_x, width)
+    for y in range(y1, y2 + 1):
+        xs_row = np.where(handle_mask[y])[0]
+        if len(xs_row) > 5:
+            row_centers.append((y, float(np.mean(xs_row)), float(xs_row[-1] - xs_row[0])))
+    if len(row_centers) >= 5:
+        cx_median = np.median([c for _, c, _ in row_centers])
+        avg_width = np.mean([w for _, _, w in row_centers])
+        tol = avg_width * handle_center_deviation_ratio
+        # 从底部向上找到第一个好行, 切除其下方所有行
+        rcs_sorted = sorted(row_centers, key=lambda x: -x[0])  # y 降序 (从底部开始)
+        cut_y = None
+        for y, cx, _ in rcs_sorted:
+            if abs(cx - cx_median) > tol:
+                cut_y = y
+            else:
+                break  # 遇到第一个好行停止
+        if cut_y is not None:
+            handle_mask[cut_y:y2 + 1, :] = False
 
     # 重新计算 body_mask
     body_mask = full_mask.copy()
@@ -449,6 +473,7 @@ class BaseRealSenseDetector:
     HANDLE_MAX_RATIO = 0.55
     ROI_EXPAND_RATIO = 0.3
     SKIP_FRAMES = 10
+    HANDLE_CENTER_DEVIATION_RATIO = 0.3
 
     # ---- 设备默认值 ----
     DEVICE = 'cpu'
@@ -572,6 +597,8 @@ class BaseRealSenseDetector:
                 self.ROI_EXPAND_RATIO = _handle["roi_expand_ratio"]
             if "skip_frames" in _handle:
                 self.SKIP_FRAMES = _handle["skip_frames"]
+            if "handle_center_deviation_ratio" in _handle:
+                self.HANDLE_CENTER_DEVIATION_RATIO = _handle["handle_center_deviation_ratio"]
 
         # ---- 打印设备信息 ----
         if self.USE_FINETUNED_KETTLE:
