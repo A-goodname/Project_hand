@@ -80,6 +80,12 @@ ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 HANDLE_T_OFFSET = np.array(_cfg_estun["handle_gripper_offset"]["t_handle_offset"], dtype=float)
 HANDLE_R_OFFSET = np.array(_cfg_estun["handle_gripper_offset"]["r_handle_offset"], dtype=float)
 
+# ---- 把手抓取偏移参数 ----
+HANDLE_PRE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["t_offset"], dtype=float)
+HANDLE_PRE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["r_offset"], dtype=float)
+HANDLE_TARGET_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["t_offset"], dtype=float)
+HANDLE_TARGET_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["r_offset"], dtype=float)
+
 # ---- 方向模式 ----
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
 
@@ -413,7 +419,7 @@ def main():
     print(f"\n[INPUT] 机械臂位姿: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) m "
           f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}) deg")
 
-    # ---- [Step 5] 位姿转换链路 ----
+    # ---- [Step 5] 位姿转换链路 (P1 抓取点 / P2 预抓取点 / P3 目标点) ----
     print("\n[INFO] 执行位姿转换...")
 
     # 5a. 位置补偿 (使用把手偏移)
@@ -426,25 +432,46 @@ def main():
     R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, HANDLE_R_OFFSET, R_ee_base)
     print(f"  [对齐]    mode={ORIENTATION_MODE}")
 
-    # 5c. 转换到基坐标系
-    rot_base = R_ee_base @ R_grasp_ee
-    pos_base = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
-    A_base, B_base, C_base = rotation_matrix_to_euler_angles(rot_base)
-    print(f"  [ee->base] pos_base=({pos_base[0]:.3f},{pos_base[1]:.3f},{pos_base[2]:.3f}) "
-          f"A={A_base:.2f}, B={B_base:.2f}, C={C_base:.2f}")
+    # === P1: 抓取点 ===
+    rot_base_1 = R_ee_base @ R_grasp_ee
+    pos_base_1 = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
+    A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
+    A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
 
-    # 5d. 可达性修正
-    A_base, B_base, C_base = post_correct_angles(A_base, B_base, C_base, robot_ABC)
-    print(f"  [修正]    A={A_base:.2f}, B={B_base:.2f}, C={C_base:.2f}")
+    # === P2: 预抓取点 (末端系下先平移再旋转) ===
+    R_pre_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_PRE_R_OFFSET, order="zyx")
+    pos_ee_pre = pos_ee_compensated + HANDLE_PRE_T_OFFSET
+    rot_base_2 = R_ee_base @ R_pre_ee
+    pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
+    A2, B2, C2 = rotation_matrix_to_euler_angles(rot_base_2)
+    A2, B2, C2 = post_correct_angles(A2, B2, C2, robot_ABC)
 
-    # ---- [Step 6] 输出 ----
-    msg = (
-        f"[{pos_base[0]:.3f},{pos_base[1]:.3f},{pos_base[2]:.3f},"
-        f"{A_base:.2f},{B_base:.2f},{C_base:.2f}]"
+    # === P3: 目标点 (末端系下先平移再旋转) ===
+    R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
+    pos_ee_target = pos_ee_compensated + HANDLE_TARGET_T_OFFSET
+    rot_base_3 = R_ee_base @ R_target_ee
+    pos_base_3 = transform_pose_to_base(pos_ee_target, robot_xyz, robot_ABC)
+    A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+    A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+
+    # ---- [Step 6] 输出三个位姿 ----
+    msg_p1 = (
+        f"[{pos_base_1[0]:.3f},{pos_base_1[1]:.3f},{pos_base_1[2]:.3f},"
+        f"{A1:.2f},{B1:.2f},{C1:.2f}]"
+    )
+    msg_p2 = (
+        f"[{pos_base_2[0]:.3f},{pos_base_2[1]:.3f},{pos_base_2[2]:.3f},"
+        f"{A2:.2f},{B2:.2f},{C2:.2f}]"
+    )
+    msg_p3 = (
+        f"[{pos_base_3[0]:.3f},{pos_base_3[1]:.3f},{pos_base_3[2]:.3f},"
+        f"{A3:.2f},{B3:.2f},{C3:.2f}]"
     )
 
     print("\n" + "=" * 60)
-    print(f"  [RESULT] 目标基座标: {msg}")
+    print(f"  P1 (抓取点):   {msg_p1}")
+    print(f"  P2 (预抓取点): {msg_p2}")
+    print(f"  P3 (目标点):   {msg_p3}")
     print("=" * 60)
 
     # 写入日志
@@ -464,14 +491,12 @@ def main():
         f.write(f"机械臂位姿: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) m, "
                 f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}) deg\n\n")
 
-        f.write("--- 中间结果 ---\n")
-        f.write(f"[补偿]    pos_ee_compensated=({pos_ee_compensated[0]:.4f},{pos_ee_compensated[1]:.4f},{pos_ee_compensated[2]:.4f})\n")
-        f.write(f"[对齐]    mode={ORIENTATION_MODE}\n")
-        f.write(f"[ee->base] pos_base=({pos_base[0]:.4f},{pos_base[1]:.4f},{pos_base[2]:.4f}) "
-                f"A={A_base:.2f}, B={B_base:.2f}, C={C_base:.2f}\n")
-        f.write(f"[修正]    A_corrected={A_base:.2f}, B_corrected={B_base:.2f}, C_corrected={C_base:.2f}\n\n")
-
-        f.write(f"结果: 目标基座标: {msg}\n")
+        f.write(f"P1 (抓取点):   {msg_p1}\n")
+        f.write(f"P2 (预抓取点): {msg_p2}\n")
+        f.write(f"P3 (目标点):   {msg_p3}\n\n")
+        f.write(f"--- 中间结果 ---\n")
+        f.write(f"[补偿] pos_ee_compensated=({pos_ee_compensated[0]:.4f},{pos_ee_compensated[1]:.4f},{pos_ee_compensated[2]:.4f})\n")
+        f.write(f"[对齐] mode={ORIENTATION_MODE}\n")
 
     print(f"[LOG] 日志已保存: {log_path}")
 
