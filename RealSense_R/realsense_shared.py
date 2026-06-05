@@ -407,6 +407,7 @@ class BaseRealSenseDetector:
         TARGET_CLASS_ID: int   - 标准 YOLO 目标类别 ID (默认 39 = bottle)
     """
     USE_YOLO_WORLD = False
+    USE_FINETUNED_KETTLE = False
     USE_SAM = False
     LOG_NAME = "realsense_detect.log"
     TARGET_CLASS_ID = 39
@@ -432,6 +433,11 @@ class BaseRealSenseDetector:
     YW_MODEL_PATH = "./model/yolov8m-worldv2.pt"
     YW_CONF_THRESHOLD = 0.25
     YW_CLASSES = ["kettle", "electric kettle", "water jug", "teapot"]
+
+    # ---- 微调水壶模型默认值 ----
+    KETTLE_MODEL_PATH = "./model/kettle_yolov8n_finetune.pt"
+    KETTLE_CONF_THRESHOLD = 0.7
+    KETTLE_DEVICE = 'cpu'
 
     # ---- SAM 默认值 ----
     SAM_MODEL_NAME = "mobile_sam.pt"
@@ -531,6 +537,17 @@ class BaseRealSenseDetector:
                 yw_pref = _yw["device"]
                 self.YW_DEVICE = 'cuda:0' if (yw_pref == "gpu" and torch.cuda.is_available()) else 'cpu'
 
+        # ---- 微调水壶模型 (仅当 USE_FINETUNED_KETTLE=True 时读取) ----
+        if self.USE_FINETUNED_KETTLE:
+            _kettle = cfg.get("kettle_model", {})
+            if "model" in _kettle:
+                self.KETTLE_MODEL_PATH = os.path.join(_project_root, _kettle["model"])
+            if "conf_threshold" in _kettle:
+                self.KETTLE_CONF_THRESHOLD = _kettle["conf_threshold"]
+            if "device" in _kettle:
+                k_pref = _kettle["device"]
+                self.KETTLE_DEVICE = 'cuda:0' if (k_pref == "gpu" and torch.cuda.is_available()) else 'cpu'
+
         # ---- SAM (仅当 USE_SAM=True 时读取) ----
         if self.USE_SAM:
             _sam = cfg.get("sam", {})
@@ -557,7 +574,9 @@ class BaseRealSenseDetector:
                 self.SKIP_FRAMES = _handle["skip_frames"]
 
         # ---- 打印设备信息 ----
-        if self.USE_YOLO_WORLD:
+        if self.USE_FINETUNED_KETTLE:
+            print("[INFO] 微调水壶模型运行设备: %s" % self.KETTLE_DEVICE)
+        elif self.USE_YOLO_WORLD:
             print("[INFO] YOLO-World 运行设备: %s" % self.YW_DEVICE)
         else:
             print("[INFO] 标准 YOLO 运行设备: %s" % self.DEVICE)
@@ -641,6 +660,16 @@ class BaseRealSenseDetector:
                     self.sam_model = SAM(sam_path)
                 self.sam_model.to(self.SAM_DEVICE)
                 print("[INFO] SAM 模型已加载: %s" % sam_path)
+
+        # ---- 微调水壶模型 (可选) ----
+        self.kettle_model = None
+        if self.USE_FINETUNED_KETTLE:
+            kettle_path = self.KETTLE_MODEL_PATH
+            print("[INFO] 加载微调水壶模型: %s" % kettle_path)
+            if not os.path.exists(kettle_path):
+                raise FileNotFoundError("微调水壶模型不存在: %s" % kettle_path)
+            self.kettle_model = YOLO(kettle_path)
+            self.kettle_model.to(self.KETTLE_DEVICE)
 
     # ------------------------------------------------------------
     def get_frames(self):
@@ -761,6 +790,32 @@ class BaseRealSenseDetector:
         if not self.USE_YOLO_WORLD:
             raise NotImplementedError("USE_YOLO_WORLD=False 时请使用 detect_targets")
         results = self.model(color_image, conf=self.YW_CONF_THRESHOLD, verbose=False)
+        best = None
+        for result in results:
+            if result.boxes is None:
+                continue
+            boxes = result.boxes.xyxy.cpu().numpy()
+            confs = result.boxes.conf.cpu().numpy()
+            for box, conf in zip(boxes, confs):
+                if best is None or conf > best["conf"]:
+                    best = {
+                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
+                        "conf": float(conf),
+                    }
+        return best
+
+    # ------------------------------------------------------------
+    def _detect_kettle_finetuned(self, color_image):
+        """
+        微调 YOLOv8n 检测水壶 bbox.
+        仅当 USE_FINETUNED_KETTLE=True 时使用.
+        返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
+        """
+        if self.kettle_model is None:
+            return None
+        results = self.kettle_model(
+            color_image, conf=self.KETTLE_CONF_THRESHOLD, verbose=False
+        )
         best = None
         for result in results:
             if result.boxes is None:

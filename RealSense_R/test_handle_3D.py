@@ -124,7 +124,8 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
     """
     YOLO-World + SAM + 水平扫描线 + 3D 定位.
     """
-    USE_YOLO_WORLD = True
+    USE_YOLO_WORLD = False
+    USE_FINETUNED_KETTLE = True
     USE_SAM = True
     LOG_NAME = "test_handle_3D.log"
 
@@ -182,9 +183,12 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
             yolo_bbox      : [x1, y1, x2, y2], YOLO 原始检测框
             handle_pos     : (x, y, z) 或 None, 把手 3D 位置
         """
-        # === Step 1: YOLO-World 检测水壶本体 ===
+        # === Step 1: 检测水壶本体 (微调模型或 YOLO-World) ===
         _t_yolo_start = time.perf_counter()
-        best = self._detect_kettle_bbox(color_image)
+        if self.USE_FINETUNED_KETTLE:
+            best = self._detect_kettle_finetuned(color_image)
+        else:
+            best = self._detect_kettle_bbox(color_image)
         self._yolo_time_ms = (time.perf_counter() - _t_yolo_start) * 1000
 
         if best is None:
@@ -312,7 +316,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
 
         print("按 'q' 键退出程序...")
         print("按 's' 键保存当前帧至 %s" % _save_dir)
-        print("水壶检测: YOLO-World (%s)" % str(self.YW_CLASSES))
+        print("水壶检测: %s" % ("微调 YOLOv8n" if self.USE_FINETUNED_KETTLE else ("YOLO-World (%s)" % str(self.YW_CLASSES))))
         print("把手侧: %s, 把手面积比: [%.0f%%, %.0f%%]" % (
             self.HANDLE_SIDE, self.HANDLE_MIN_RATIO * 100, self.HANDLE_MAX_RATIO * 100))
         print("深度 Z 过滤阈值: %.2fm" % self.DEPTH_Z_THRESHOLD)
