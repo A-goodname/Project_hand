@@ -18,8 +18,10 @@
 | `Orbbec/` | Orbbec Gemini 215微距相机模块 |
 | `EpicEye/` | Epic Eye Pixel Pro相机模块（灰度YOLO检测） |
 | `Omnihand/` | 灵巧手USB串口控制（手势、速度、使能） |
+| `kettle_training/` | 水壶检测模型微调 (数据采集/标注/训练/测试) |
 | `doc/` | 机器人通信协议、代码模板等文档 |
 | `doc/Module_Rules.md` | 各硬件模块开发规则汇总 |
+| `doc/Kettle_Training_Task.md` | 水壶检测模型微调详细流程 |
 | `doc/python_script_template.*` | Python 代码架构模板 (含中文+英文标点规范) |
 
 ## 快速开始

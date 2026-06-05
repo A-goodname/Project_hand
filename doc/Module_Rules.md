@@ -71,3 +71,21 @@
 - 求解 5 种手眼方法 (Tsai/Park/Horaud/Andreff/Daniilidis), 用 Board-in-base 一致性评分选最优
 - 输出文件: `calibration_result.yaml` (含全部方法), `board_in_base.yaml` (仅最佳方法的标定板位姿)
 - 数据采集: `collect_data.py`, 角点可视化: `visualize_corners.py`
+
+## Kettle_training 模块
+
+存放路径: `kettle_training/`
+
+- 独立的水壶检测模型微调流程, 不依赖项目其他模块的配置文件
+- 使用 YOLOv8n (轻量级) 替代 YOLO-World 进行水壶零样本检测
+- 目录结构: `images/` (原始图片), `labels/` (YOLO 格式标注), `dataset.yaml` (数据集配置)
+- 脚本清单:
+  - `collect_kettle_data.py`: 使用 RealSense 采集多角度水壶照片
+  - `label_tool.py`: OpenCV 手动 bbox 标注工具 (替代 LabelImg, 规避 PyQt5 类型错误)
+  - `train_kettle.py`: 基于 COCO 预训练权重的微调训练脚本
+  - `test_finetuned.py`: 独立测试脚本, 直接加载微调模型进行实时检测 (不依赖 config.yaml)
+- 训练配置: epochs=50, imgsz=640, batch=8, amp=False, lr0=0.001
+- 预期指标: mAP50 ≥ 0.99, Recall=1.0, Precision ≥ 0.99
+- 训练时间: YOLOv8n 在 MX450 上约 9 分钟完成 50 epochs
+- 模型输出路径: `runs/train/kettle_finetune/weights/best.pt`, 复制至 `model/kettle_yolov8n_finetune.pt`
+- `labels.cache` 为 Ultralytics 自动生成的标签验证缓存, 已在 `.gitignore` 中忽略

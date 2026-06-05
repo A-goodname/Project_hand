@@ -1,0 +1,53 @@
+ESTUN 把手抓取示教器代码
+========================
+与 estun_handle_run.py 配合使用, 本机发送 P1/P2/P3 三个位姿,
+机械臂按流程运动, 通过 SocketSendStr 发送指令控制灵巧手.
+
+输入:
+  位姿 P1 (抓取点)      : 起始标记 {P1}, 结束标记 }
+  位姿 P2 (预抓取点)     : 起始标记 {P2}, 结束标记 }
+  位姿 P3 (目标点)       : 起始标记 {P3}, 结束标记 }
+
+单位: 位置 m, 角度 deg
+
+流程:
+  MovL P2 -> PREGRIP -> MovL P1 -> GRIPDONE -> MovL P3 ->
+  MovL P1 -> PREGRIP -> MovL P2 -> RESET -> Home
+
+SocketCreat(scoketflag)
+if scoketflag != 0
+    return
+while true
+    GetCurCpos P0
+    scoketstr1 = CposTostr(P0)
+    SocketSendStr(scoketstr1)
+    if scoketflag == 0
+        SocketReadStr(sock, str1, 2, flag, "{P1}", "}")
+        if flag == 0
+            P1 = TranStrToCpos(str1, ",", P1, flag, "{P1}", "}", "deg", "m")
+            SocketReadStr(sock, str2, 2, flag, "{P2}", "}")
+            if flag == 0
+                P2 = TranStrToCpos(str2, ",", P2, flag, "{P2}", "}", "deg", "m")
+                SocketReadStr(sock, str3, 2, flag, "{P3}", "}")
+                if flag == 0
+                    P3 = TranStrToCpos(str3, ",", P3, flag, "{P3}", "}", "deg", "m")
+        
+        if flag == 0
+            MovL P2                    # 到预抓取点
+            SocketSendStr('PREGRIP')   # → 本机: 灵巧手 PREGRIP
+            Wait 1s
+            MovL P1                    # 到抓取点
+            SocketSendStr('GRIPDONE')  # → 本机: 灵巧手 GRIPDONE
+            Wait 1s
+            MovL P3                    # 到目标点
+            Wait 1s                    # 目标点延时
+            MovL P1                    # 回到抓取点
+            SocketSendStr('PREGRIP')   # → 本机: 灵巧手 PREGRIP
+            Wait 1s
+            MovL P2                    # 回到预抓取点
+            SocketSendStr('RESET')     # → 本机: 灵巧手 RESET
+            Wait 1s
+            MovL Home
+            SocketClose
+            Return
+    Wait 1s

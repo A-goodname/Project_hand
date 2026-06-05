@@ -25,3 +25,8 @@ doc/*.pdf
 
 # 编译器文件
 .vscode/
+
+# dataset
+kettle_training/labels/
+kettle_training/labels.cache
+runs/
