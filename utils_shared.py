@@ -113,7 +113,8 @@ def compute_gripper_offset_transform(t_offset_std, r_offset):
     return R, t_effective
 
 
-def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
+def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None,
+                           grasp_direction="right"):
     """
     计算末端系下的目标抓取旋转矩阵 R_grasp_ee
 
@@ -123,28 +124,39 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None):
         R_obj(:,2) = Z轴 (指向相机)
 
     模式说明:
-        free      : 仅叠加固定夹爪安装偏移 Rz(C),
-                    将水瓶Y轴统一为向下以消除PCA符号歧义
+        free      : 仅叠加固定夹爪安装偏移 Rz(C)
         vertical  : 末端XY平面与基坐标系Z轴平行,
                     ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
         horizontal: 暂未实现
 
     参数:
-        R_obj_ee : 3x3, 物体在末端系下的旋转矩阵
-        mode     : str, "vertical" | "horizontal" | "free"
-        r_offset : np.ndarray, 旋转偏移 [A, B, C], 度
-        R_ee_base : 3x3 or None, 末端在基系下的旋转矩阵, free模式下用于Y轴符号修正
+        R_obj_ee        : 3x3, 物体在末端系下的旋转矩阵
+        mode            : str, "vertical" | "horizontal" | "free"
+        r_offset        : np.ndarray, 旋转偏移 [A, B, C], 度
+        R_ee_base       : 3x3 or None, 末端在基系下的旋转矩阵
+        grasp_direction : str, "right"(右手/掌心向左) | "left"(左手/掌心向右),
+                          决定Y轴朝向以消除PCA符号歧义:
+                            right -> Y朝下, left -> Y朝上
 
     返回:
         R_grasp_ee : 3x3
     """
-    # 第一步: 统一 Y 轴指向为竖直向下 (消除 PCA 符号歧义)
+    # 第一步: 统一 Y 轴方向 (消除 PCA 符号歧义)
+    #   grasp_direction="right" -> Y朝下 (掌心向左, 右手抓取)
+    #   grasp_direction="left"  -> Y朝上 (掌心向右, 左手抓取)
     R = R_obj_ee.copy()
     if R_ee_base is not None:
         y_base = R_ee_base @ R[:, 1]
-        if y_base[2] > 0:  # Y轴指向上方, 需要翻转
-            R[:, 1] *= -1
-            R[:, 0] *= -1
+        if grasp_direction == "right":
+            if y_base[2] > 0:  # Y轴指向上方, 需要翻转
+                R[:, 1] *= -1
+                R[:, 0] *= -1
+        elif grasp_direction == "left":
+            if y_base[2] < 0:  # Y轴指向下方, 需要翻转
+                R[:, 1] *= -1
+                R[:, 0] *= -1
+        else:
+            raise ValueError(f"不支持的抓取方向: {grasp_direction}")
 
     # 第二步: 按模式计算
     if mode == "free":

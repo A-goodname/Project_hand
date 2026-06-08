@@ -95,11 +95,18 @@ POS_THRESHOLD = _cfg_estun["stabilization"]["pos_threshold"]
 ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 
 # ---- 把手偏移 (独立于瓶身) ----
-HANDLE_T_OFFSET = np.array(_cfg_estun["handle_gripper_offset"]["t_handle_offset"], dtype=float)
-HANDLE_R_OFFSET = np.array(_cfg_estun["handle_gripper_offset"]["r_handle_offset"], dtype=float)
+HANDLE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["t_handle_offset"], dtype=float)
+HANDLE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["r_handle_offset"], dtype=float)
 
 # ---- 方向模式 ----
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
+GRASP_DIRECTION = _cfg_estun["grasp_direction"]
+HANDLE_SIDE = _cfg["handle"]["handle_side"]  # 视觉检测侧
+
+# 把手模式下: 抓取方向自动与 handle_side 一致
+if HANDLE_SIDE != GRASP_DIRECTION:
+    print(f"[INFO] grasp_direction ({GRASP_DIRECTION}) 自动切换为 handle_side ({HANDLE_SIDE})")
+    GRASP_DIRECTION = HANDLE_SIDE
 
 # ---- 把手抓取参数 ----
 # 预抓取偏移: 先平移再旋转
@@ -345,7 +352,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
             pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
             R_obj_ee = euler_to_rotation_matrix(*mean_euler_ee, order="zyx")
             R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-            R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, HANDLE_R_OFFSET, R_ee_base)
+            R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, HANDLE_R_OFFSET, R_ee_base, grasp_direction=GRASP_DIRECTION)
 
             # === P1: 抓取点 ===
             rot_base_1 = R_ee_base @ R_grasp_ee

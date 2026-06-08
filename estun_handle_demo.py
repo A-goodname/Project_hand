@@ -77,8 +77,8 @@ POS_THRESHOLD = _cfg_estun["stabilization"]["pos_threshold"]
 ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 
 # ---- 把手偏移 (独立于瓶身) ----
-HANDLE_T_OFFSET = np.array(_cfg_estun["handle_gripper_offset"]["t_handle_offset"], dtype=float)
-HANDLE_R_OFFSET = np.array(_cfg_estun["handle_gripper_offset"]["r_handle_offset"], dtype=float)
+HANDLE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["t_handle_offset"], dtype=float)
+HANDLE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["r_handle_offset"], dtype=float)
 
 # ---- 把手抓取偏移参数 ----
 HANDLE_PRE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["t_offset"], dtype=float)
@@ -88,6 +88,13 @@ HANDLE_TARGET_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["r
 
 # ---- 方向模式 ----
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
+GRASP_DIRECTION = _cfg_estun["grasp_direction"]
+HANDLE_SIDE = _cfg["handle"]["handle_side"]  # 视觉检测侧
+
+# 把手模式下: 抓取方向自动与 handle_side 一致
+if HANDLE_SIDE != GRASP_DIRECTION:
+    print(f"[INFO] grasp_direction ({GRASP_DIRECTION}) 自动切换为 handle_side ({HANDLE_SIDE})")
+    GRASP_DIRECTION = HANDLE_SIDE
 
 # ---- 把手检测参数 (skip_frames 来自 RealSense_R/config.yaml) ----
 FINE_TUNE_MODE = _cfg_estun["handle_detection"]["fine_tune_mode"]
@@ -429,7 +436,7 @@ def main():
     # 5b. 方向对齐 (使用把手 r_handle_offset)
     R_obj_ee = euler_to_rotation_matrix(*mean_euler_ee, order="zyx")
     R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-    R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, HANDLE_R_OFFSET, R_ee_base)
+    R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, HANDLE_R_OFFSET, R_ee_base, grasp_direction=GRASP_DIRECTION)
     print(f"  [对齐]    mode={ORIENTATION_MODE}")
 
     # === P1: 抓取点 ===

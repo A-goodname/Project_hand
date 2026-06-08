@@ -98,6 +98,7 @@ ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 GRIPPER_T_OFFSET = np.array(_cfg_estun["gripper_offset"]["t_offset"], dtype=float)
 GRIPPER_R_OFFSET = np.array(_cfg_estun["gripper_offset"]["r_offset"], dtype=float)
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
+GRASP_DIRECTION = _cfg_estun["grasp_direction"]
 
 # ---- 防御性检查:确保 orientation_mode 合法 ----
 VALID_MODES = {"vertical", "horizontal", "free"}
@@ -324,7 +325,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
             # 方向对齐: 根据物体朝向和抓取模式计算 R_grasp_ee (第二部分 Step 5)
             R_obj_ee = euler_to_rotation_matrix(*mean_euler_ee, order="zyx")
             R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-            R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, GRIPPER_R_OFFSET, R_ee_base)
+            R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, GRIPPER_R_OFFSET, R_ee_base, grasp_direction=GRASP_DIRECTION)
 
             # 转换到基坐标系 (第二部分 Step 6)
             rot_base = R_ee_base @ R_grasp_ee

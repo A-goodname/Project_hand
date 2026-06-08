@@ -14,19 +14,21 @@ estun:
     window: 5                    # 稳定帧数窗口
     pos_threshold: 0.01          # 位置变化阈值(米)
     angle_threshold: 5.0         # 角度变化阈值(度)
+
+  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free
+
+  grasp_direction: "right"       # 抓取方向: right(右手/掌心向左) | left(左手/掌心向右)
+
+  # --- 瓶身夹爪偏移 (estun_run / estun_epiceye_run / 各 demo 使用) ---
   gripper_offset:
     t_offset: [0.055, -0.045, 0.075]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转,考虑从安装位置旋转到C=0时的末端坐标（末端一起旋转）
     r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}; 当C = -90时, X增加=灵巧手向下, Y增加=灵巧手向左, Z增加=灵巧手向后
-  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free,由于机械臂欧拉角限制，两个方向的限制有误
 
-  # --- 把手抓取偏移 (独立于瓶身, 初始值同 t_offset, 后续微调) ---
-  handle_gripper_offset:
-    t_handle_offset: [0, -0.02, 0.075]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
-    r_handle_offset: [0, 0, -90]               # 灵巧手安装角度, 同瓶身
-
-  # --- 把手抓取参数 ---
-  # 每个偏移都包含 t_offset(平移) 和 r_offset(旋转), 先平移再旋转, 此时的末端定义为从C=-90到C=0旋转的末端
+  # --- 把手抓取 (estun_handle_run / estun_handle_demo 使用) ---
   handle_grasp:
+    gripper_offset:                    # 把手夹爪偏移 (独立于瓶身)
+      t_handle_offset: [0, -0.02, 0.075]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
+      r_handle_offset: [0, 0, -90]               # 灵巧手安装角度, 同瓶身
     pre_offset:
       t_offset: [0.0, -0.02, 0.04]      # 末端系下预抓取平移偏移 (x, y, z) m
       r_offset: [0.0, 0.0, 0.0]         # 末端系下预抓取旋转偏移 (A, B, C) 度
