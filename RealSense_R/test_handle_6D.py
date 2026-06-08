@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-RealSense YOLO-World + SAM + 水平扫描线 + 6D 水壶把手位姿估计
+RealSense 微调模型 + SAM + 水平扫描线 + 6D 水壶把手位姿估计
 =============================================================
 重构版本: 继承 BaseRealSenseDetector 基类.
 在 test_handle_3D.py 基础上增加 6D 位姿 (位置 + 旋转矩阵 + 欧拉角).
 
 流程:
-  YOLO-World → SAM → 水平扫描线分离(handle_mask) →
+  微调 YOLOv8n → SAM → 水平扫描线分离(handle_mask) →
   handle_mask 区域深度映射 → 点云 → PCA 主成分分析 → 6D 位姿
 
 使用方法:
@@ -169,7 +169,7 @@ def _compute_handle_6d_pose(handle_mask, depth_frame, anchor_depth,
 
 class RealSenseHandle6DDetector(BaseRealSenseDetector):
     """
-    YOLO-World + SAM + 水平扫描线 + 6D 定位.
+    微调 YOLOv8n + SAM + 水平扫描线 + 6D 定位.
     """
     USE_YOLO_WORLD = False
     USE_FINETUNED_KETTLE = True
@@ -188,7 +188,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
         self._cached_raw_depth = None
 
         # ---- 6D 位姿平滑 ----
-        self._pose_smoother = PoseSmoother(alpha=0.3)
+        self._pose_smoother = PoseSmoother(alpha=self.SMOOTH_POSE_ALPHA)
 
     # ------------------------------------------------------------
     def _get_anchor_depth(self, bbox, depth_frame):
@@ -220,7 +220,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
     # ------------------------------------------------------------
     def detect_handle_6d(self, color_image, depth_frame):
         """
-        主检测函数: YOLO-World → SAM → 扫描线分离 → 6D.
+        主检测函数: 微调 YOLO → SAM → 扫描线分离 → 6D.
 
         返回:
             body_mask      : np.ndarray (H, W), bool, 壶身 mask
@@ -231,7 +231,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
             handle_rot     : 3x3 旋转矩阵或 None
             handle_euler   : (A, B, C) 或 None, ZYX 欧拉角 (deg)
         """
-        # === Step 1: 检测水壶本体 (微调模型或 YOLO-World) ===
+        # === Step 1: 检测水壶本体 (微调模型) ===
         _t_yolo_start = time.perf_counter()
         if self.USE_FINETUNED_KETTLE:
             best = self._detect_kettle_finetuned(color_image)
@@ -444,7 +444,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                 else:
                     vis_panel = display_img
 
-                cv2.imshow('Handle 6D Detection (YOLO-World+SAM)', vis_panel)
+                cv2.imshow('Handle 6D Detection', vis_panel)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):

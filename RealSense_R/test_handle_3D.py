@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-RealSense YOLO-World + SAM + 水平扫描线 + 3D 水壶把手定位
+RealSense 微调模型 + SAM + 水平扫描线 + 3D 水壶把手定位
 =========================================================
 重构版本: 继承 BaseRealSenseDetector 基类.
 在 test_SAM_handle.py 基础上增加 3D 定位.
 
 流程:
-  YOLO-World → SAM → 水平扫描线分离 → 3D 定位
+  微调 YOLOv8n → SAM → 水平扫描线分离 → 3D 定位
 
 深度处理仅在 3D 定位阶段进行 (Z 离群过滤), 不预处理 mask,
 避免透明壶身深度异常干扰扫描线分离.
@@ -122,7 +122,7 @@ def _calc_mask_3d(mask, depth_frame, anchor_depth,
 
 class RealSenseHandle3DDetector(BaseRealSenseDetector):
     """
-    YOLO-World + SAM + 水平扫描线 + 3D 定位.
+    微调 YOLOv8n + SAM + 水平扫描线 + 3D 定位.
     """
     USE_YOLO_WORLD = False
     USE_FINETUNED_KETTLE = True
@@ -138,11 +138,10 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
 
         # ---- 跳帧缓存 ----
         self._frame_counter = 0
-        self._skip_frames = 10
         self._cached_result = None  # (body_mask, handle_mask, stage, yolo_bbox, handle_pos)
 
         # ---- EMA 平滑 (仅 handle) ----
-        self._handle_smoother = PositionSmoother(alpha=0.4)
+        self._handle_smoother = PositionSmoother(alpha=self.SMOOTH_ALPHA)
 
     # ------------------------------------------------------------
     def _get_anchor_depth(self, bbox, depth_frame):
@@ -174,7 +173,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
     # ------------------------------------------------------------
     def detect_handle(self, color_image, depth_frame):
         """
-        主检测函数: YOLO-World → SAM → 扫描线分离 → 3D.
+        主检测函数: 微调 YOLO → SAM → 扫描线分离 → 3D.
 
         返回:
             body_mask      : np.ndarray (H, W), bool, 壶身 mask
@@ -183,7 +182,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
             yolo_bbox      : [x1, y1, x2, y2], YOLO 原始检测框
             handle_pos     : (x, y, z) 或 None, 把手 3D 位置
         """
-        # === Step 1: 检测水壶本体 (微调模型或 YOLO-World) ===
+        # === Step 1: 检测水壶本体 (微调模型) ===
         _t_yolo_start = time.perf_counter()
         if self.USE_FINETUNED_KETTLE:
             best = self._detect_kettle_finetuned(color_image)
@@ -372,7 +371,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
                 else:
                     vis_panel = display_img
 
-                cv2.imshow('Handle 3D Detection (YOLO-World+SAM)', vis_panel)
+                cv2.imshow('Handle 3D Detection', vis_panel)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):

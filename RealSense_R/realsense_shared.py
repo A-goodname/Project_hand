@@ -442,6 +442,7 @@ class BaseRealSenseDetector:
 
     # ---- 平滑默认值 ----
     SMOOTH_ALPHA = 0.4
+    SMOOTH_POSE_ALPHA = 0.3
 
     # ---- 标准 YOLO 默认值 ----
     MODEL_NAME = ""
@@ -531,6 +532,8 @@ class BaseRealSenseDetector:
         _sm = cfg.get("smoothing", {})
         if "alpha" in _sm:
             self.SMOOTH_ALPHA = _sm["alpha"]
+        if "pose_alpha" in _sm:
+            self.SMOOTH_POSE_ALPHA = _sm["pose_alpha"]
 
         # ---- 标准 YOLO (仅当 USE_YOLO_WORLD=False 时读取) ----
         if not self.USE_YOLO_WORLD:

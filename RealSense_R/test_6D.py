@@ -30,7 +30,6 @@ from typing import Optional
 from RealSense_R.realsense_shared import (
     BaseRealSenseDetector,
     rotation_matrix_to_euler_angles as _shared_r2euler,
-    PositionSmoother,
     PoseSmoother,
 )
 
@@ -64,8 +63,7 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
         super().__init__(config_dict=config_dict)
 
         # 平滑器
-        self._pos_smoother = PositionSmoother(alpha=self.SMOOTH_ALPHA)
-        self._pose_smoother = PoseSmoother(alpha=0.3)
+        self._pose_smoother = PoseSmoother(alpha=self.SMOOTH_POSE_ALPHA)
 
         # --- estun_run.py 外部使用的属性 ---
         self.last_known_pose: Optional[tuple] = None
