@@ -7,6 +7,7 @@ RealSense 水壶把手检测 共享工具函数
   - color_to_depth_pixel   : 彩色像素 → 深度像素映射
   - depth_median_around    : 深度图局部中值
   - scanline_find_handle   : 水平扫描线分离把手
+  - detect_red_tape        : HSV 红色胶带检测
   - PositionSmoother       : 3D 位置 EMA 平滑器
   - PoseSmoother           : 6D 位姿 EMA 平滑器
   - rotation_matrix_to_euler_angles : 旋转矩阵 → ZYX 欧拉角
@@ -164,10 +165,10 @@ def scanline_find_handle(full_mask, bbox,
     水平扫描线法分离壶身与把手.
 
     原理:
-      逐行扫描, 对每行 y 在搜索范围内找出所有 mask 段.
-      取把手侧最外的一个段作为把手候选 (不跨空洞合并).
-      right 侧取最右段, left 侧取最左段.
-      然后校验面积比例和质心位置.
+       逐行扫描, 对每行 y 在搜索范围内找出所有 mask 段.
+       取把手侧最外的一个段作为把手候选 (不跨空洞合并).
+       right 侧取最右段, left 侧取最左段.
+       然后校验面积比例和质心位置.
 
     参数:
         full_mask                     : np.ndarray (H, W), bool, SAM 生成的完整水壶 mask
@@ -305,7 +306,77 @@ def scanline_find_handle(full_mask, bbox,
 
 
 # ============================================================
-#  4. 平滑工具类
+#  4. 红色胶带检测工具
+# ============================================================
+
+def detect_red_tape(bgr_img, hsv_low1=None, hsv_up1=None,
+                    hsv_low2=None, hsv_up2=None, min_area=20):
+    """
+    在 BGR 图像中检测红色区域.
+    红色在 HSV 空间中分布在 0 和 180 两端, 需双阈值.
+
+    参数:
+        bgr_img    : np.ndarray, BGR 图像
+        hsv_low1   : np.ndarray 或 None, 低阈值下限, 默认 [0, 50, 50]
+        hsv_up1    : np.ndarray 或 None, 低阈值上限, 默认 [10, 255, 255]
+        hsv_low2   : np.ndarray 或 None, 高阈值下限, 默认 [170, 50, 50]
+        hsv_up2    : np.ndarray 或 None, 高阈值上限, 默认 [180, 255, 255]
+        min_area   : int, 最小有效面积
+
+    返回:
+        red_mask  : np.ndarray (H, W), bool, 红色区域 mask
+        center    : (cx, cy) 或 None, 红色区域中心 (像素坐标)
+        area      : int, 红色区域像素面积
+    """
+    if hsv_low1 is None:
+        hsv_low1 = np.array([0, 50, 50])
+    if hsv_up1 is None:
+        hsv_up1 = np.array([10, 255, 255])
+    if hsv_low2 is None:
+        hsv_low2 = np.array([170, 50, 50])
+    if hsv_up2 is None:
+        hsv_up2 = np.array([180, 255, 255])
+
+    hsv = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2HSV)
+
+    mask1 = cv2.inRange(hsv, hsv_low1, hsv_up1)
+    mask2 = cv2.inRange(hsv, hsv_low2, hsv_up2)
+    red_mask = np.bitwise_or(mask1, mask2).astype(bool)
+
+    # 形态学开运算去噪 (去除孤立噪点)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    red_mask = cv2.morphologyEx(red_mask.astype(np.uint8),
+                                cv2.MORPH_OPEN, kernel).astype(bool)
+
+    # 先检查有效像素数
+    total_px = np.sum(red_mask)
+    if total_px < min_area:
+        return red_mask, None, 0
+
+    # 保留最大连通分量 (排除小噪声)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        red_mask.astype(np.uint8), connectivity=8
+    )
+    if num_labels <= 1:
+        return red_mask, None, 0
+
+    areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
+    largest_idx, largest_area = max(areas, key=lambda x: x[1])
+
+    if largest_area < min_area:
+        return red_mask, None, 0
+
+    red_mask = (labels == largest_idx)
+
+    # 计算中心 (使用中位数, 对边缘离群点更鲁棒)
+    ys, xs = np.where(red_mask)
+    center = (int(np.median(xs)), int(np.median(ys)))
+
+    return red_mask, center, largest_area
+
+
+# ============================================================
+#  5. 平滑工具类
 # ============================================================
 
 class PositionSmoother:
@@ -356,7 +427,7 @@ class PoseSmoother:
 
 
 # ============================================================
-#  5. 6D 位姿工具
+#  6. 6D 位姿工具
 # ============================================================
 
 def rotation_matrix_to_euler_angles(R):
@@ -411,7 +482,7 @@ def visualize_pose(image, center_3d, rot, K, scale=0.08):
 
 
 # ============================================================
-#  6. 检测器基类 BaseRealSenseDetector
+#  7. 检测器基类 BaseRealSenseDetector
 # ============================================================
 
 class BaseRealSenseDetector:
@@ -469,6 +540,10 @@ class BaseRealSenseDetector:
     ROI_EXPAND_RATIO = 0.3
     SKIP_FRAMES = 10
     HANDLE_CENTER_DEVIATION_RATIO = 0.3
+
+    # ---- 红色胶带 ----
+    USE_RED_TAPE = False
+    RED_TAPE_MIN_AREA = 20
 
     # ---- 设备默认值 ----
     DEVICE = 'cpu'
@@ -596,6 +671,13 @@ class BaseRealSenseDetector:
                 self.SKIP_FRAMES = _handle["skip_frames"]
             if "handle_center_deviation_ratio" in _handle:
                 self.HANDLE_CENTER_DEVIATION_RATIO = _handle["handle_center_deviation_ratio"]
+
+        # ---- 红色胶带 (始终读取, 不管 USE_SAM) ----
+        _rt = cfg.get("red_tape", {})
+        if "enabled" in _rt:
+            self.USE_RED_TAPE = _rt["enabled"]
+        if "min_area" in _rt:
+            self.RED_TAPE_MIN_AREA = _rt["min_area"]
 
         # ---- 打印设备信息 ----
         if self.USE_FINETUNED_KETTLE:
@@ -735,7 +817,7 @@ class BaseRealSenseDetector:
             depth_min=self.DEPTH_MIN, depth_max=self.DEPTH_MAX
         )
 
-# ------------------------------------------------------------
+    # ------------------------------------------------------------
     def _color_pixel_to_3d(self, cx, cy, depth_frame):
         """
         将彩色像素 (cx, cy) 反投影到彩色坐标系下的 3D 点.
@@ -766,7 +848,7 @@ class BaseRealSenseDetector:
         步骤:
          1. bbox 中心彩色坐标 → 映射到深度图
          2. 深度图局部 3x3 中值
-        返回 (cx_color, cy_color, center_depth) 或 None
+         返回 (cx_color, cy_color, center_depth) 或 None
         """
         cx_color = (int(bbox[0]) + int(bbox[2])) // 2
         cy_color = (int(bbox[1]) + int(bbox[3])) // 2

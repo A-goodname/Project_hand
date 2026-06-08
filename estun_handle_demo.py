@@ -307,7 +307,7 @@ def main():
             # ---- [Step 3b] 每 SKIP_FRAMES 帧执行一次检测 ----
             if frame_counter % SKIP_FRAMES == 1:
                 result = detector.detect_handle_6d(color_image, depth_frame)
-                body_mask, handle_mask, stage, yolo_bbox, handle_pos, handle_rot, handle_euler = result
+                body_mask, handle_mask, stage, yolo_bbox, handle_pos, handle_rot, handle_euler, red_mask, red_center = result
 
                 # 内部 EMA 平滑 (与 test_handle_6D 的 run() 一致)
                 if handle_pos is not None and handle_rot is not None:

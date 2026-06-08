@@ -3,10 +3,11 @@
 RealSense 微调模型 + SAM + 水平扫描线 + 3D 水壶把手定位
 =========================================================
 重构版本: 继承 BaseRealSenseDetector 基类.
-在 test_SAM_handle.py 基础上增加 3D 定位.
+在 test_SAM_handle.py 基础上增加 3D 定位, 并集成红色胶带辅助检测.
 
 流程:
   微调 YOLOv8n → SAM → 水平扫描线分离 → 3D 定位
+  若 red_tape.enabled=True 且检测到红色胶带, 用红色胶带 3D 位置替代把手位置
 
 深度处理仅在 3D 定位阶段进行 (Z 离群过滤), 不预处理 mask,
 避免透明壶身深度异常干扰扫描线分离.
@@ -34,6 +35,7 @@ from RealSense_R.realsense_shared import (
     BaseRealSenseDetector,
     color_to_depth_pixel,
     scanline_find_handle,
+    detect_red_tape,
     PositionSmoother,
 )
 
@@ -138,7 +140,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
 
         # ---- 跳帧缓存 ----
         self._frame_counter = 0
-        self._cached_result = None  # (body_mask, handle_mask, stage, yolo_bbox, handle_pos)
+        self._cached_result = None  # (body_mask, handle_mask, stage, yolo_bbox, handle_pos, red_mask, red_center)
 
         # ---- EMA 平滑 (仅 handle) ----
         self._handle_smoother = PositionSmoother(alpha=self.SMOOTH_ALPHA)
@@ -171,9 +173,33 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
         return depths[len(depths) // 2]
 
     # ------------------------------------------------------------
+    def _detect_red_on_handle(self, handle_mask, color_image):
+        """
+        在 handle_mask 原始区域内检测红色胶带 (不扩展).
+
+        参数:
+            handle_mask : np.ndarray (H, W), bool, 把手 mask
+            color_image : np.ndarray (H, W, 3), BGR 彩色图
+
+        返回:
+            red_center : (cx, cy) 或 None, 红色胶带中心 (全图坐标)
+            red_mask   : np.ndarray (H, W), bool 或 None
+            red_area   : int, 红色面积
+        """
+        masked_img = cv2.bitwise_and(color_image, color_image,
+                                     mask=handle_mask.astype(np.uint8) * 255)
+        red_mask_full, red_center, red_area = detect_red_tape(
+            masked_img, min_area=self.RED_TAPE_MIN_AREA
+        )
+        if red_center is None or red_area <= 0:
+            return None, None, 0
+        return red_center, red_mask_full, red_area
+
+    # ------------------------------------------------------------
     def detect_handle(self, color_image, depth_frame):
         """
         主检测函数: 微调 YOLO → SAM → 扫描线分离 → 3D.
+        若启用红色胶带, 检测并替换把手位置.
 
         返回:
             body_mask      : np.ndarray (H, W), bool, 壶身 mask
@@ -181,6 +207,8 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
             stage          : str, "success" / "none"
             yolo_bbox      : [x1, y1, x2, y2], YOLO 原始检测框
             handle_pos     : (x, y, z) 或 None, 把手 3D 位置
+            red_mask       : np.ndarray (H, W), bool 或 None, 红色 mask
+            red_center     : (cx, cy) 或 None, 红色中心 (像素坐标)
         """
         # === Step 1: 检测水壶本体 (微调模型) ===
         _t_yolo_start = time.perf_counter()
@@ -191,7 +219,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
         self._yolo_time_ms = (time.perf_counter() - _t_yolo_start) * 1000
 
         if best is None:
-            return None, None, "none", None, None
+            return None, None, "none", None, None, None, None
 
         bbox = best["bbox"]
 
@@ -207,7 +235,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
         self._sam_time_ms = (time.perf_counter() - _t_sam_start) * 1000
 
         if full_mask is None:
-            return None, None, "none", bbox, None
+            return None, None, "none", bbox, None, None, None
 
         # === Step 4: 水平扫描线分离把手 ===
         body_mask, handle_mask = scanline_find_handle(
@@ -218,7 +246,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
             handle_center_deviation_ratio=self.HANDLE_CENTER_DEVIATION_RATIO
         )
 
-        # === Step 5: 3D 定位 ===
+        # === Step 5: 3D 定位 (把手) ===
         handle_pos = None
         if handle_mask is not None and anchor_depth is not None:
             handle_pos = _calc_mask_3d(
@@ -229,21 +257,42 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
                 depth_min=self.DEPTH_MIN, depth_max=self.DEPTH_MAX
             )
 
+        # === Step 6: 红色胶带检测 (可选) ===
+        red_center = None
+        red_mask = None
+        if self.USE_RED_TAPE and handle_mask is not None:
+            red_center, red_mask, red_area = self._detect_red_on_handle(
+                handle_mask, color_image
+            )
+            if red_center is not None and anchor_depth is not None:
+                # 用 red_mask 计算 3D 位置, 替代把手位置
+                red_3d_pos = _calc_mask_3d(
+                    red_mask, depth_frame, anchor_depth,
+                    self.depth_scale, self.depth_intrinsics, self.color_intrinsics,
+                    self.color_to_depth_extrinsics, self.depth_to_color_extrinsics,
+                    step=1, z_threshold=self.DEPTH_Z_THRESHOLD,
+                    depth_min=self.DEPTH_MIN, depth_max=self.DEPTH_MAX
+                )
+                if red_3d_pos is not None:
+                    handle_pos = red_3d_pos  # ★ 替换把手位置
+                    print("[INFO] Red tape 3D: (%.3f, %.3f, %.3f)" % red_3d_pos)
+
+        # === Step 7: 返回结果 ===
         if handle_mask is not None and body_mask is not None:
-            handle_area = float(np.sum(handle_mask))
+            handle_area_val = float(np.sum(handle_mask))
             body_area_val = float(np.sum(body_mask))
             pos_str = "(%.3f, %.3f, %.3f)" % handle_pos if handle_pos else "(none)"
             print("[INFO] Handle detected: area_ratio=%.1f%%, handle_3D=%s" % (
-                handle_area / body_area_val * 100, pos_str))
-            return body_mask, handle_mask, "success", bbox, handle_pos
+                handle_area_val / body_area_val * 100, pos_str))
+            return body_mask, handle_mask, "success", bbox, handle_pos, red_mask, red_center
 
         print("[WARN] No handle found (scanline detection failed)")
-        return body_mask, None, "none", bbox, None
+        return body_mask, None, "none", bbox, None, red_mask, red_center
 
     # ------------------------------------------------------------
     def visualize(self, display_img, body_mask, handle_mask,
-                  stage, yolo_bbox, handle_pos):
-        """可视化检测结果 + 3D 坐标."""
+                  stage, yolo_bbox, handle_pos, red_mask=None, red_center=None):
+        """可视化检测结果 + 3D 坐标 + 红色胶带."""
         # ---- YOLO 检测框 (紫色) ----
         if yolo_bbox is not None:
             x1, y1, x2, y2 = [int(v) for v in yolo_bbox]
@@ -277,19 +326,41 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
                                            cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(display_img, contours, -1, (255, 0, 0), 1)
 
+        # ---- 红色胶带绘制 (红色半透明 + 轮廓 + 中心点) ----
+        if self.USE_RED_TAPE and red_mask is not None and np.any(red_mask):
+            overlay_red = display_img.copy()
+            overlay_red[red_mask] = (0, 0, 255)
+            cv2.addWeighted(overlay_red, 0.35, display_img, 0.65, 0, display_img)
+
+            mask_r_u8 = red_mask.astype(np.uint8) * 255
+            contours_r, _ = cv2.findContours(mask_r_u8, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(display_img, contours_r, -1, (0, 0, 255), 2)
+
+        # ---- 把手中心点 (红色胶带中心替代) ----
+        if self.USE_RED_TAPE and red_center is not None:
+            cv2.circle(display_img, red_center, 6, (0, 0, 255), -1)
+            cv2.circle(display_img, red_center, 6, (255, 255, 255), 2)
+            cv2.putText(display_img, "RED TAPE CENTER",
+                        (red_center[0] + 8, red_center[1]),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+        elif handle_mask is not None:
+            ys_h, xs_h = np.where(handle_mask)
+            if len(ys_h) > 0:
+                cy_h = int(np.mean(ys_h))
+                cx_h = int(np.mean(xs_h))
+                cv2.circle(display_img, (cx_h, cy_h), 4, (0, 255, 0), -1)
+
         # ---- 3D 文字标注 ----
         if handle_pos is not None:
             text_h = "Handle: (%.3f, %.3f, %.3f) m" % handle_pos
             cv2.putText(display_img, text_h, (10, 80),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            # 把手中心点
-            if handle_mask is not None:
-                ys_h, xs_h = np.where(handle_mask)
-                if len(ys_h) > 0:
-                    cy_h = int(np.mean(ys_h))
-                    cx_h = int(np.mean(xs_h))
-                    cv2.circle(display_img, (cx_h, cy_h), 4, (0, 255, 0), -1)
+        # ---- 红色胶带 3D 信息 ----
+        if self.USE_RED_TAPE and red_center is not None and handle_pos is not None:
+            cv2.putText(display_img, "Red tape 3D: (%.3f, %.3f, %.3f)" % handle_pos,
+                        (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         # ---- 状态文字 ----
         if stage == "success":
@@ -322,6 +393,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
         print("深度 Z 过滤阈值: %.2fm" % self.DEPTH_Z_THRESHOLD)
         print("跳帧策略: 每 %d 帧执行一次完整检测" % self._skip_frames)
         print("ROI 左右拓展: %.0f%%" % (self.ROI_EXPAND_RATIO * 100))
+        print("红色胶带辅助: %s" % ("启用" if self.USE_RED_TAPE else "关闭"))
 
         _last_color = None
 
@@ -336,7 +408,8 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
 
                 # --- 每 N 帧执行一次完整检测 ---
                 if self._frame_counter % self._skip_frames == 1:
-                    body_mask, handle_mask, stage, yolo_bbox, handle_pos = \
+                    body_mask, handle_mask, stage, yolo_bbox, handle_pos, \
+                        red_mask, red_center = \
                         self.detect_handle(color_image, depth_frame)
 
                     # EMA 平滑 handle_pos
@@ -347,21 +420,25 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
 
                     self._cached_result = (
                         body_mask, handle_mask, stage, yolo_bbox, handle_pos,
+                        red_mask, red_center,
                     )
                     _last_color = color_image.copy()
                 else:
                     if self._cached_result is not None:
-                        body_mask, handle_mask, stage, yolo_bbox, handle_pos = \
-                            self._cached_result
+                        body_mask, handle_mask, stage, yolo_bbox, handle_pos, \
+                            red_mask, red_center = self._cached_result
                     else:
                         body_mask = None
                         handle_mask = None
                         stage = "none"
                         yolo_bbox = None
                         handle_pos = None
+                        red_mask = None
+                        red_center = None
 
                 self.visualize(display_img, body_mask, handle_mask,
-                               stage, yolo_bbox, handle_pos)
+                               stage, yolo_bbox, handle_pos,
+                               red_mask=red_mask, red_center=red_center)
 
                 # 叠加深度热力图
                 if depth_colormap is not None:

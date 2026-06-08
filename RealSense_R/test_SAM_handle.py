@@ -36,6 +36,7 @@ import numpy as np
 from RealSense_R.realsense_shared import (
     BaseRealSenseDetector,
     scanline_find_handle,
+    detect_red_tape,
 )
 
 
@@ -172,6 +173,34 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
         return None, None, full_mask, full_mask, "none", bbox
 
     # ------------------------------------------------------------
+    def _detect_red_on_handle(self, handle_mask, color_image):
+        """
+        在 handle_mask 原始区域内检测红色胶带 (不扩展).
+
+        策略: 直接将 handle_mask 作为 ROI mask,
+             仅在该 mask 覆盖的像素上做 HSV 红色检测,
+             排除任何 mask 外部的背景/空洞干扰.
+
+        参数:
+            handle_mask : np.ndarray (H, W), bool, 把手 mask
+            color_image : np.ndarray (H, W, 3), BGR 彩色图
+
+        返回:
+            red_center : (cx, cy) 或 None, 红色胶带中心 (全图坐标)
+            red_mask   : np.ndarray (H, W), bool 或 None
+            red_area   : int, 红色面积
+        """
+        # ---- 仅取 handle_mask 内的像素做红色检测 ----
+        masked_img = cv2.bitwise_and(color_image, color_image,
+                                     mask=handle_mask.astype(np.uint8) * 255)
+        red_mask_full, red_center, red_area = detect_red_tape(masked_img)
+
+        if red_center is None or red_area <= 0:
+            return None, None, 0
+
+        return red_center, red_mask_full, red_area
+
+    # ------------------------------------------------------------
     def _run_single_inference(self, color_image, depth_frame):
         """
         执行单次推理, 返回结果字典供显示使用.
@@ -180,11 +209,21 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
             dict: {
                 "body_mask", "handle_mask", "handle_bbox",
                 "full_mask", "stage", "yolo_bbox",
-                "yolo_time_ms", "sam_time_ms"
+                "yolo_time_ms", "sam_time_ms",
+                "red_center", "red_mask", "red_area"
             }
         """
         handle_mask, handle_bbox, body_mask, full_mask, stage, yolo_bbox = \
             self.detect_handle(color_image, depth_frame)
+
+        # ---- 红色胶带检测 (仅在启用配置 + 成功分离把手时执行) ----
+        red_center = None
+        red_mask = None
+        red_area = 0
+        if self.USE_RED_TAPE and handle_mask is not None and stage == "success":
+            red_center, red_mask, red_area = self._detect_red_on_handle(
+                handle_mask, color_image
+            )
 
         return {
             "body_mask": body_mask,
@@ -195,6 +234,9 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
             "yolo_bbox": yolo_bbox,
             "yolo_time_ms": self._yolo_time_ms,
             "sam_time_ms": self._sam_time_ms,
+            "red_center": red_center,
+            "red_mask": red_mask,
+            "red_area": red_area,
         }
 
     # ------------------------------------------------------------
@@ -216,7 +258,7 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
 
     # ------------------------------------------------------------
     def _draw_result(self, display_img, result):
-        """绘制推理结果 (mask 叠加 + bbox + 统计)."""
+        """绘制推理结果 (mask 叠加 + bbox + 统计 + 红色胶带)."""
         body_mask = result["body_mask"]
         handle_mask = result["handle_mask"]
         handle_bbox = result["handle_bbox"]
@@ -224,6 +266,9 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
         yolo_bbox = result["yolo_bbox"]
         yolo_time_ms = result["yolo_time_ms"]
         sam_time_ms = result["sam_time_ms"]
+        red_center = result.get("red_center")
+        red_mask = result.get("red_mask")
+        red_area = result.get("red_area", 0)
 
         # ---- 先绘制微调 YOLO 原始检测框 (紫色) ----
         if yolo_bbox is not None:
@@ -273,6 +318,21 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
                     box_pts = box_pts.reshape((-1, 1, 2)).astype(np.int32)
                     cv2.drawContours(display_img, [box_pts], 0, (0, 255, 255), 2)
 
+        # ---- 红色胶带绘制 (红色半透明 + 轮廓 + 中心点) ----
+        if self.USE_RED_TAPE and red_mask is not None and np.any(red_mask):
+            overlay_red = display_img.copy()
+            overlay_red[red_mask] = (0, 0, 255)
+            cv2.addWeighted(overlay_red, 0.35, display_img, 0.65, 0, display_img)
+
+            mask_r_u8 = red_mask.astype(np.uint8) * 255
+            contours_r, _ = cv2.findContours(mask_r_u8, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(display_img, contours_r, -1, (0, 0, 255), 2)
+
+        if self.USE_RED_TAPE and red_center is not None:
+            cv2.circle(display_img, red_center, 6, (0, 0, 255), -1)
+            cv2.circle(display_img, red_center, 6, (255, 255, 255), 2)
+
         # ---- 底部提示信息 ----
         if stage == "success":
             color = (0, 255, 0)
@@ -286,6 +346,15 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
         cv2.putText(display_img, "YOLO: %dms  SAM: %dms" % (
             int(yolo_time_ms), int(sam_time_ms)),
                     (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+        # ---- 红色胶带信息 (第3-4行) ----
+        if self.USE_RED_TAPE and red_center is not None:
+            cv2.putText(display_img, "Red tape: (%d, %d) area=%dpx" % (
+                red_center[0], red_center[1], red_area),
+                        (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        elif self.USE_RED_TAPE and stage == "success":
+            cv2.putText(display_img, "Red tape: none",
+                        (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         cv2.putText(display_img, "[RESULT] 'v'-save mask | 's'-rerun | 'c'-clear | 'q'-quit",
                     (10, display_img.shape[0] - 20),

@@ -533,7 +533,7 @@ def main():
             # ---- [Step 2] 每 SKIP_FRAMES 帧执行一次 Handle 6D 检测 ----
             if frame_counter % SKIP_FRAMES == 1:
                 result = detector.detect_handle_6d(color_image, depth_frame)
-                body_mask, handle_mask, stage, yolo_bbox, pos, rot, handle_euler = result
+                body_mask, handle_mask, stage, yolo_bbox, pos, rot, handle_euler, red_mask, red_center = result
 
                 if pos is not None and rot is not None:
                     smooth_pos, smooth_rot = detector._pose_smoother.update(pos, rot)

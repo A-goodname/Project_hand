@@ -3,11 +3,15 @@
 RealSense 微调模型 + SAM + 水平扫描线 + 6D 水壶把手位姿估计
 =============================================================
 重构版本: 继承 BaseRealSenseDetector 基类.
-在 test_handle_3D.py 基础上增加 6D 位姿 (位置 + 旋转矩阵 + 欧拉角).
+在 test_handle_3D.py 基础上增加 6D 位姿 (位置 + 旋转矩阵 + 欧拉角),
+并集成红色胶带辅助检测.
 
 流程:
   微调 YOLOv8n → SAM → 水平扫描线分离(handle_mask) →
   handle_mask 区域深度映射 → 点云 → PCA 主成分分析 → 6D 位姿
+  若 red_tape.enabled=True 且检测到红色胶带:
+    - 位置 (handle_pos) ← 红色胶带区域 3D 位置
+    - 旋转 (handle_rot) ← 仍用 handle_mask 全区域的 PCA 结果 (不变)
 
 使用方法:
   1. 连接 Intel RealSense D435i 相机
@@ -34,6 +38,7 @@ from RealSense_R.realsense_shared import (
     BaseRealSenseDetector,
     color_to_depth_pixel,
     scanline_find_handle,
+    detect_red_tape,
     PoseSmoother,
     rotation_matrix_to_euler_angles,
     visualize_pose,
@@ -218,6 +223,29 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
         return depths[len(depths) // 2]
 
     # ------------------------------------------------------------
+    def _detect_red_on_handle(self, handle_mask, color_image):
+        """
+        在 handle_mask 原始区域内检测红色胶带 (不扩展).
+
+        参数:
+            handle_mask : np.ndarray (H, W), bool, 把手 mask
+            color_image : np.ndarray (H, W, 3), BGR 彩色图
+
+        返回:
+            red_center : (cx, cy) 或 None, 红色胶带中心 (全图坐标)
+            red_mask   : np.ndarray (H, W), bool 或 None
+            red_area   : int, 红色面积
+        """
+        masked_img = cv2.bitwise_and(color_image, color_image,
+                                     mask=handle_mask.astype(np.uint8) * 255)
+        red_mask_full, red_center, red_area = detect_red_tape(
+            masked_img, min_area=self.RED_TAPE_MIN_AREA
+        )
+        if red_center is None or red_area <= 0:
+            return None, None, 0
+        return red_center, red_mask_full, red_area
+
+    # ------------------------------------------------------------
     def detect_handle_6d(self, color_image, depth_frame):
         """
         主检测函数: 微调 YOLO → SAM → 扫描线分离 → 6D.
@@ -230,6 +258,8 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
             handle_pos     : (x, y, z) 或 None, 把手 3D 位置
             handle_rot     : 3x3 旋转矩阵或 None
             handle_euler   : (A, B, C) 或 None, ZYX 欧拉角 (deg)
+            red_mask       : np.ndarray (H, W), bool 或 None, 红色 mask
+            red_center     : (cx, cy) 或 None, 红色中心 (像素坐标)
         """
         # === Step 1: 检测水壶本体 (微调模型) ===
         _t_yolo_start = time.perf_counter()
@@ -240,7 +270,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
         self._yolo_time_ms = (time.perf_counter() - _t_yolo_start) * 1000
 
         if best is None:
-            return None, None, "none", None, None, None, None
+            return None, None, "none", None, None, None, None, None, None
 
         bbox = best["bbox"]
 
@@ -256,7 +286,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
         self._sam_time_ms = (time.perf_counter() - _t_sam_start) * 1000
 
         if full_mask is None:
-            return None, None, "none", bbox, None, None, None
+            return None, None, "none", bbox, None, None, None, None, None
 
         # === Step 4: 水平扫描线分离把手 ===
         body_mask, handle_mask = scanline_find_handle(
@@ -267,10 +297,11 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
             handle_center_deviation_ratio=self.HANDLE_CENTER_DEVIATION_RATIO
         )
 
-        # === Step 5: 6D 定位 ===
+        # === Step 5: 6D 定位 (PCA, 始终基于 handle_mask) ===
         handle_pos = None
         handle_rot = None
         handle_euler = None
+        handle_pca_rot = None  # 保留原始 PCA 旋转
 
         if handle_mask is not None and anchor_depth is not None:
             pos, rot, _ = _compute_handle_6d_pose(
@@ -282,30 +313,58 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
             )
             if pos is not None and rot is not None:
                 handle_pos = pos
+                handle_pca_rot = rot.copy()  # 备份 PCA 旋转
                 handle_rot = rot
                 handle_euler = rotation_matrix_to_euler_angles(rot)
 
+        # === Step 6: 红色胶带检测 (可选, 只替换位置, 不替换旋转) ===
+        red_center = None
+        red_mask = None
+        if self.USE_RED_TAPE and handle_mask is not None:
+            red_center, red_mask, red_area = self._detect_red_on_handle(
+                handle_mask, color_image
+            )
+            if red_center is not None and anchor_depth is not None:
+                # 对 red_mask 计算 6D, 但只取位置
+                red_pos, _, _ = _compute_handle_6d_pose(
+                    red_mask, depth_frame, anchor_depth,
+                    self.depth_scale, self.depth_intrinsics, self.color_intrinsics,
+                    self.color_to_depth_extrinsics, self.depth_to_color_extrinsics,
+                    step=1, z_threshold=self.DEPTH_Z_THRESHOLD,
+                    depth_min=self.DEPTH_MIN, depth_max=self.DEPTH_MAX
+                )
+                if red_pos is not None:
+                    handle_pos = red_pos          # ★ 替换位置
+                    handle_rot = handle_pca_rot    # ★ 旋转不变 (仍用 PCA 结果)
+                    if handle_rot is not None:
+                        handle_euler = rotation_matrix_to_euler_angles(handle_rot)
+                    print("[INFO] Red tape 3D: (%.3f, %.3f, %.3f)" % tuple(red_pos))
+
+        # === Step 7: 返回结果 ===
         if handle_mask is not None and body_mask is not None:
-            handle_area = float(np.sum(handle_mask))
+            handle_area_val = float(np.sum(handle_mask))
             body_area_val = float(np.sum(body_mask))
             if handle_euler and handle_pos is not None:
                 print("[INFO] Handle detected: area_ratio=%.1f%%, "
                       "6D=(%.3f, %.3f, %.3f, A=%.1f, B=%.1f, C=%.1f)" % (
-                          handle_area / body_area_val * 100,
+                          handle_area_val / body_area_val * 100,
                           handle_pos[0], handle_pos[1], handle_pos[2],
                           handle_euler[0], handle_euler[1], handle_euler[2]))
             else:
                 print("[INFO] Handle detected: area_ratio=%.1f%%, 6D=(none)" % (
-                    handle_area / body_area_val * 100))
-            return body_mask, handle_mask, "success", bbox, handle_pos, handle_rot, handle_euler
+                    handle_area_val / body_area_val * 100))
+            return (body_mask, handle_mask, "success", bbox,
+                    handle_pos, handle_rot, handle_euler, red_mask, red_center)
 
         print("[WARN] No handle found (scanline detection failed)")
-        return body_mask, None, "none", bbox, None, None, None
+        return (body_mask, None, "none", bbox,
+                None, None, None, red_mask, red_center)
 
     # ------------------------------------------------------------
     def visualize(self, display_img, body_mask, handle_mask,
-                  stage, yolo_bbox, handle_pos, handle_rot, handle_euler):
-        """可视化检测结果 + 6D 位姿."""
+                  stage, yolo_bbox, handle_pos, handle_rot, handle_euler,
+                  red_mask=None, red_center=None):
+        """可视化检测结果 + 6D 位姿 + 红色胶带."""
         # ---- YOLO 检测框 (紫色) ----
         if yolo_bbox is not None:
             x1, y1, x2, y2 = [int(v) for v in yolo_bbox]
@@ -339,6 +398,25 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                                            cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(display_img, contours, -1, (255, 0, 0), 1)
 
+        # ---- 红色胶带绘制 (红色半透明 + 轮廓 + 中心点) ----
+        if self.USE_RED_TAPE and red_mask is not None and np.any(red_mask):
+            overlay_red = display_img.copy()
+            overlay_red[red_mask] = (0, 0, 255)
+            cv2.addWeighted(overlay_red, 0.35, display_img, 0.65, 0, display_img)
+
+            mask_r_u8 = red_mask.astype(np.uint8) * 255
+            contours_r, _ = cv2.findContours(mask_r_u8, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(display_img, contours_r, -1, (0, 0, 255), 2)
+
+        # ---- 把手中心点 (红色胶带中心替代) ----
+        if self.USE_RED_TAPE and red_center is not None:
+            cv2.circle(display_img, red_center, 6, (0, 0, 255), -1)
+            cv2.circle(display_img, red_center, 6, (255, 255, 255), 2)
+            cv2.putText(display_img, "RED TAPE CENTER",
+                        (red_center[0] + 8, red_center[1]),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
         # ---- 6D 位姿可视化: 坐标轴 + 文字 ----
         if handle_pos is not None and handle_rot is not None:
             K = np.array([[self.color_intrinsics.fx, 0, self.color_intrinsics.ppx],
@@ -354,6 +432,11 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             cv2.putText(display_img, text_e, (10, 100),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        # ---- 红色胶带 3D 信息 ----
+        if self.USE_RED_TAPE and red_center is not None and handle_pos is not None:
+            cv2.putText(display_img, "Red tape 3D: (%.3f, %.3f, %.3f)" % handle_pos,
+                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         # ---- 状态文字 ----
         if stage == "success":
@@ -387,6 +470,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
         print("跳帧策略: 每 %d 帧执行一次完整检测" % self._skip_frames)
         print("ROI 左右拓展: %.0f%%" % (self.ROI_EXPAND_RATIO * 100))
         print("输出格式: (X, Y, Z, A, B, C) 位置(m) + ZYX 欧拉角(deg)")
+        print("红色胶带辅助: %s" % ("启用" if self.USE_RED_TAPE else "关闭"))
 
         _last_color = None
 
@@ -401,8 +485,9 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
 
                 # --- 每 N 帧执行一次完整检测 ---
                 if self._frame_counter % self._skip_frames == 1:
-                    body_mask, handle_mask, stage, yolo_bbox, \
-                        handle_pos, handle_rot, handle_euler = \
+                    (body_mask, handle_mask, stage, yolo_bbox,
+                     handle_pos, handle_rot, handle_euler,
+                     red_mask, red_center) = \
                         self.detect_handle_6d(color_image, depth_frame)
 
                     # EMA 平滑 6D 位姿
@@ -418,12 +503,14 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                     self._cached_result = (
                         body_mask, handle_mask, stage, yolo_bbox,
                         handle_pos, handle_rot, handle_euler,
+                        red_mask, red_center,
                     )
                     _last_color = color_image.copy()
                 else:
                     if self._cached_result is not None:
-                        body_mask, handle_mask, stage, yolo_bbox, \
-                            handle_pos, handle_rot, handle_euler = self._cached_result
+                        (body_mask, handle_mask, stage, yolo_bbox,
+                         handle_pos, handle_rot, handle_euler,
+                         red_mask, red_center) = self._cached_result
                     else:
                         body_mask = None
                         handle_mask = None
@@ -432,9 +519,12 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                         handle_pos = None
                         handle_rot = None
                         handle_euler = None
+                        red_mask = None
+                        red_center = None
 
                 self.visualize(display_img, body_mask, handle_mask,
-                               stage, yolo_bbox, handle_pos, handle_rot, handle_euler)
+                               stage, yolo_bbox, handle_pos, handle_rot, handle_euler,
+                               red_mask=red_mask, red_center=red_center)
 
                 # 叠加深度热力图
                 if depth_colormap is not None:

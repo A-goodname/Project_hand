@@ -45,4 +45,8 @@ handle:
   skip_frames: 90              # 跳帧数 (SAM2_b 推理约 3s, 150帧≈5s 检测一次; mobile_SAM 可用 10)
   handle_center_deviation_ratio: 0.1  # 把手 x 中心偏差容差(相对把手宽度比例), 用于切掉底部误检
 
+red_tape:
+  enabled: true               # 是否启用红色胶带辅助检测 (总开关)
+  min_area: 20                 # 红色区域最小有效面积(像素)
+
 # ESTUN 配置已迁移至 estun_config.yaml（项目根目录）
