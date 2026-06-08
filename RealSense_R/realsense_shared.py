@@ -161,13 +161,13 @@ def scanline_find_handle(full_mask, bbox,
                          handle_side="right",
                          handle_center_deviation_ratio=0.3):
     """
-    用水平扫描线在 mask 上找 mask|gap|mask 模式, 分离壶身与把手.
+    水平扫描线法分离壶身与把手.
 
     原理:
-      对每一行 y, 从左到右扫描像素:
-         连续 mask 段 → non-mask 段 → mask 段 → 穿过壶身与把手的横切面.
-      两个 mask 段中面积较小者直接标记为该行的把手区域.
-      所有行把手区域的并集 = handle_mask.
+      逐行扫描, 对每行 y 在搜索范围内找出所有 mask 段.
+      取把手侧最外的一个段作为把手候选 (不跨空洞合并).
+      right 侧取最右段, left 侧取最左段.
+      然后校验面积比例和质心位置.
 
     参数:
         full_mask                     : np.ndarray (H, W), bool, SAM 生成的完整水壶 mask
@@ -176,7 +176,7 @@ def scanline_find_handle(full_mask, bbox,
         handle_max_ratio              : float, 把手面积/壶身面积 最大比例
         handle_side                   : "right" 或 "left", 把手预期侧
         handle_center_deviation_ratio : float, 把手 x 中心偏差容差(相对把手宽度比例),
-                                        从底部向上检查, 剔除偏差过大的行
+                                        从底部+顶部双向剔除偏离过大的行
 
     返回:
         (body_mask, handle_mask) 或 (None, None)
@@ -215,27 +215,19 @@ def scanline_find_handle(full_mask, bbox,
             segments.append((int(r), int(f)))
 
         if len(segments) >= 2:
-            pattern_rows += 1
-            # 取面积最大的两个段
-            segments.sort(key=lambda s: s[1] - s[0], reverse=True)
-            seg1 = segments[0]
-            seg2 = segments[1]
-
-            # seg 左, seg2 右
-            if seg1[0] > seg2[0]:
-                seg1, seg2 = seg2, seg1
-
-            area1 = seg1[1] - seg1[0]
-            area2 = seg2[1] - seg2[0]
-
-            # 小段 = 把手 (直接标记, 不投票)
-            if area1 <= area2:
-                handle_start, handle_end = seg1
+            # 取把手侧最外段:
+            #   handle_side="right" -> 取 x 最大的段 (最右侧)
+            #   handle_side="left"  -> 取 x 最小的段 (最左侧)
+            if handle_side == "right":
+                candidate = segments[-1]  # 最后一个段 = 最右侧
             else:
-                handle_start, handle_end = seg2
+                candidate = segments[0]  # 第一个段 = 最左侧
 
-            if handle_end - handle_start >= 3:
-                handle_mask[y, x1 + handle_start:x1 + handle_end + 1] = True
+            cand_start, cand_end = candidate
+            cand_len = cand_end - cand_start
+            if cand_len >= 3:
+                pattern_rows += 1
+                handle_mask[y, x1 + cand_start:x1 + cand_end + 1] = True
 
     if pattern_rows < 3:
         return None, None
@@ -282,7 +274,7 @@ def scanline_find_handle(full_mask, bbox,
         largest_label = max(areas, key=lambda x: x[1])[0]
         handle_mask = (labels == largest_label)
 
-    # ---- X 中心一致性: 从底部向上剔除偏离过大的行 ----
+    # ---- X 中心一致性: 从底部向上 + 顶部向下 双向剔除偏离行 ----
     row_centers = []  # (y, center_x, width)
     for y in range(y1, y2 + 1):
         xs_row = np.where(handle_mask[y])[0]
@@ -292,16 +284,18 @@ def scanline_find_handle(full_mask, bbox,
         cx_median = np.median([c for _, c, _ in row_centers])
         avg_width = np.mean([w for _, _, w in row_centers])
         tol = avg_width * handle_center_deviation_ratio
-        # 从底部向上找到第一个好行, 切除其下方所有行
-        rcs_sorted = sorted(row_centers, key=lambda x: -x[0])  # y 降序 (从底部开始)
-        cut_y = None
-        for y, cx, _ in rcs_sorted:
+        # 从底部向上剔除
+        for y, cx, _ in sorted(row_centers, key=lambda x: -x[0]):
             if abs(cx - cx_median) > tol:
-                cut_y = y
+                handle_mask[y:, :] = False
             else:
-                break  # 遇到第一个好行停止
-        if cut_y is not None:
-            handle_mask[cut_y:y2 + 1, :] = False
+                break
+        # 从顶部向下剔除
+        for y, cx, _ in sorted(row_centers, key=lambda x: x[0]):
+            if abs(cx - cx_median) > tol:
+                handle_mask[:y + 1, :] = False
+            else:
+                break
 
     # 重新计算 body_mask
     body_mask = full_mask.copy()
