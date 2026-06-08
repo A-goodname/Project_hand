@@ -10,7 +10,7 @@
 
 训练完成后:
     - 最佳模型: runs/train/kettle_finetune/weights/best.pt
-    - 复制: copy runs/train/kettle_finetune/weights/best.pt model/kettle_yolov8n.pt
+    - 复制: copy runs/train/kettle_finetune/weights/best.pt model/kettle_yolov8n_finetune.pt
 """
 
 import os

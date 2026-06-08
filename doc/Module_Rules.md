@@ -25,7 +25,15 @@
 - 彩色->深度像素映射通过 `rs2_project_color_pixel_to_depth_pixel` 手动计算
 - 不依赖 `rs.align` (相机硬件参数损坏, 结果不可靠)
 - YOLO 使用标准彩色模型 (非灰度模型)
-- SAM 分割脚本 `test_SAM.py` 用于把手检测
+- **瓶身检测脚本**:
+  - `test_6D.py`: 标准 6D 检测 (PCA+PointNet++ 计算物体位姿)
+  - `test_3D.py`: 纯 3D 检测 (无 6D 姿态输出)
+  - `yolo_detect.py`: 纯 YOLO bbox 检测
+  - `yolo_world_detect.py`: YOLO-World 零样本检测 (支持文本 prompt)
+- **把手检测脚本**:
+  - `test_SAM_handle.py`: RealSenseHandleDetector 类, YOLO-World + SAM + 扫描线分离把手, 输出 handle_mask + bbox
+  - `test_handle_6D.py`: RealSenseHandle6DDetector 类, 继承 HandleDetector 并扩展 6D 位姿计算 (PCA+PointNet++), 供 estun_handle_run.py / estun_handle_demo.py 使用
+  - `test_handle_3D.py`: 把手纯 3D 检测
 
 ## Orbbec 模块
 
@@ -51,16 +59,23 @@
 - 配置入口 `estun_config.yaml`, 支持多机器人配置
 - 通信协议参数在 `estun_config.yaml` 中定义 (host/port/remote_ip 等)
 - 标定结果从 `calib_data/calibration_result.yaml` 读取 (RealSense 版使用), 或从 `EpicEye/epiceye_config.yaml` 读取手眼矩阵 (EpicEye 版使用)
-- **两个主入口**:
-  - `estun_run.py`: RealSense 实时版, 整合 RealSense 6D 检测 + 位姿转换 + TCP + 灵巧手
+- **三个主入口**:
+  - `estun_run.py`: RealSense 实时版 (瓶身), 整合 RealSense 6D 检测 + 位姿转换 + TCP + 灵巧手
   - `estun_epiceye_run.py`: EpicEye 单次触发版, 单帧拍照 + 灰度 YOLO 6D 检测 + 位姿转换 + TCP + 灵巧手
-- **共享工具库 `utils_shared.py`**: 两个主入口共用以下函数:
+  - `estun_handle_run.py`: RealSense Handle 6D 抓取系统, 整合 YOLO-World + SAM + 扫描线分离把手, 独立于瓶身检测; 发送 3 点位姿 (P1 抓取点 / P2 预抓取点 / P3 目标点), 直接使用 OmniHandGesture 手势 (不依赖 utils_shared)
+- **共享工具库 `utils_shared.py`**: 两个瓶身入口共用以下函数:
   - 坐标变换: `euler_to_rotation_matrix`, `transform_pose_to_base`, `compute_gripper_offset_transform`, `compute_grasp_rotation`, `post_correct_angles`
   - 灵巧手控制: `init_hand`, `grip_object`, `release_object`, `disable_hand`
   - 物体 Y 轴统一约定: `compute_grasp_rotation` 中将物体 Y 轴通过基系 Z 分量判断符号, 统一指向竖直向下, 消除 PCA 符号歧义
+- **Handle 入口特有机制**:
+  - `HandController` 类: 封装 OmniHandGesture 的初始化/使能/手势执行/清理流程, 使用 PREGRIP/GRIPDONE/RESET 手势
+  - `PoseStabilizer` 类: 缓存最近 N 帧位姿, 当位置+角度变化均低于阈值时输出稳定均值; 内置代际计数器防止跨连接数据污染
+  - 把手偏移配置: `estun_config.yaml` 中 `handle_gripper_offset` (t_handle_offset / r_handle_offset) 独立于瓶身偏移; `handle_grasp` 段定义 P2/P3 的 pre_offset / target_offset
+  - 跳帧控制: 每 `handle.skip_frames` (来自 RealSense_R/config.yaml) 帧调用一次 detect_handle_6d, 大幅降低 GPU 负载
 - **演示脚本** (无硬件依赖):
-  - `estun_demo.py`: RealSense 版位姿转换链路验证
-  - `estun_epiceye_demo.py`: EpicEye 版位姿转换链路验证
+  - `estun_demo.py`: RealSense 版位姿转换链路验证 (瓶身)
+  - `estun_epiceye_demo.py`: EpicEye 版位姿转换链路验证 (瓶身)
+  - `estun_handle_demo.py`: RealSense Handle 版位姿转换链路验证 (把手), 剥离 TCP/灵巧手/CRP 指令循环; 支持 fine_tune_mode 反算新偏移
 
 ## 手眼标定模块
 

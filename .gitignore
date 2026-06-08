@@ -26,6 +26,9 @@ doc/*.pdf
 # 编译器文件
 .vscode/
 
+# git 提交临时信息文件
+_commit_msg*.txt
+
 # dataset
 kettle_training/labels/
 kettle_training/labels.cache

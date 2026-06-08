@@ -47,6 +47,6 @@ Cline 接受新任务后, 第一步应阅读 `README.md` 了解项目整体结�
 
 当 Cline 上下文 token 使用量达到 25.0k 时, 自动执行 condense 压缩上下文.
 
-## 6.项目环境
+## 6. 项目环境
 
-使用Conda虚拟环境, 地址为: D:\Environment\miniconda\envs\Proj\python.exe
+使用 Conda 虚拟环境, 地址为: D:\Environment\miniconda\envs\Proj\python.exe
