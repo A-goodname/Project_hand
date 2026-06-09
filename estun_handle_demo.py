@@ -6,14 +6,15 @@ estun 把手位姿转换验证 Demo (RealSense Handle 版)
 去除 TCP 服务器 / 灵巧手 / CRP 指令循环等硬件/UI 依赖.
 
 与 estun_demo.py 的差异:
-  - 检测器: RealSenseHandle6DDetector (YOLO-World + SAM + 扫描线分离把手)
+  - 检测器: RealSenseHandle6DDetector (微调 YOLOv8n + SAM + 扫描线分离把手)
   - 偏移:   使用 t_handle_offset (抓取把手), 独立于瓶身 t_offset
   - 跳帧:   每 SKIP_FRAMES 帧调用一次 detect_handle_6d
   - 微调:   fine_tune_mode=True 时, 输出目标位姿后等待手动调整, 反算新偏移
+  - fixed:   orientation_mode=fixed 时, P1/P2 姿态固定为配置值, 位置仍由检测提供
 
 输入:
-  - RealSense_R/config.yaml           : 相机 / YOLO-World / SAM 配置
-  - estun_config.yaml                 : 把手偏移 / 抓取模式
+  - RealSense_R/config.yaml           : 相机 / 微调 YOLOv8n / SAM 配置
+  - estun_config.yaml                 : 把手偏移 / 抓取模式 / fixed_abc 配置
   - calib_data/calibration_result.yaml: 手眼标定矩阵
 
 输出:
@@ -21,13 +22,21 @@ estun 把手位姿转换验证 Demo (RealSense Handle 版)
   - (fine_tune_mode) 建议的新 t_handle_offset 值
 
 流程:
-  [Step 1] 加载配置 (标定矩阵 / 夹爪偏移)
+  [Step 1] 加载配置 (标定矩阵 / 夹爪偏移 / fixed_abc)
   [Step 2] 初始化 RealSense 相机 + Handle6D 检测器
   [Step 3] 主循环: get_frames -> detect_handle_6d -> cam2ee -> 稳定化
   [Step 4] 控制台输入机械臂当前位姿 [X,Y,Z,A,B,C]
-  [Step 5] 位姿转换: 补偿 -> 对齐 -> base -> 可达性修正
+  [Step 5] 位姿转换: 补偿 -> 对齐 -> 计算 P1/P2/P3 (fixed 模式使用固定 ABC)
   [Step 6] 写入日志
   [Step 7] (可选) fine_tune_mode: 手动调整 -> 反算新偏移 -> 输出建议
+
+orientation_mode 说明:
+  - vertical: 末端 Z 轴水平指向物体, 沿瓶身轴线竖直向下 (默认)
+  - free:     仅叠加夹爪安装偏移, 不做方向修正
+  - fixed:    P1/P2 姿态使用 estun_config.yaml 中 fixed_abc 配置的固定值,
+              P3 在固定姿态上叠加 target 旋转; 位置仍由 3D 检测提供;
+              适用于 PCA 失效时提供兜底姿态
+  - horizontal: 暂未实现, 自动回退到 free
 """
 
 import os
@@ -96,11 +105,22 @@ if HANDLE_SIDE != GRASP_DIRECTION:
     print(f"[INFO] grasp_direction ({GRASP_DIRECTION}) 自动切换为 handle_side ({HANDLE_SIDE})")
     GRASP_DIRECTION = HANDLE_SIDE
 
+# ---- fixed 模式: 读取固定 ABC ----
+_fixed_abc = _cfg_estun.get("fixed_abc", {})
+FIXED_ABC_CFG = _fixed_abc.get(GRASP_DIRECTION, [])
+if len(FIXED_ABC_CFG) != 3:
+    if ORIENTATION_MODE == "fixed":
+        print(f"[WARN] {GRASP_DIRECTION} 方向未配置有效 fixed_abc, 回退到 free 模式")
+        ORIENTATION_MODE = "free"
+    FIXED_ABC = np.array([-90, 82, -98], dtype=float)  # fallback, 不被使用
+else:
+    FIXED_ABC = np.array(FIXED_ABC_CFG, dtype=float)
+
 # ---- 把手检测参数 (skip_frames 来自 RealSense_R/config.yaml) ----
 FINE_TUNE_MODE = _cfg_estun["handle_detection"]["fine_tune_mode"]
 SKIP_FRAMES = _cfg["handle"]["skip_frames"]
 
-VALID_MODES = {"vertical", "horizontal", "free"}
+VALID_MODES = {"vertical", "horizontal", "free", "fixed"}
 if ORIENTATION_MODE not in VALID_MODES:
     print(f"[WARN] 未知的 orientation_mode: {ORIENTATION_MODE}, 将使用 free 模式")
     ORIENTATION_MODE = "free"
@@ -316,6 +336,26 @@ def main():
                         handle_pos = smooth_pos
                         handle_rot = smooth_rot
                         handle_euler = rotation_matrix_to_euler_angles(handle_rot)
+
+                    # 相机系稳定化 (只有真实检测帧才 add, 避免 cache 导致的虚假稳定)
+                    assert handle_pos is not None and handle_euler is not None  # 满足外层 if 条件
+                    stabilizer.add((float(handle_pos[0]), float(handle_pos[1]), float(handle_pos[2])),
+                                   (float(handle_euler[0]), float(handle_euler[1]), float(handle_euler[2])))
+                    if stabilizer.is_stable():
+                        mean_pos_cam, mean_euler_cam = stabilizer.get_mean()
+                        if mean_pos_cam is not None and mean_euler_cam is not None:
+                            # 稳定后做一次 cam→ee
+                            mean_rot_cam = euler_to_rotation_matrix(*mean_euler_cam, order="zyx")
+                            pos_ee = T_cam2ee[:3, :3] @ mean_pos_cam + T_cam2ee[:3, 3]
+                            rot_ee = T_cam2ee[:3, :3] @ mean_rot_cam
+                            A_ee, B_ee, C_ee = rotation_matrix_to_euler_angles(rot_ee)
+                            stable_pose_ee = (pos_ee, (A_ee, B_ee, C_ee))
+                            mean_pos_ee, mean_euler_ee = stable_pose_ee
+                            print(f"\n[INFO] 位姿已稳定, 准备接收机械臂位姿", flush=True)
+                            print(f"[INFO] 稳定末端位姿: pos=({mean_pos_ee[0]:.3f},{mean_pos_ee[1]:.3f},{mean_pos_ee[2]:.3f}) "
+                                  f"euler=({mean_euler_ee[0]:.1f},{mean_euler_ee[1]:.1f},{mean_euler_ee[2]:.1f})")
+                            running = False
+                            break
                 else:
                     detector._pose_smoother.reset()
 
@@ -335,31 +375,16 @@ def main():
             detector.visualize(display_img, body_mask, handle_mask,
                                stage, yolo_bbox, handle_pos, handle_rot, handle_euler)
 
-            # ---- [Step 3d] 有有效位姿时: cam -> ee -> 稳定化 ----
-            if handle_pos is not None and handle_rot is not None:
-                # cam -> ee
+            # ---- [Step 3d] 可视化 ee 系位姿 ----
+            if handle_pos is not None and handle_rot is not None and cached_handle is not None:
                 pos_ee = T_cam2ee[:3, :3] @ np.array(handle_pos) + T_cam2ee[:3, 3]
                 rot_ee = T_cam2ee[:3, :3] @ handle_rot
                 A_ee, B_ee, C_ee = rotation_matrix_to_euler_angles(rot_ee)
 
-                # 可视化 ee 系位姿信息
-                text_pos = f"ee Pos: ({pos_ee[0]:.2f}, {pos_ee[1]:.2f}, {pos_ee[2]:.2f})"
-                cv2.putText(display_img, text_pos, (10, 140),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                text_euler = f"ee Euler: (A={A_ee:.1f}, B={B_ee:.1f}, C={C_ee:.1f})"
-                cv2.putText(display_img, text_euler, (10, 160),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-
-                # 稳定化
-                stabilizer.add(tuple(pos_ee), (A_ee, B_ee, C_ee))
-                if stabilizer.is_stable():
-                    mean_pos, mean_euler = stabilizer.get_mean()
-                    if mean_pos is not None and mean_euler is not None:
-                        stable_pose_ee = (mean_pos, mean_euler)
-                        print("\n[INFO] 位姿已稳定, 准备接收机械臂位姿", flush=True)
-                        running = False
-                        break
-
+                cv2.putText(display_img, f"ee Pos: ({pos_ee[0]:.2f}, {pos_ee[1]:.2f}, {pos_ee[2]:.2f})",
+                            (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                cv2.putText(display_img, f"ee Euler: (A={A_ee:.1f}, B={B_ee:.1f}, C={C_ee:.1f})",
+                            (10, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                 print(f"\r[Handle 6D] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f}) "
                       f"euler=({A_ee:.1f},{B_ee:.1f},{C_ee:.1f})    ", end="", flush=True)
 
@@ -439,27 +464,56 @@ def main():
     R_grasp_ee = compute_grasp_rotation(R_obj_ee, ORIENTATION_MODE, HANDLE_R_OFFSET, R_ee_base, grasp_direction=GRASP_DIRECTION)
     print(f"  [对齐]    mode={ORIENTATION_MODE}")
 
-    # === P1: 抓取点 ===
-    rot_base_1 = R_ee_base @ R_grasp_ee
-    pos_base_1 = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
-    A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
-    A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
+    if ORIENTATION_MODE == "fixed":
+        # === Fixed 模式: 用配置的固定 ABC 覆盖姿态, 位置来自检测 ===
+        # 从固定 ABC 构建基系下抓取旋转矩阵
+        R_base_fix = euler_to_rotation_matrix(*FIXED_ABC, order="zyx")
+        # 反推末端系下抓取旋转 (用于 P3 叠加 target 旋转)
+        R_grasp_ee = R_ee_base.T @ R_base_fix
 
-    # === P2: 预抓取点 (末端系下先平移再旋转) ===
-    R_pre_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_PRE_R_OFFSET, order="zyx")
-    pos_ee_pre = pos_ee_compensated + HANDLE_PRE_T_OFFSET
-    rot_base_2 = R_ee_base @ R_pre_ee
-    pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
-    A2, B2, C2 = rotation_matrix_to_euler_angles(rot_base_2)
-    A2, B2, C2 = post_correct_angles(A2, B2, C2, robot_ABC)
+        # P1: 位置来自检测 + 补偿, 姿态直接使用固定 ABC
+        pos_base_1 = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
+        A1, B1, C1 = tuple(FIXED_ABC)
 
-    # === P3: 目标点 (末端系下先平移再旋转) ===
-    R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
-    pos_ee_target = pos_ee_compensated + HANDLE_TARGET_T_OFFSET
-    rot_base_3 = R_ee_base @ R_target_ee
-    pos_base_3 = transform_pose_to_base(pos_ee_target, robot_xyz, robot_ABC)
-    A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
-    A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+        # P2: 平移 PRE_T_OFFSET, 姿态与 P1 相同
+        pos_ee_pre = pos_ee_compensated + HANDLE_PRE_T_OFFSET
+        pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
+        A2, B2, C2 = tuple(FIXED_ABC)
+
+        # P3: 在末端系下叠加 TARGET_R_OFFSET 旋转 + TARGET_T_OFFSET 平移
+        R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
+        rot_base_3 = R_ee_base @ R_target_ee
+        pos_ee_target = pos_ee_compensated + HANDLE_TARGET_T_OFFSET
+        pos_base_3 = transform_pose_to_base(pos_ee_target, robot_xyz, robot_ABC)
+        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+    else:
+        # === Vertical / Free 模式: 原有逻辑 ===
+        # P1: 抓取点 (固定 C 值到合理范围)
+        rot_base_1 = R_ee_base @ R_grasp_ee
+        pos_base_1 = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
+        A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
+        A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
+        # 右手抓取时约束 P1 C 值到合理范围 [-100, -80], 超出则赋中值 -90
+        if GRASP_DIRECTION == "right" and not (-100 <= C1 <= -80):
+            C1 = -90.0
+
+        # 从修正后 P1 反推末端系下修正抓取旋转, 供 P2/P3 继承
+        rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
+        R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
+
+        # P2: 预抓取点 (继承 P1 修正姿态, 仅平移, 类似 fixed 模式)
+        pos_ee_pre = pos_ee_compensated + HANDLE_PRE_T_OFFSET
+        pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
+        A2, B2, C2 = A1, B1, C1  # 继承 P1 修正后的姿态
+
+        # P3: 目标点 (在 P1 修正姿态上叠加 target 旋转, 类似 fixed 模式)
+        R_target_ee = R_grasp_ee_corrected @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
+        pos_ee_target = pos_ee_compensated + HANDLE_TARGET_T_OFFSET
+        rot_base_3 = R_ee_base @ R_target_ee
+        pos_base_3 = transform_pose_to_base(pos_ee_target, robot_xyz, robot_ABC)
+        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
 
     # ---- [Step 6] 输出三个位姿 ----
     msg_p1 = (
@@ -543,8 +597,8 @@ def main():
                     t_effective_new = pos_ee_current
 
                     # 反推标准偏移 (C=0 时的 t_offset)
-                    Rz = euler_to_rotation_matrix(0, 0, HANDLE_R_OFFSET[2], order="zyx")  # Rz(-90°)
-                    t_offset_new = Rz.T @ t_effective_new  # = Rz(90°) @ t_effective_new
+                    Rz = euler_to_rotation_matrix(0, 0, HANDLE_R_OFFSET[2], order="zyx")  # Rz(-90度)
+                    t_offset_new = Rz.T @ t_effective_new  # = Rz(90度) @ t_effective_new
 
                     print(f"\n[FINE TUNE] 建议新偏移:")
                     print(f"  t_effective_new = ({t_effective_new[0]:.4f}, {t_effective_new[1]:.4f}, {t_effective_new[2]:.4f})")

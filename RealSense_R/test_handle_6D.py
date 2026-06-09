@@ -308,7 +308,7 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                 handle_mask, depth_frame, anchor_depth,
                 self.depth_scale, self.depth_intrinsics, self.color_intrinsics,
                 self.color_to_depth_extrinsics, self.depth_to_color_extrinsics,
-                step=2, z_threshold=self.DEPTH_Z_THRESHOLD,
+                step=1, z_threshold=self.DEPTH_Z_THRESHOLD,
                 depth_min=self.DEPTH_MIN, depth_max=self.DEPTH_MAX
             )
             if pos is not None and rot is not None:

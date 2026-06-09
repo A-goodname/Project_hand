@@ -11,11 +11,16 @@ estun:
   calibration:
     result_path: "calib_data/calibration_result.yaml"  # 手眼标定结果(相对项目根目录)
   stabilization:
-    window: 5                    # 稳定帧数窗口
+    window: 3                    # 稳定帧数窗口
     pos_threshold: 0.01          # 位置变化阈值(米)
     angle_threshold: 5.0         # 角度变化阈值(度)
 
-  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free
+  orientation_mode: "vertical"   # 放置方向修正模式: vertical | horizontal | free | fixed
+
+  # --- fixed 模式: PCA 失效时使用固定姿态 ---
+  fixed_abc:
+    right: [-90, 82, -98]        # grasp_direction=right 时固定 ABC (deg)
+    left:  []                     # 暂未标定, 留空则在 left 时回退到 free
 
   grasp_direction: "right"       # 抓取方向: right(右手/掌心向左) | left(左手/掌心向右)
 
@@ -37,4 +42,4 @@ estun:
       r_offset: [0.0, 0.0, -45.0]       # 末端系下目标点旋转偏移 (A, B, C) 度
 
   handle_detection:
-    fine_tune_mode: false          # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移
+    fine_tune_mode: true          # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移
