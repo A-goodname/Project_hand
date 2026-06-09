@@ -13,6 +13,7 @@
 | t_tool_ee | 标准安装（C=0，大拇指向上）时，工具中心相对末端法兰的平移偏移 [0.06, -0.04, 0.07] m（经手动调优） |
 | r_tool_ee | 旋转偏移，即灵巧手绕末端Z轴的安装角度，[0, 0, -90] 度（C=-90 时掌心向下，手指水平开合） |
 | Rz(theta) | 绕Z轴旋转 theta 度的3x3旋转矩阵 |
+| grasp_direction | 抓取方向: "right" (右手/掌心向左, Y朝下) 或 "left" (左手/掌心向右, Y朝上), 影响 Y 轴符号歧义消除 |
 
 ## 第一部分：末端接触（已验证可行）
 
@@ -58,15 +59,32 @@ YOLO 6D输出的坐标约定：
 - R_obj(:,1) = Y轴（PCA主方向，瓶身轴线）
 - R_obj(:,2) = Z轴（指向相机）
 
-**物体坐标系约定 (第2步)**: 在 compute_grasp_rotation 中, 通过基系 Z 分量判断 Y 轴符号, 统一指向竖直向下, 消除 PCA 符号歧义. 此操作在 utils_shared.py 的 compute_grasp_rotation 第一步完成.
+**物体坐标系约定 (第2步)**: 在 compute_grasp_rotation 中, 通过基系 Z 分量判断 Y 轴符号, 统一指向竖直向下（或根据 grasp_direction 反向）, 消除 PCA 符号歧义. 此操作在 utils_shared.py 的 compute_grasp_rotation 第一步完成.
 
-三种模式定义，均先统一水瓶 Y 轴指向为竖直向下（通过基系 Z 分量判断符号）：
+`grasp_direction` 控制 Y 轴符号消除方向：
+- `"right"` (右手/掌心向左): Y 轴统一指向竖直向下 (基系 Z 负方向)
+- `"left"` (左手/掌心向右): Y 轴统一指向竖直向上 (基系 Z 正方向)
+
+把手抓取中 `handle_side` 自动覆盖 `grasp_direction`.
+
+四种模式定义，均先统一水瓶 Y 轴指向：
 
 | 模式 | 计算方式 | 说明 |
 |------|---------|------|
 | free | 统一 Y 向下后, R_grasp_ee = R_obj_ee @ Rz(+90) | 跟随水瓶朝向并叠加安装补偿，适用于非竖直/非水平放置。Rz(-90) 为安装偏移，取其逆 Rz(+90) 补偿。 |
 | vertical | 在基系下约束末端 Z 轴水平（XY 平面 ∥ 基系 Z 轴），构造 R_grasp_base 后反推回末端系 | 从侧面抓取竖直水瓶，抓取姿态不受物体朝向数值巧合影响 |
 | horizontal | 暂未实现 | — |
+| fixed | P1/P2 使用配置 `fixed_abc` 中固定 ABC 欧拉角, P3 在 P1 基础上叠加 `target_offset.r_offset` 旋转 | PCA 失效时使用固定姿态, 左右手独立配置 `estun_config.yaml` 中 `fixed_abc.right` / `fixed_abc.left` |
+
+#### fixed 模式详细算法：
+1. 从 `estun_config.yaml` 读取 `fixed_abc.right` 或 `fixed_abc.left` 作为抓取点的固定 ABC 欧拉角
+2. P1 (抓取点) 直接使用该固定姿态, 不依赖 PCA 输出
+3. P2 (预抓取点) 位置在 grasp ee frame 下施加 `pre_offset` 平移, 旋转同 P1
+4. P3 (目标点) 旋转在 P1 基础上叠加 `target_offset.r_offset`
+5. fixed_abc.left 暂未标定, 留空时回退到 free 模式
+
+#### vertical/free 模式 C 值约束 (把手抓取):
+P1 的 C 角固定到 `[-100, -80]` 区间, 使灵巧手手指垂直于把手方向. P2/P3 从 P1 修正姿态推导, 保持一致的 C 值约束.
 
 **vertical 模式详细算法**：
 1. 将水瓶朝向转到基系：R_obj_base = R_ee_base @ R

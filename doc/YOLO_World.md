@@ -8,7 +8,9 @@ YOLO-World 的核心优势在于：无需训练即可通过文本描述（prompt
 
 **重要**: YOLO-World 不适合零样本把手（handle）检测——实测会将纸杯误检为 "cup handle"，且检测框无法分离把手与瓶身。因此本项目分两阶段处理:
 1. **YOLO-World 水壶本体检测** (本文件, `yolo_world_detect.py`)
-2. **SAM + 几何筛选把手分割** (后续 `test_SAM_handle.py`, 详见 `doc/GRIP_Process.md`)
+2. **SAM + 几何筛选把手分割** (后续 `test_SAM_handle.py`, 详见 `doc/Handle_Process.md`)
+
+**当前状态**: 把手检测脚本 `test_SAM_handle.py` 已从 YOLO-World+跳帧模式 重构为 **微调 YOLOv8n + 手动触发模式** (commit `c3a7913`). YOLO-World 当前仅作为瓶身检测/备用方案保留.
 
 ## 模型文件
 
