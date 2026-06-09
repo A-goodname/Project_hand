@@ -238,12 +238,12 @@ class KinematicsConverter:
             0,  # J1 Thumb Ab/Ad (axis_2)
             4095,  # J2 Thumb MCP (axis_3)
             0,  # J3 Index Ab/Ad (axis_4)
-            1861,  # J4 Index PIP (axis_5)
-            1835,  # J5 Middle PIP (axis_6)
+            2420,  # J4 Index PIP (axis_5)
+            2450,  # J5 Middle PIP (axis_6)
             0,  # J6 Ring Ab/Ad (axis_7)
-            1808,  # J7 Ring PIP (axis_8)
+            2470,  # J7 Ring PIP (axis_8)
             4095,  # J8 Pinky Ab/Ad (axis_9)
-            1675,  # J9 Pinky PIP (axis_10)
+            2520,  # J9 Pinky PIP (axis_10)
         ],
     }
 

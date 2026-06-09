@@ -4,9 +4,9 @@ ESTUN 把手抓取示教器代码
 机械臂按流程运动, 通过 SocketSendStr 发送指令控制灵巧手.
 
 输入:
-  位姿 P1 (抓取点)      : 起始标记 {P1}, 结束标记 }
-  位姿 P2 (预抓取点)     : 起始标记 {P2}, 结束标记 }
-  位姿 P3 (目标点)       : 起始标记 {P3}, 结束标记 }
+  位姿 P1 (抓取点)      : 起始标记 P1:, 结束标记 )
+  位姿 P2 (预抓取点)     : 起始标记 P2:, 结束标记 ]
+  位姿 P3 (目标点)       : 起始标记 P3:, 结束标记 }
 
 单位: 位置 m, 角度 deg
 
@@ -14,23 +14,19 @@ ESTUN 把手抓取示教器代码
   MovL P2 -> PREGRIP -> MovL P1 -> GRIPDONE -> MovL P3 ->
   MovL P1 -> PREGRIP -> MovL P2 -> RESET -> Home
 
-SocketCreat(scoketflag)
+SocketCreat(socketflag)
 if scoketflag != 0
     return
 while true
     GetCurCpos P0
     scoketstr1 = CposTostr(P0)
-    SocketSendStr(scoketstr1)
+    SocketSendStr(socketstr1)
     if scoketflag == 0
-        SocketReadStr(sock, str1, 2, flag, "{P1}", "}")
-        if flag == 0
-            P1 = TranStrToCpos(str1, ",", P1, flag, "{P1}", "}", "deg", "m")
-            SocketReadStr(sock, str2, 2, flag, "{P2}", "}")
-            if flag == 0
-                P2 = TranStrToCpos(str2, ",", P2, flag, "{P2}", "}", "deg", "m")
-                SocketReadStr(sock, str3, 2, flag, "{P3}", "}")
-                if flag == 0
-                    P3 = TranStrToCpos(str3, ",", P3, flag, "{P3}", "}", "deg", "m")
+    SocketReadStr(sock, str1, 2, socketflag, "", "")
+    if socketflag == 0
+        P1 = TranStrToCpos(str1, ",", P1, flag, "(", ")", "deg", "m")
+        P2 = TranStrToCpos(str1, ",", P2, flag, "[", "]", "deg", "m")    
+        P3 = TranStrToCpos(str1, ",", P3, flag, "{", "}", "deg", "m")
         
         if flag == 0
             MovL P2                    # 到预抓取点

@@ -414,17 +414,14 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
                 A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
                 A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
 
-            # === 依次发送 3 个位姿 ===
+            # === 合并一次发送 3 个位姿 (x,y,z,A,B,C)[x,y,z,A,B,C]{x,y,z,A,B,C} ===
             try:
-                poses = [
-                    ("{P1}", pos_base_1, A1, B1, C1),
-                    ("{P2}", pos_base_2, A2, B2, C2),
-                    ("{P3}", pos_base_3, A3, B3, C3),
-                ]
-                for tag, pos, A, B, C in poses:
-                    msg = f"{tag}{pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f},{A:.2f},{B:.2f},{C:.2f}" + "}"
-                    conn.sendall(msg.encode("utf-8"))
-                    print(f"[SEND] {tag} {msg}", flush=True)
+                p1_str = f"({pos_base_1[0]:.3f},{pos_base_1[1]:.3f},{pos_base_1[2]:.3f},{A1:.2f},{B1:.2f},{C1:.2f})"
+                p2_str = f"[{pos_base_2[0]:.3f},{pos_base_2[1]:.3f},{pos_base_2[2]:.3f},{A2:.2f},{B2:.2f},{C2:.2f}]"
+                p3_str = f"{pos_base_3[0]:.3f},{pos_base_3[1]:.3f},{pos_base_3[2]:.3f},{A3:.2f},{B3:.2f},{C3:.2f}"
+                msg = p1_str + p2_str + "{" + p3_str + "}"
+                conn.sendall(msg.encode("utf-8"))
+                print(f"[SEND] 合并位姿: {msg}", flush=True)
                 target_sent = True
             except (BrokenPipeError, ConnectionResetError) as e:
                 print(f"[WARN] 发送位姿失败: {e}", flush=True)
@@ -600,6 +597,7 @@ def main():
                     detector._pose_smoother.reset()
 
                 cached_handle = (body_mask, handle_mask, stage, yolo_bbox, pos, rot, handle_euler)
+                is_detection_frame = True
             else:
                 if cached_handle is not None:
                     body_mask, handle_mask, stage, yolo_bbox, pos, rot, handle_euler = cached_handle
@@ -608,6 +606,7 @@ def main():
                     stage = "none"
                     yolo_bbox = None
                     pos = rot = handle_euler = None
+                is_detection_frame = False
 
             # ---- 可视化 ----
             if cached_handle is not None:
@@ -625,9 +624,10 @@ def main():
                             (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                 cv2.putText(display_img, f"ee Euler: (A={A_ee:.1f}, B={B_ee:.1f}, C={C_ee:.1f})",
                             (10, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                print(f"\r[Handle 6D] cam=({pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}) "
-                      f"ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f}) "
-                      f"euler=({A_ee:.1f},{B_ee:.1f},{C_ee:.1f})\n", flush=True)
+                if is_detection_frame:
+                    print(f"\r[Handle 6D] cam=({pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}) "
+                          f"ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f}) "
+                          f"euler=({A_ee:.1f},{B_ee:.1f},{C_ee:.1f})\n", flush=True)
 
             # ---- [Step 4] 显示 ----
             if depth_colormap is not None:

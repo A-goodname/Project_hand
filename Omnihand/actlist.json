@@ -44,19 +44,19 @@
         "pos_axis_8": 0,
         "pos_axis_9": 4095
     },
-    {
+     {
         "name": "PreGrip",
         "pos_axis_1": 4095,
-        "pos_axis_10": 1675,
+        "pos_axis_10": 2520,
         "pos_axis_11": 0,
         "pos_axis_12": 0,
         "pos_axis_2": 0,
         "pos_axis_3": 4095,
         "pos_axis_4": 0,
-        "pos_axis_5": 1861,
-        "pos_axis_6": 1835,
+        "pos_axis_5": 2420,
+        "pos_axis_6": 2450,
         "pos_axis_7": 0,
-        "pos_axis_8": 1808,
+        "pos_axis_8": 2470,
         "pos_axis_9": 4095
     }
 ]
