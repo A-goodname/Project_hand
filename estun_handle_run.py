@@ -374,15 +374,15 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
                 pos_base_1 = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
                 A1, B1, C1 = tuple(FIXED_ABC)
 
-                # P2: 平移 PRE_T_OFFSET, 姿态同 P1
-                pos_ee_pre = pos_ee_compensated + HANDLE_PRE_T_OFFSET
+                # P2: 平移 PRE_T_OFFSET (在固定姿态末端系下定义), 姿态同 P1
+                pos_ee_pre = pos_ee_compensated + R_grasp_ee @ HANDLE_PRE_T_OFFSET
                 pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
                 A2, B2, C2 = tuple(FIXED_ABC)
 
-                # P3: 叠加 target 旋转
+                # P3: 叠加 target 旋转 + 平移 (在固定姿态末端系下定义)
                 R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
                 rot_base_3 = R_ee_base @ R_target_ee
-                pos_ee_target = pos_ee_compensated + HANDLE_TARGET_T_OFFSET
+                pos_ee_target = pos_ee_compensated + R_grasp_ee @ HANDLE_TARGET_T_OFFSET
                 pos_base_3 = transform_pose_to_base(pos_ee_target, robot_xyz, robot_ABC)
                 A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
                 A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
@@ -401,14 +401,14 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                 R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
 
-                # P2: 预抓取点 (继承 P1 修正姿态, 仅平移, 类似 fixed 模式)
-                pos_ee_pre = pos_ee_compensated + HANDLE_PRE_T_OFFSET
+                # P2: 预抓取点 (继承 P1 修正姿态, 偏移在 P1 末端系下定义)
+                pos_ee_pre = pos_ee_compensated + R_grasp_ee_corrected @ HANDLE_PRE_T_OFFSET
                 pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
                 A2, B2, C2 = A1, B1, C1  # 继承 P1 修正后的姿态
 
-                # P3: 目标点 (在 P1 修正姿态上叠加 target 旋转, 类似 fixed 模式)
+                # P3: 目标点 (在 P1 修正姿态上叠加 target 旋转 + target 平移, 偏移在 P1 末端系下定义)
                 R_target_ee = R_grasp_ee_corrected @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
-                pos_ee_target = pos_ee_compensated + HANDLE_TARGET_T_OFFSET
+                pos_ee_target = pos_ee_compensated + R_grasp_ee_corrected @ HANDLE_TARGET_T_OFFSET
                 rot_base_3 = R_ee_base @ R_target_ee
                 pos_base_3 = transform_pose_to_base(pos_ee_target, robot_xyz, robot_ABC)
                 A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
