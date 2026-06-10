@@ -14,6 +14,8 @@
 | `estun_demo.py` | 演示脚本：RealSense版位姿转换链路验证 (瓶身, 无硬件依赖) |
 | `estun_epiceye_demo.py` | 演示脚本：EpicEye版位姿转换链路验证 (瓶身, 无硬件依赖) |
 | `estun_handle_demo.py` | 演示脚本：RealSense Handle版位姿转换链路验证 (把手, 无硬件依赖) |
+| `estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
+| `estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 |
 | `Orbbec/` | Orbbec Gemini 215微距相机模块 |
@@ -23,6 +25,7 @@
 | `doc/` | 机器人通信协议、代码模板等文档 |
 | `doc/Module_Rules.md` | 各硬件模块开发规则汇总 |
 | `doc/Handle_Process.md` | 把手检测流程及关键设计决策记录 |
+| `doc/Handle_Cup_Process.md` | **把手+水杯融合流程文档**，6 点位姿计算、共享 pipeline 架构、配置参数说明 |
 | `doc/Future_work.md` | 未来工作规划: 双相机体系 (眼在手上+眼在手外) |
 | `doc/Yolo_World.md` | YOLO-World 零样本检测配置与使用说明 |
 | `doc/Grip_Process.md` | 位姿转换流程文档（末端接触+工具偏移两阶段） |

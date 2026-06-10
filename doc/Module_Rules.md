@@ -39,6 +39,16 @@
   - `test_handle_6D.py`: RealSenseHandle6DDetector 类, 继承 HandleDetector 并扩展 6D 位姿计算 (PCA+PointNet++), 供 estun_handle_run.py / estun_handle_demo.py 使用; 含 PoseSmoother 位姿平滑 (仅检测帧执行)
   - `test_handle_3D.py`: 把手纯 3D 检测
 - **把手参数配置**: `RealSense_R/config.yaml` 中 `handle` 段配置跳帧 `skip_frames` (默认 90)、ROI 扩展 `roi_expand_ratio`、把手侧 `handle_side`、中心偏差 `handle_center_deviation_ratio` (双向剔除) 等
+- **水杯检测脚本**:
+  - `test_cup_6D.py`: RealSenseCup6DDetector 类, 继承 BaseRealSenseDetector, 使用标准 YOLOv8m COCO cup (class_id=41), 输出 6D 位姿 + 杯口位置 (rim_pos) + 倒水目标 (pour_target)
+  - 杯口方向确定依赖像素 Y 坐标 (Y 小=画面顶部=杯口), 替代旧版 Z 深度启发式
+  - 主轴方向指数平滑 (AXIS_SMOOTH_ALPHA=0.7) 抑制帧间 B 角跳动
+  - 配置见 `config.yaml` 中 `cup` 段: height/rim_radius/rim_offset_ratio, 需实际测量填写
+- **把手+水杯融合脚本**:
+  - `estun_handle_cup_demo.py`: 双检测器共享 pipeline 的位姿转换验证 Demo
+  - `estun_handle_cup_run.py`: 全流程运行版, 含 TCP 通信 + CUP 指令扩展
+  - Cup 检测器以 `start_pipeline=False` 初始化, 通过 `inject_frames()` 复用 Handle 检测器的帧
+  - 完整流程文档见 `doc/Handle_Cup_Process.md`
 
 ## Orbbec 模块
 

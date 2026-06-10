@@ -44,3 +44,21 @@ estun:
 
   handle_detection:
     fine_tune_mode: false          # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移
+
+  # --- 水杯检测与抓取 (estun_handle_cup_run / estun_handle_cup_demo 使用) ---
+  cup_grasp:
+    enabled: true                    # 总开关
+    spout_offset:                    # [必填] 壶嘴相对把手抓取点的偏移 (倒水用)
+      t_offset: [-0.06, 0.17, 0.0]     # (x, y, z) m, 需物理测量后填写
+    gripper_offset:                  # 抓水杯的夹爪偏移
+      t_cup_offset: [0.06, -0.04, 0.08]    # (x, y, z) m, 需微调
+      r_cup_offset: [0, 0, -90]             # (A, B, C) 度, 灵巧手安装角度
+    pre_offset:                      # 末端系下预抓取偏移
+      t_offset: [-0.0, 0.0, -0.05]         # (x, y, z) m
+      r_offset: [0.0, 0.0, 0.0]            # (A, B, C) 度
+    target_offset:                   # 抓杯后目标 (如端给客人)
+      t_offset: [-0.2, 0, 0]       # (x, y, z) m
+      r_offset: [0.0, 0.0, 0]          # (A, B, C) 度
+    pour_offset:                     # [新增] Handle P3 倒水前位置: 壶嘴基系 + 此偏移
+      t_offset: [0, 0, 0.05]        # (x, y, z) m, 基系 Z 轴向上 5cm (防碰撞)
+      r_offset: [0.0, 0.0, -45.0]   # (A, B, C) 度, 倒水姿态 (同 handle_grasp.target_offset.r_offset)

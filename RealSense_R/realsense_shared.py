@@ -550,7 +550,7 @@ class BaseRealSenseDetector:
     YW_DEVICE = 'cpu'
     SAM_DEVICE = 'cpu'
 
-    def __init__(self, config_dict=None):
+    def __init__(self, config_dict=None, start_pipeline=True):
         # 先执行 sys.path 插入 (确保能导入 pyrealsense2)
         self._ensure_sys_path()
 
@@ -558,8 +558,25 @@ class BaseRealSenseDetector:
         if config_dict is not None:
             self._apply_config(config_dict)
 
+        # 注入帧缓存 (用于复用 pipeline 时外部注入帧数据)
+        self._injected_frames = None
+
+        # 类型标注: 下述字段在 start_pipeline=True 时由 _init_realsense 赋值,
+        # False 时保持 None, 调用处需用 assert 守卫
+        self.pipeline: rs.pipeline = None  # type: ignore[assignment]
+        self.profile: rs.pipeline_profile = None  # type: ignore[assignment]
+        self.depth_scale: float = None  # type: ignore[assignment]
+        self.depth_intrinsics: rs.intrinsics = None  # type: ignore[assignment]
+        self.color_intrinsics: rs.intrinsics = None  # type: ignore[assignment]
+        self.color_to_depth_extrinsics: rs.extrinsics = None  # type: ignore[assignment]
+        self.depth_to_color_extrinsics: rs.extrinsics = None  # type: ignore[assignment]
+        self.colorizer: rs.colorizer = None  # type: ignore[assignment]
+
         # 初始化 RealSense 相机
-        self._init_realsense()
+        if start_pipeline:
+            self._init_realsense()
+        else:
+            print("[INFO] pipeline 跳过初始化 (start_pipeline=False)")
 
         # 初始化 YOLO/SAM 模型
         self._init_models()
@@ -778,12 +795,27 @@ class BaseRealSenseDetector:
             self.kettle_model.to(self.KETTLE_DEVICE)
 
     # ------------------------------------------------------------
+    def inject_frames(self, color_image, depth_image, depth_colormap, depth_frame):
+        """
+        注入外部帧数据 (复用 pipeline 时使用).
+        之后调用 get_frames() 将返回注入的帧而非从 pipeline 获取.
+        """
+        self._injected_frames = (color_image, depth_image, depth_colormap, depth_frame)
+
     def get_frames(self):
         """
         获取原始彩色帧和原始深度帧.
         不经过 rs.align
         返回 (color_image, depth_image, depth_colormap, depth_frame)
+
+        若存在注入帧 (_injected_frames), 优先返回注入帧.
         """
+        if self._injected_frames is not None:
+            return self._injected_frames
+
+        if self.pipeline is None:
+            return None, None, None, None
+
         frames = self.pipeline.wait_for_frames()
         color_frame = frames.get_color_frame()
         depth_frame = frames.get_depth_frame()
@@ -793,6 +825,8 @@ class BaseRealSenseDetector:
 
         color_image = np.asanyarray(color_frame.get_data())
         depth_image = np.asanyarray(depth_frame.get_data())
+        # 此时 pipeline 已启动且 colorizer 已初始化
+        assert self.colorizer is not None  # type guard for Pylance
         depth_colormap = np.asanyarray(self.colorizer.colorize(depth_frame).get_data())
 
         return color_image, depth_image, depth_colormap, depth_frame
@@ -837,6 +871,8 @@ class BaseRealSenseDetector:
         if not (self.DEPTH_MIN < d < self.DEPTH_MAX):
             return None
         # 彩色内参反投影 → 彩色坐标系
+        # 此函数仅当 pipeline 启动后调用, color_intrinsics 已由 _init_realsense 赋值
+        assert self.color_intrinsics is not None  # type guard for Pylance
         x = (cx - self.color_intrinsics.ppx) * d / self.color_intrinsics.fx
         y = (cy - self.color_intrinsics.ppy) * d / self.color_intrinsics.fy
         return x, y, d
@@ -995,5 +1031,6 @@ class BaseRealSenseDetector:
     # ------------------------------------------------------------
     def stop(self):
         """停止管道并销毁窗口."""
-        self.pipeline.stop()
+        if self.pipeline is not None:
+            self.pipeline.stop()
         cv2.destroyAllWindows()
