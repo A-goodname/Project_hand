@@ -207,9 +207,6 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
             for box, conf in zip(boxes, confs):
                 detections.append([int(box[0]), int(box[1]), int(box[2]), int(box[3]), float(conf)])
 
-        # ---- 写 YOLO 日志 ----
-        self._write_yolo_log(results)
-
         return detections
 
     # ------------------------------------------------------------
@@ -247,12 +244,17 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
 
                         A, B, C = self.rotation_matrix_to_euler_angles(smooth_rot)
 
-                        print("\nTarget 6D Pose: (X, Y, Z, A, B, C) = "
-                              "(%.3f, %.3f, %.3f, %.1f, %.1f, %.1f)" % (
-                                  smooth_pos[0], smooth_pos[1], smooth_pos[2],
-                                  A, B, C))
+                        print(("\n[6D] pos=(%.3f, %.3f, %.3f) "
+                               "euler=(A=%.1f, B=%.1f, C=%.1f)") % (
+                                   smooth_pos[0], smooth_pos[1], smooth_pos[2],
+                                   A, B, C))
+                        self._log_write("[6D]", "pos=(%.3f, %.3f, %.3f) euler=(A=%.1f, B=%.1f, C=%.1f)" % (
+                                        smooth_pos[0], smooth_pos[1], smooth_pos[2], A, B, C))
                         if point_cloud is not None:
-                            print("Point cloud points: %d" % point_cloud.shape[0])
+                            print("\n[PointCloud] points=%d" % (point_cloud.shape[0] ))
+                            self._log_write("[PointCloud]", "points=%d" % (point_cloud.shape[0] ))
+                       
+                        
 
                         x1, y1, x2, y2, conf = det
                         cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)

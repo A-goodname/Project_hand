@@ -415,6 +415,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
                     # EMA 平滑 handle_pos
                     if handle_pos is not None:
                         handle_pos = self._handle_smoother.update(handle_pos)
+                        self._log_write("[HANDLE]", "pos=(%.3f, %.3f, %.3f) m" % handle_pos)
                     else:
                         self._handle_smoother.reset()
 

@@ -131,8 +131,8 @@ class RealSenseYOLO3DDetector(BaseRealSenseDetector):
                         smoothed = self._smoother.update(position)
                         if smoothed is None:
                             continue
-                        print("\nTarget 3D position (x, y, z): "
-                              "(%.3f, %.3f, %.3f) m" % smoothed)
+                        print(("\n[3D] pos=(%.3f, %.3f, %.3f) m") % smoothed)
+                        self._log_write("[3D]", "pos=(%.3f, %.3f, %.3f) m" % smoothed)
 
                         # 绘制检测框和中心点
                         x1, y1, x2, y2 = map(int, bbox)

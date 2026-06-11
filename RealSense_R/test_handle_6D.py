@@ -495,8 +495,11 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
                         handle_pos, handle_rot = self._pose_smoother.update(
                             handle_pos, handle_rot
                         )
-                        if handle_rot is not None:
+                        if handle_pos is not None and handle_rot is not None:
                             handle_euler = rotation_matrix_to_euler_angles(handle_rot)
+                            self._log_write("[HANDLE6D]", "pos=(%.3f, %.3f, %.3f) euler=(A=%.1f, B=%.1f, C=%.1f)" % (
+                                handle_pos[0], handle_pos[1], handle_pos[2],
+                                handle_euler[0], handle_euler[1], handle_euler[2]))
                     else:
                         self._pose_smoother.reset()
 

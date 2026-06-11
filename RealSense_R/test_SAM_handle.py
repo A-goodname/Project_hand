@@ -225,6 +225,9 @@ class RealSenseHandleDetector(BaseRealSenseDetector):
                 handle_mask, color_image
             )
 
+        self._log_write("[SAM]", "stage=%s yolo_bbox=%s" % (
+            stage, str(yolo_bbox) if yolo_bbox else "None"))
+
         return {
             "body_mask": body_mask,
             "handle_mask": handle_mask,

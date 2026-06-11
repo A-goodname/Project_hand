@@ -16,6 +16,7 @@ RealSense 水壶把手检测 共享工具函数
 """
 
 import os
+import datetime
 import yaml
 import cv2
 import numpy as np
@@ -499,6 +500,7 @@ class BaseRealSenseDetector:
     USE_FINETUNED_KETTLE = False
     USE_SAM = False
     LOG_NAME = "realsense_detect.log"
+    LOG_MAX_SIZE = 5 * 1024 * 1024  # 5MB, 超过则自动清空
     TARGET_CLASS_ID = 39
 
     # ---- 分辨率默认值 ----
@@ -580,6 +582,9 @@ class BaseRealSenseDetector:
 
         # 初始化 YOLO/SAM 模型
         self._init_models()
+
+        # 初始化日志
+        self._init_logging()
 
         # 耗时统计
         self._yolo_time_ms = 0.0
@@ -903,6 +908,32 @@ class BaseRealSenseDetector:
         return cx_color, cy_color, depth_val
 
     # ------------------------------------------------------------
+    def _init_logging(self):
+        """根据 LOG_NAME 初始化日志文件 (追加模式, 超限自动轮转)."""
+        if not self.LOG_NAME:
+            return
+        log_dir = os.path.join(_project_root, "logs", "RealSense_R")
+        os.makedirs(log_dir, exist_ok=True)
+        self._log_path = os.path.join(log_dir, self.LOG_NAME)
+        if os.path.exists(self._log_path) and os.path.getsize(self._log_path) > self.LOG_MAX_SIZE:
+            os.remove(self._log_path)
+        with open(self._log_path, "a", encoding="utf-8") as f:
+            f.write("\n" + "=" * 60 + "\n")
+            f.write("  [%s] %s 启动\n" % (
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                self.__class__.__name__))
+            f.write("=" * 60 + "\n")
+
+    # ------------------------------------------------------------
+    def _log_write(self, tag, text):
+        """追加一行日志到 LOG_NAME 文件."""
+        if not hasattr(self, '_log_path'):
+            return
+        with open(self._log_path, "a", encoding="utf-8") as f:
+            f.write("[%s] %s %s\n" % (
+                datetime.datetime.now().strftime("%H:%M:%S"), tag, text))
+
+    # ------------------------------------------------------------
     def detect_targets(self, color_image):
         """
         标准 YOLO 检测.
@@ -1008,27 +1039,6 @@ class BaseRealSenseDetector:
         mask = sam_results[0].masks.data[0].cpu().numpy()
         mask = mask > 0.5
         return mask
-
-    # ------------------------------------------------------------
-    def _write_yolo_log(self, results):
-        """
-        将 YOLO verbose 日志写入文件 (覆盖式).
-        results: ultralytics 推理结果列表
-        """
-        if results and len(results) > 0 and len(results[0].boxes) > 0:
-            speed = results[0].speed
-            h, w = results[0].orig_shape
-            cls_name = results[0].names.get(int(results[0].boxes.cls[0]), '?')
-            log_lines = [
-                f"0: {w}x{h} {len(results[0].boxes)} {cls_name}, {speed.get('inference', 0):.1f}ms",
-                f"Speed: {speed.get('preprocess', 0):.1f}ms preprocess, "
-                f"{speed.get('inference', 0):.1f}ms inference, "
-                f"{speed.get('postprocess', 0):.1f}ms postprocess per image at shape (1, 3, {h}, {w})"
-            ]
-            log_path = os.path.join(_project_root, 'doc', 'yolo_detect.log')
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(log_lines) + '\n')
 
     # ------------------------------------------------------------
     def stop(self):

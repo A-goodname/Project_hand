@@ -562,15 +562,19 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
                 if position is not None and euler is not None:
                     rim_str = "(%.3f, %.3f, %.3f)" % tuple(rim_pos) if rim_pos is not None else "(None)"
                     pour_str = "(%.3f, %.3f, %.3f)" % tuple(pour_target) if pour_target is not None else "(None)"
-                    print("\r[Cup 6D] pos=(%.3f, %.3f, %.3f) "
-                          "euler=(A=%.1f, B=%.1f, C=%.1f) "
-                          "rim=%s pour=%s" % (
-                              position[0], position[1], position[2],
-                              euler[0], euler[1], euler[2],
-                              rim_str, pour_str
-                          ), end="", flush=True)
+                    print(("\n[Cup 6D] pos=(%.3f, %.3f, %.3f) "
+                           "euler=(A=%.1f, B=%.1f, C=%.1f) "
+                           "rim=%s pour=%s") % (
+                               position[0], position[1], position[2],
+                               euler[0], euler[1], euler[2],
+                               rim_str, pour_str
+                           ), end="", flush=True)
+                    self._log_write("[Cup 6D]", "pos=(%.3f, %.3f, %.3f) euler=(A=%.1f, B=%.1f, C=%.1f) rim=%s pour=%s" % (
+                        position[0], position[1], position[2],
+                        euler[0], euler[1], euler[2],
+                        rim_str, pour_str))
                 else:
-                    print("\r[Cup 6D] no detection", end="", flush=True)
+                    print(("\n[Cup 6D] no detection" + " " * 30), end="", flush=True)
 
                 # ---- 按键处理 ----
                 key = cv2.waitKey(1) & 0xFF
