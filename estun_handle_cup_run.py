@@ -8,8 +8,11 @@ ESTUN RealSense Handle + Cup 6D 融合抓取系统
 与 estun_handle_run.py 的差异:
   - 双检测器: RealSenseHandle6DDetector + RealSenseCup6DDetector (共享 pipeline)
   - 两阶段: Phase 1 (Handle 抓取+倒水) + Phase 2 (Cup 抓取+递杯)
-  - TCP Phase C 添加 CUP 命令: 回复 cup 三个位姿
+  - TCP Phase C 指令: Handle 阶段用 PREGRIP/GRIPDONE/RESET, Cup 阶段用 RELEASE/GRIP
   - P3_pour 倒水位置: 基于 cup pour_target + spout_offset 反算
+  - 手势:   使用 utils_shared 函数式接口
+        把手阶段: hand_pre_grip/hand_grip_done/hand_reset
+        水杯阶段: release_object(PAPER)/grip_object(GRIP)
 
 使用说明:
   1. 连接 RealSense 相机
@@ -67,12 +70,13 @@ from utils_shared import (
     euler_to_rotation_matrix, transform_pose_to_base,
     compute_gripper_offset_transform, compute_grasp_rotation,
     post_correct_angles,
+    init_hand, hand_pre_grip, hand_grip_done, hand_reset, disable_hand,
+    grip_object, release_object,
 )
-from Omnihand.omnihand_gesture import OmniHandGesture, Gesture
 
 # ---- 全局变量 ----
 stop_event = threading.Event()
-_hand_controller = None  # HandController 实例, 在 main 中初始化, 在 handle_client 中使用
+_hand_available = False  # 灵巧手是否可用, 在 main 中初始化
 
 # ---- 加载 RealSense / YOLO 配置 ----
 _cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
@@ -146,59 +150,6 @@ if ORIENTATION_MODE not in VALID_MODES:
 elif ORIENTATION_MODE == "horizontal":
     print("[WARN] horizontal 模式暂未实现, 将使用 free 模式")
     ORIENTATION_MODE = "free"
-
-
-class HandController:
-    """
-    灵巧手控制器封装
-    封装 OmniHandGesture 的初始化、手势执行、清理流程
-    """
-
-    def __init__(self, port: str):
-        self._hand = None
-        self._port = port
-
-    def initialize(self) -> bool:
-        """初始化并使能灵巧手, 执行 RESET"""
-        try:
-            self._hand = OmniHandGesture(port=self._port)
-            self._hand.open()
-            self._hand.enable()
-            self._hand.do_gesture(Gesture.RESET, delay=0.3)
-            print("[INFO] 灵巧手已初始化并启用 (RESET)")
-            return True
-        except Exception as e:
-            print(f"[WARN] 灵巧手初始化失败: {e}")
-            print("[WARN] 灵巧手将不可用, 继续运行...")
-            self._hand = None
-            return False
-
-    def pre_grip(self):
-        if self._hand is not None:
-            self._hand.do_gesture(Gesture.PREGRIP, delay=0.5)
-
-    def grip_done(self):
-        if self._hand is not None:
-            self._hand.do_gesture(Gesture.GRIPDONE, delay=0.5)
-
-    def reset(self):
-        if self._hand is not None:
-            self._hand.do_gesture(Gesture.RESET, delay=0.3)
-
-    def is_available(self) -> bool:
-        return self._hand is not None
-
-    def shutdown(self):
-        if self._hand is not None:
-            try:
-                self._hand.do_gesture(Gesture.RESET, delay=0.3)
-                self._hand.disable()
-                self._hand.close()
-                print("[INFO] 灵巧手已关闭")
-            except Exception as e:
-                print(f"[WARN] 灵巧手关闭失败: {e}")
-            self._hand = None
-
 
 def load_cam2ee(yaml_path):
     """从标定结果加载 相机 -> 末端法兰 变换矩阵 (4x4 齐次矩阵)"""
@@ -315,7 +266,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
         T_cam2ee     : np.ndarray, 4x4 相机 -> 末端法兰变换矩阵
         cup_detector : RealSenseCup6DDetector (共享 pipeline, 注入帧)
     """
-    global _hand_controller
+    global _hand_available
     print(f"[INFO] 客户端已连接: {addr}")
 
     # ---- 预计算工具偏移 ----
@@ -491,18 +442,18 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
             print(f"[RECV] {cmd}", flush=True)
 
             if cmd == "PREGRIP":
-                if _hand_controller is not None and _hand_controller.is_available():
-                    _hand_controller.pre_grip()
+                if _hand_available:
+                    hand_pre_grip()
                 print("[INFO] 灵巧手: PREGRIP", flush=True)
 
             elif cmd == "GRIPDONE":
-                if _hand_controller is not None and _hand_controller.is_available():
-                    _hand_controller.grip_done()
+                if _hand_available:
+                    hand_grip_done()
                 print("[INFO] 灵巧手: GRIPDONE", flush=True)
 
             elif cmd == "RESET":
-                if _hand_controller is not None and _hand_controller.is_available():
-                    _hand_controller.reset()
+                if _hand_available:
+                    hand_reset()
                 print("[INFO] 灵巧手: RESET", flush=True)
 
             elif cmd == "CUP":
@@ -545,7 +496,7 @@ def handle_client(conn, addr, detector, T_cam2ee, cup_detector):
 # =============================================================
 
 def main():
-    global _hand_controller
+    global _hand_available
     print("=" * 60)
     print("  ESTUN RealSense Handle + Cup 6D 融合抓取系统")
     print("  模型: Handle=微调YOLOv8n+SAM | Cup=YOLOv8m COCO")
@@ -557,11 +508,11 @@ def main():
     if np.allclose(T_cam2ee, np.eye(4)):
         print("[INFO] 使用单位矩阵 (直接发送相机坐标系位姿)")
 
-    # ---- [Init 2] 初始化灵巧手 ----
+    # ---- [Init 2] 初始化灵巧手 (使用 utils_shared 函数式接口) ----
     print(f"\n[INFO] 正在初始化灵巧手...")
-    _hand_controller = HandController(port=HAND_PORT)
-    if not _hand_controller.initialize():
-        print("[WARN] 灵巧手将不可用, 继续运行...")
+    init_hand(hand_port=HAND_PORT, initial_gesture="RESET")
+    _hand_available = True
+    print("[INFO] 灵巧手已准备就绪")
 
     # ---- [Init 3] 初始化 Handle 6D 检测器 (启动 pipeline) ----
     print(f"\n[INFO] 正在初始化 RealSense Handle 6D 检测器...")
@@ -569,9 +520,9 @@ def main():
         detector = RealSenseHandle6DDetector(config_dict=_cfg)
     except Exception as e:
         print(f"[FATAL] RealSense 初始化失败: {e}")
-        if _hand_controller is not None and _hand_controller.is_available():
+        if _hand_available:
             try:
-                _hand_controller.shutdown()
+                disable_hand()
             except Exception:
                 pass
         return
@@ -586,9 +537,9 @@ def main():
             detector.pipeline.stop()
         except Exception:
             pass
-        if _hand_controller is not None and _hand_controller.is_available():
+        if _hand_available:
             try:
-                _hand_controller.shutdown()
+                disable_hand()
             except Exception:
                 pass
         return
@@ -780,8 +731,11 @@ def main():
             print("[INFO] RealSense 管道已停止")
         except Exception as e:
             print(f"[WARN] 停止管道失败: {e}")
-        if _hand_controller is not None:
-            _hand_controller.shutdown()
+        if _hand_available:
+            try:
+                disable_hand()
+            except Exception:
+                pass
         print("[INFO] 程序已退出", flush=True)
 
 

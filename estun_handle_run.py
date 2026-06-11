@@ -10,7 +10,7 @@ ESTUN RealSense Handle 6D 抓取系统
   - 偏移:   使用 t_handle_offset (抓取把手), 独立于瓶身 t_offset
   - 跳帧:   每 SKIP_FRAMES 帧调用一次 detect_handle_6d
   - 3点位姿: 同时发送 P1(抓取点)/P2(预抓取点)/P3(目标点)
-  - 手势:   直接使用 OmniHandGesture(PREGRIP/GRIPDONE/RESET), 不依赖 utils_shared
+  - 手势:   使用 utils_shared 函数式接口 (hand_pre_grip/hand_grip_done/hand_reset)
 
 使用说明:
   1. 连接 RealSense 相机
@@ -66,12 +66,12 @@ from utils_shared import (
     euler_to_rotation_matrix, transform_pose_to_base,
     compute_gripper_offset_transform, compute_grasp_rotation,
     post_correct_angles,
+    init_hand, hand_pre_grip, hand_grip_done, hand_reset, disable_hand,
 )
-from Omnihand.omnihand_gesture import OmniHandGesture, Gesture
 
 # ---- 全局变量 ----
 stop_event = threading.Event()
-_hand_controller = None  # HandController 实例, 在 main 中初始化, 在 handle_client 中使用
+_hand_available = False  # 灵巧手是否可用, 在 main 中初始化
 
 # ---- 加载 RealSense / YOLO 配置 ----
 _cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
@@ -138,64 +138,6 @@ if ORIENTATION_MODE not in VALID_MODES:
 elif ORIENTATION_MODE == "horizontal":
     print("[WARN] horizontal 模式暂未实现, 将使用 free 模式")
     ORIENTATION_MODE = "free"
-
-
-class HandController:
-    """
-    灵巧手控制器封装
-    封装 OmniHandGesture 的初始化、手势执行、清理流程
-    """
-
-    def __init__(self, port: str):
-        self._hand = None
-        self._port = port
-
-    def initialize(self) -> bool:
-        """初始化并使能灵巧手, 执行 RESET"""
-        try:
-            self._hand = OmniHandGesture(port=self._port)
-            self._hand.open()
-            self._hand.enable()
-            self._hand.do_gesture(Gesture.RESET, delay=0.3)
-            print("[INFO] 灵巧手已初始化并启用 (RESET)")
-            return True
-        except Exception as e:
-            print(f"[WARN] 灵巧手初始化失败: {e}")
-            print("[WARN] 灵巧手将不可用, 继续运行...")
-            self._hand = None
-            return False
-
-    def pre_grip(self):
-        """执行 PREGRIP 手势"""
-        if self._hand is not None:
-            self._hand.do_gesture(Gesture.PREGRIP, delay=0.5)
-
-    def grip_done(self):
-        """执行 GRIPDONE 手势"""
-        if self._hand is not None:
-            self._hand.do_gesture(Gesture.GRIPDONE, delay=0.5)
-
-    def reset(self):
-        """执行 RESET 手势"""
-        if self._hand is not None:
-            self._hand.do_gesture(Gesture.RESET, delay=0.3)
-
-    def is_available(self) -> bool:
-        """灵巧手是否可用"""
-        return self._hand is not None
-
-    def shutdown(self):
-        """清理资源: RESET -> disable -> close"""
-        if self._hand is not None:
-            try:
-                self._hand.do_gesture(Gesture.RESET, delay=0.3)
-                self._hand.disable()
-                self._hand.close()
-                print("[INFO] 灵巧手已关闭")
-            except Exception as e:
-                print(f"[WARN] 灵巧手关闭失败: {e}")
-            self._hand = None
-
 
 def load_cam2ee(yaml_path):
     """
@@ -321,7 +263,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
         detector : RealSenseHandle6DDetector, 检测器实例
         T_cam2ee : np.ndarray, 4x4 相机 -> 末端法兰变换矩阵
     """
-    global _hand_controller
+    global _hand_available
     print(f"[INFO] 客户端已连接: {addr}")
 
     # ---- [Phase A] 接收机器人初始末端位姿 (5s 超时) ----
@@ -450,18 +392,18 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
             print(f"[RECV] {cmd}", flush=True)
 
             if cmd == "PREGRIP":
-                if _hand_controller is not None and _hand_controller.is_available():
-                    _hand_controller.pre_grip()
+                if _hand_available:
+                    hand_pre_grip()
                 print("[INFO] 灵巧手: PREGRIP", flush=True)
 
             elif cmd == "GRIPDONE":
-                if _hand_controller is not None and _hand_controller.is_available():
-                    _hand_controller.grip_done()
+                if _hand_available:
+                    hand_grip_done()
                 print("[INFO] 灵巧手: GRIPDONE", flush=True)
 
             elif cmd == "RESET":
-                if _hand_controller is not None and _hand_controller.is_available():
-                    _hand_controller.reset()
+                if _hand_available:
+                    hand_reset()
                 print("[INFO] 灵巧手: RESET", flush=True)
 
             else:
@@ -492,7 +434,7 @@ def handle_client(conn, addr, detector, T_cam2ee):
 # =============================================================
 
 def main():
-    global _hand_controller
+    global _hand_available
     print("=" * 60)
     print("  ESTUN RealSense Handle 6D 抓取系统")
     print("  模型: 微调 YOLOv8n + SAM + Handle 扫描线")
@@ -506,11 +448,11 @@ def main():
         print("[INFO] 标定矩阵已加载, 位姿将转换到末端坐标系")
         print("[INFO] 后续还将叠加 handle_gripper_offset 得到夹爪 TCP 位姿")
 
-    # ---- [Init 2] 初始化灵巧手 (使用 HandController 封装) ----
+    # ---- [Init 2] 初始化灵巧手 (使用 utils_shared 函数式接口) ----
     print(f"\n[INFO] 正在初始化灵巧手...")
-    _hand_controller = HandController(port=HAND_PORT)
-    if not _hand_controller.initialize():
-        print("[WARN] 灵巧手将不可用, 继续运行...")
+    init_hand(hand_port=HAND_PORT, initial_gesture="RESET")
+    _hand_available = True
+    print("[INFO] 灵巧手已准备就绪")
 
     # ---- [Init 3] 初始化 Handle 6D 检测器 ----
     print(f"\n[INFO] 正在初始化 RealSense Handle 6D 检测器...")
@@ -519,9 +461,9 @@ def main():
     except Exception as e:
         print(f"[FATAL] RealSense 初始化失败: {e}")
         print("[FATAL] 请确认已连接 RealSense D400 系列相机")
-        if _hand_controller is not None and _hand_controller.is_available():
+        if _hand_available:
             try:
-                _hand_controller.shutdown()
+                disable_hand()
             except Exception:
                 pass
         return
@@ -674,8 +616,11 @@ def main():
         except Exception as e:
             print(f"[WARN] 停止管道失败: {e}")
         # 关闭灵巧手
-        if _hand_controller is not None:
-            _hand_controller.shutdown()
+        if _hand_available:
+            try:
+                disable_hand()
+            except Exception:
+                pass
         print("[INFO] 程序已退出", flush=True)
 
 

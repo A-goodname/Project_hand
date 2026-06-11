@@ -16,6 +16,7 @@ ESTUN 共享工具库
         compute_grasp_rotation,
         post_correct_angles,
         init_hand, grip_object, release_object, disable_hand,
+        hand_pre_grip, hand_grip_done, hand_reset,
     )
 """
 
@@ -236,12 +237,14 @@ except ImportError:
     OMNIHAND_AVAILABLE = False
 
 
-def init_hand(hand_port=None):
+def init_hand(hand_port=None, initial_gesture="PAPER"):
     """
     初始化并启用灵巧手
 
     参数:
-        hand_port : str or None, 串口号
+        hand_port        : str or None, 串口号
+        initial_gesture  : str, 初始化后执行的手势,
+                           "PAPER"(水瓶/水杯默认, 手掌张开) | "RESET"(把手, 全闭合)
     """
     global _hand
     if not OMNIHAND_AVAILABLE:
@@ -252,8 +255,9 @@ def init_hand(hand_port=None):
         _hand = OmniHandGesture(port=hand_port or "")
         _hand.open()
         _hand.enable()
-        _hand.do_gesture(Gesture.PAPER, delay=0.3)
-        print("[INFO] 灵巧手已初始化并启用")
+        gesture = Gesture.PAPER if initial_gesture == "PAPER" else Gesture.RESET
+        _hand.do_gesture(gesture, delay=0.3)
+        print(f"[INFO] 灵巧手已初始化并启用 ({initial_gesture})")
     except Exception as e:
         print(f"[WARN] 灵巧手初始化失败: {e}")
         print("[WARN] 将模拟灵巧手操作")
@@ -289,6 +293,45 @@ def release_object():
         print("[HAND] 释放完成")
     except Exception as e:
         print(f"[WARN] 释放失败: {e}")
+
+
+def hand_pre_grip():
+    """执行半闭合预抓取手势 (PREGRIP), 用于把手接近阶段"""
+    if _hand is None:
+        print("[HAND] 模拟 PREGRIP")
+        time.sleep(0.5)
+        return
+    try:
+        _hand.do_gesture(Gesture.PREGRIP, delay=0.5)
+        print("[HAND] PREGRIP 完成")
+    except Exception as e:
+        print(f"[WARN] PREGRIP 失败: {e}")
+
+
+def hand_grip_done():
+    """执行完全夹紧手势 (GRIPDONE), 用于把手夹持阶段"""
+    if _hand is None:
+        print("[HAND] 模拟 GRIPDONE")
+        time.sleep(0.5)
+        return
+    try:
+        _hand.do_gesture(Gesture.GRIPDONE, delay=0.5)
+        print("[HAND] GRIPDONE 完成")
+    except Exception as e:
+        print(f"[WARN] GRIPDONE 失败: {e}")
+
+
+def hand_reset():
+    """执行重置手势 (RESET), 不关闭串口, 仅复位灵巧手"""
+    if _hand is None:
+        print("[HAND] 模拟 RESET")
+        time.sleep(0.3)
+        return
+    try:
+        _hand.do_gesture(Gesture.RESET, delay=0.3)
+        print("[HAND] RESET 完成")
+    except Exception as e:
+        print(f"[WARN] RESET 失败: {e}")
 
 
 def disable_hand():

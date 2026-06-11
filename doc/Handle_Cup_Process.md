@@ -1,6 +1,6 @@
 # 水杯抓取与把手抓取融合 (Handle + Cup)
 
-## 上次更新: 2026-06-10 (v2: 杯口方向修复 + 主轴平滑)
+## 上次更新: 2026-06-11 (v3: 手势函数式重构)
 
 ---
 
@@ -104,8 +104,8 @@ rot_base_3 = R_ee_base @ R_pour_ee
 
 ```
 (发送 'CUP' 标记)
-MoveP2(cup) → PREGRIP → MoveP1(cup) → GRIPDONE → MoveP3(cup) → wait 1s(等人取)
-→ MoveP1(cup) → PREGRIP → MoveP2(cup) → RESET → MoveHome
+MoveP2(cup) → RELEASE(PAPER) → MoveP1(cup) → GRIP → MoveP3(cup) → wait 1s(等人取)
+→ MoveP1(cup) → RELEASE(PAPER) → MoveP2(cup) → RESET → MoveHome
 ```
 
 ### 4.2 Cup P1 (抓取点)
@@ -249,7 +249,23 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 
 Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 Cup 检测), 避免两阶段检测的帧不一致问题.
 
-### 8.4 当前状态
+### 8.4 灵巧手手势映射 (函数式重构)
+
+2026-06-11 将 `HandController` 类 (位于 `estun_handle_run.py` / `estun_handle_cup_run.py` 中) 重构为 `utils_shared.py` 的函数式接口, 统一三套抓取流程:
+
+| 函数 | 手势 | 适用场景 |
+|------|------|----------|
+| `init_hand(initial_gesture="PAPER")` | PAPER/RESET | 初始化, 水瓶默认 PAPER, 把手/融合默认 RESET |
+| `hand_pre_grip()` | PREGRIP | 把手半闭合接近阶段 |
+| `hand_grip_done()` | GRIPDONE | 把手完全夹紧 |
+| `hand_reset()` | RESET | 复位灵巧手 (不关闭串口) |
+| `grip_object()` | GRIP | 水瓶/水杯抓取 |
+| `release_object()` | PAPER | 水瓶/水杯释放/预抓取张开 |
+| `disable_hand()` | RESET→disable→close | 关闭灵巧手 |
+
+移除 `estun_handle_run.py` 和 `estun_handle_cup_run.py` 中的 `HandController` 类及 `OmniHandGesture` 直接依赖, 统一从 `utils_shared` 导入.
+
+### 8.5 当前状态
 
 - `test_cup_6D.py`: 已验证通过, Y 轴方向固定, 杯口/倒水位置稳定
 - `estun_handle_cup_demo.py / estun_handle_cup_run.py`: 已创建但未经实际相机运行验证, 下次开机后需测试双检测器同步及 6 点位姿输出
