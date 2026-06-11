@@ -634,6 +634,8 @@ class BaseRealSenseDetector:
                 self.MODEL_NAME = os.path.join(_project_root, _model["name"])
             if "conf_threshold" in _model:
                 self.CONF_THRESHOLD = _model["conf_threshold"]
+            if "target_class_id" in _model:
+                self.TARGET_CLASS_ID = _model["target_class_id"]
             if "device" in _model:
                 pref = _model["device"]
                 self.DEVICE = 'cuda:0' if (pref == "gpu" and torch.cuda.is_available()) else 'cpu'

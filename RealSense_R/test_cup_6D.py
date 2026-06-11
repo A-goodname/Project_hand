@@ -167,13 +167,13 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
     # ---- 覆盖基类类属性 ----
     USE_YOLO_WORLD = False
     USE_SAM = False
-    TARGET_CLASS_ID = 41          # COCO cup
     LOG_NAME = "test_cup_6D.log"
 
     # ---- 水杯参数 (从 config.yaml 加载) ----
     CUP_HEIGHT = 0.12             # 杯高先验 (m), 需用户填写
     RIM_RADIUS = 0.04             # 杯口半径先验 (m), 需用户填写
     RIM_OFFSET_RATIO = 0.6        # 倒水偏移比例 (0~1)
+    CUP_MODEL_NAME = ""           # cup 专用模型, 为空时使用基类 MODEL_NAME
 
     def __init__(self, config_dict=None, start_pipeline=True):
         super().__init__(config_dict=config_dict, start_pipeline=start_pipeline)
@@ -195,18 +195,28 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         super()._apply_config(cfg)
 
         _cup = cfg.get("cup", {})
+        if not _cup.get("enabled", True):
+            return  # cup 未启用, 保持基类配置
+
+        # --- 模型名 (不为空时独立加载, 与基类 MODEL_NAME 完全解耦) ---
+        if "model_name" in _cup and _cup["model_name"]:
+            self.CUP_MODEL_NAME = os.path.join(_project_root, _cup["model_name"])
+            self.MODEL_NAME = self.CUP_MODEL_NAME
+        # --- 目标类 ID / 置信度 / 设备 (覆盖基类配置) ---
+        if "target_class_id" in _cup:
+            self.TARGET_CLASS_ID = _cup["target_class_id"]
+        if "conf_threshold" in _cup:
+            self.CONF_THRESHOLD = _cup["conf_threshold"]
+        if "device" in _cup:
+            pref = _cup["device"]
+            self.DEVICE = 'cuda:0' if (pref == "gpu" and torch.cuda.is_available()) else 'cpu'
+        # --- 水杯专属几何参数 ---
         if "height" in _cup:
             self.CUP_HEIGHT = _cup["height"]
         if "rim_radius" in _cup:
             self.RIM_RADIUS = _cup["rim_radius"]
         if "rim_offset_ratio" in _cup:
             self.RIM_OFFSET_RATIO = _cup["rim_offset_ratio"]
-        if "device" in _cup:
-            pref = _cup["device"]
-            # 水杯检测复用主 YOLO 模型, 设备由 model.device 控制
-            # cup.device 仅做参考打印
-            print("[INFO] 水杯检测配置: 杯高=%.2fm, 杯口半径=%.2fm, 偏移比例=%.1f" % (
-                self.CUP_HEIGHT, self.RIM_RADIUS, self.RIM_OFFSET_RATIO))
 
     # ------------------------------------------------------------
     def compute_cup_6d_pose(self, color_image, depth_frame):

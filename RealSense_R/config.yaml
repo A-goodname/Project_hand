@@ -51,11 +51,12 @@ red_tape:
 
 # ---- 水杯检测配置 (test_cup_6D.py 使用) ----
 cup:
+  model_name: "./model/yolov8m"  # [可选] cup 专用模型路径 (相对项目根目录, 不含 .pt 后缀), 为空时使用 model.name
   enabled: true                  # 是否启用水杯检测
+  target_class_id: 41            # COCO类别ID (41=cup)
   conf_threshold: 0.5            # YOLO检测置信度阈值
-  class_id: 41                   # COCO类别ID (41=cup)
-  height: 0.100                    # [用户必填] 杯高先验 (米), 请用尺测量实际水杯高度
-  rim_radius: 0.035                # [用户必填] 杯口半径先验 (米), 请用尺测量实际杯口半径
+  height: 0.100                  # [用户必填] 杯高先验 (米), 请用尺测量实际水杯高度
+  rim_radius: 0.035              # [用户必填] 杯口半径先验 (米), 请用尺测量实际杯口半径
   rim_offset_ratio: 0.6          # [可调] 倒水时壶嘴偏移杯口中心的比例 (0~1)
   device: gpu                    # 运行设备: gpu(优先) | cpu(强制)
 
