@@ -1,0 +1,21 @@
+# Python >=3.11, <3.12
+
+# ============================================================
+# 前置步骤 1: 安装 PyTorch (CUDA 12.6)
+#   请先执行:
+#     pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# ============================================================
+
+# ============================================================
+# 前置步骤 2: 安装 EpicEye SDK
+#   参考 epiceyesdk_samples_project/python/README.md,
+#   打包 whl 并安装
+# ============================================================
+
+numpy==2.4.4
+opencv-python==4.13.0.92
+PyYAML==6.0.3
+pyserial==3.5
+pyrealsense2==2.56.5
+pyorbbecsdk2==2.0.18
+ultralytics==8.4.48

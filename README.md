@@ -2,6 +2,34 @@
 
 通过相机检测抓取目标，计算6D位姿，经手眼标定和工具偏移补偿后，通过TCP发送给ESTUN机器人，控制灵巧手完成抓取。
 
+## 环境配置
+
+### Python 版本
+
+- Python >=3.11, <3.12
+
+### 前置步骤 (手动安装)
+
+依赖分三部分安装，请按顺序执行：
+
+**步骤 1: 安装 PyTorch (CUDA 12.6)**
+
+```bash
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+```
+
+**步骤 2: 安装 EpicEye SDK**
+
+参考 `epiceyesdk_samples_project/python/README.md`，打包 whl 并安装。
+
+**步骤 3: 安装其余依赖**
+
+```bash
+pip install -r requirements.txt
+```
+
+`requirements.txt` 包含所有固定版本的 pip 依赖（numpy, opencv-python, ultralytics, pyrealsense2, pyorbbecsdk2 等）。
+
 ## 目录结构
 
 | 路径 | 说明 |
