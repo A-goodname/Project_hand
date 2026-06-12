@@ -175,17 +175,13 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
                     continue
 
                 # ---- YOLO 检测 ----
-                detections = self.detect_targets(color_image)
-
-                # 只保留置信度最高的一个检测
-                if detections:
-                    detections = [max(detections, key=lambda d: d[4])]
+                det = self._detect_targets(color_image)
 
                 # ---- 6D 位姿计算与可视化 ----
                 display_img = color_image.copy()
 
-                for det in detections:
-                    position, rotation, point_cloud = self.compute_6d_pose(det, aligned_depth_frame)
+                if det is not None:
+                    position, rotation, point_cloud = self.compute_6d_pose(det["bbox"], aligned_depth_frame)
 
                     if position is not None and rotation is not None:
                         smooth_pos, smooth_rot = self._pose_smoother.update(position, rotation)
@@ -204,7 +200,7 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
                             print("\n[PointCloud] points=%d" % (point_cloud.shape[0]))
                             self._log_write("[PointCloud]", "points=%d" % (point_cloud.shape[0]))
 
-                        x1, y1, x2, y2, _, _ = det
+                        x1, y1, x2, y2 = det["bbox"]
                         cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                         # 使用彩色内参投影 (彩色坐标系 -> 彩色图)

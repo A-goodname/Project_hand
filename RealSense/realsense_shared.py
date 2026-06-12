@@ -161,7 +161,229 @@ def visualize_pose(image, center_3d, rot, K, scale=0.08):
 
 
 # ============================================================
-#  4. 检测器基类 BaseRealSenseDetector
+#  4. 水平扫描线法分离把手
+# ============================================================
+
+def scanline_find_handle(full_mask, bbox,
+                         handle_min_ratio=0.05, handle_max_ratio=0.55,
+                         handle_side="right",
+                         handle_center_deviation_ratio=0.3):
+    """
+    水平扫描线法分离壶身与把手.
+
+    原理:
+        逐行扫描, 对每行 y 在搜索范围内找出所有 mask 段.
+        取把手侧最外的一个段作为把手候选 (不跨空洞合并).
+        right 侧取最右段, left 侧取最左段.
+        然后校验面积比例和质心位置.
+
+    参数:
+        full_mask                     : np.ndarray (H, W), bool, SAM 生成的完整水壶 mask
+        bbox                          : [x1, y1, x2, y2], YOLO 检测框
+        handle_min_ratio              : float, 把手面积/壶身面积 最小比例
+        handle_max_ratio              : float, 把手面积/壶身面积 最大比例
+        handle_side                   : "right" 或 "left", 把手预期侧
+        handle_center_deviation_ratio : float, 把手 x 中心偏差容差(相对把手宽度比例),
+                                         从底部+顶部双向剔除偏离过大的行
+
+    返回:
+        (body_mask, handle_mask) 或 (None, None)
+    """
+    h, w = full_mask.shape
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    # 限制搜索范围到 bbox 内
+    y1 = max(0, min(y1, h - 1))
+    y2 = max(0, min(y2, h - 1))
+    x1 = max(0, min(x1, w - 1))
+    x2 = max(0, min(x2, w - 1))
+
+    if y2 - y1 < 5 or x2 - x1 < 5:
+        return None, None
+
+    # ---- 逐行扫描: 有 gap 模式的行, 小段直接标记为把手 ----
+    handle_mask = np.zeros((h, w), dtype=bool)
+    pattern_rows = 0
+
+    for y in range(y1, y2 + 1):
+        row = full_mask[y, x1:x2 + 1]
+        if not np.any(row):
+            continue
+
+        diffs = np.diff(row.astype(np.int8))
+        rising = np.where(diffs == 1)[0] + 1
+        falling = np.where(diffs == -1)[0] + 1
+
+        if row[0]:
+            rising = np.concatenate([[0], rising])
+        if row[-1]:
+            falling = np.concatenate([falling, [len(row) - 1]])
+
+        segments = []
+        for r, f in zip(rising, falling):
+            segments.append((int(r), int(f)))
+
+        if len(segments) >= 2:
+            # 取把手侧最外段:
+            #   handle_side="right" -> 取 x 最大的段 (最右侧)
+            #   handle_side="left"  -> 取 x 最小的段 (最左侧)
+            if handle_side == "right":
+                candidate = segments[-1]  # 最后一个段 = 最右侧
+            else:
+                candidate = segments[0]  # 第一个段 = 最左侧
+
+            cand_start, cand_end = candidate
+            cand_len = cand_end - cand_start
+            if cand_len >= 3:
+                pattern_rows += 1
+                handle_mask[y, x1 + cand_start:x1 + cand_end + 1] = True
+
+    if pattern_rows < 3:
+        return None, None
+
+    if np.sum(handle_mask) < 20:
+        return None, None
+
+    # ---- 从 full_mask 中减去 handle_mask 得到 body_mask ----
+    body_mask = full_mask.copy()
+    body_mask[handle_mask] = False
+
+    # ---- 校验 ----
+    handle_area = float(np.sum(handle_mask))
+    body_area = float(np.sum(body_mask))
+    if body_area < 1:
+        return None, None
+
+    ratio = handle_area / body_area
+    if not (handle_min_ratio <= ratio <= handle_max_ratio):
+        return None, None
+
+    # 把手质心在指定侧
+    ys, xs = np.where(handle_mask)
+    cx = float(np.mean(xs))
+    bbox_cx = (bbox[0] + bbox[2]) / 2.0
+
+    if handle_side == "right" and cx < bbox_cx:
+        return None, None
+    if handle_side == "left" and cx > bbox_cx:
+        return None, None
+
+    # ---- 形态学闭运算填充把手内部空洞 ----
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    handle_mask = cv2.morphologyEx(
+        handle_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel_close
+    ).astype(bool)
+
+    # ---- 只保留最大连通分量 (排除噪声) ----
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        handle_mask.astype(np.uint8), connectivity=8
+    )
+    if num_labels > 1:
+        areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
+        largest_label = max(areas, key=lambda x: x[1])[0]
+        handle_mask = (labels == largest_label)
+
+    # ---- X 中心一致性: 从底部向上 + 顶部向下 双向剔除偏离行 ----
+    row_centers = []  # (y, center_x, width)
+    for y in range(y1, y2 + 1):
+        xs_row = np.where(handle_mask[y])[0]
+        if len(xs_row) > 5:
+            row_centers.append((y, float(np.mean(xs_row)), float(xs_row[-1] - xs_row[0])))
+    if len(row_centers) >= 5:
+        cx_median = np.median([c for _, c, _ in row_centers])
+        avg_width = np.mean([w for _, _, w in row_centers])
+        tol = avg_width * handle_center_deviation_ratio
+        # 从底部向上剔除
+        for y, cx, _ in sorted(row_centers, key=lambda x: -x[0]):
+            if abs(cx - cx_median) > tol:
+                handle_mask[y:, :] = False
+            else:
+                break
+        # 从顶部向下剔除
+        for y, cx, _ in sorted(row_centers, key=lambda x: x[0]):
+            if abs(cx - cx_median) > tol:
+                handle_mask[:y + 1, :] = False
+            else:
+                break
+
+    # 重新计算 body_mask
+    body_mask = full_mask.copy()
+    body_mask[handle_mask] = False
+
+    return body_mask, handle_mask
+
+
+# ============================================================
+#  5. 红色胶带检测工具
+# ============================================================
+
+def detect_red_tape(bgr_img, hsv_low1=None, hsv_up1=None,
+                    hsv_low2=None, hsv_up2=None, min_area=20):
+    """
+    在 BGR 图像中检测红色区域.
+    红色在 HSV 空间中分布在 0 和 180 两端, 需双阈值.
+
+    参数:
+        bgr_img    : np.ndarray, BGR 图像
+        hsv_low1   : np.ndarray 或 None, 低阈值下限, 默认 [0, 50, 50]
+        hsv_up1    : np.ndarray 或 None, 低阈值上限, 默认 [10, 255, 255]
+        hsv_low2   : np.ndarray 或 None, 高阈值下限, 默认 [170, 50, 50]
+        hsv_up2    : np.ndarray 或 None, 高阈值上限, 默认 [180, 255, 255]
+        min_area   : int, 最小有效面积
+
+    返回:
+        red_mask  : np.ndarray (H, W), bool, 红色区域 mask
+        center    : (cx, cy) 或 None, 红色区域中心 (像素坐标)
+        area      : int, 红色区域像素面积
+    """
+    if hsv_low1 is None:
+        hsv_low1 = np.array([0, 50, 50])
+    if hsv_up1 is None:
+        hsv_up1 = np.array([10, 255, 255])
+    if hsv_low2 is None:
+        hsv_low2 = np.array([170, 50, 50])
+    if hsv_up2 is None:
+        hsv_up2 = np.array([180, 255, 255])
+
+    hsv = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2HSV)
+
+    mask1 = cv2.inRange(hsv, hsv_low1, hsv_up1)
+    mask2 = cv2.inRange(hsv, hsv_low2, hsv_up2)
+    red_mask = np.bitwise_or(mask1, mask2).astype(bool)
+
+    # 形态学开运算去噪 (去除孤立噪点)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    red_mask = cv2.morphologyEx(red_mask.astype(np.uint8),
+                                cv2.MORPH_OPEN, kernel).astype(bool)
+
+    # 先检查有效像素数
+    total_px = np.sum(red_mask)
+    if total_px < min_area:
+        return red_mask, None, 0
+
+    # 保留最大连通分量 (排除小噪声)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        red_mask.astype(np.uint8), connectivity=8
+    )
+    if num_labels <= 1:
+        return red_mask, None, 0
+
+    areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
+    largest_idx, largest_area = max(areas, key=lambda x: x[1])
+
+    if largest_area < min_area:
+        return red_mask, None, 0
+
+    red_mask = (labels == largest_idx)
+
+    # 计算中心 (使用中位数, 对边缘离群点更鲁棒)
+    ys, xs = np.where(red_mask)
+    center = (int(np.median(xs)), int(np.median(ys)))
+
+    return red_mask, center, largest_area
+
+
+# ============================================================
+#  6. 检测器基类 BaseRealSenseDetector
 # ============================================================
 
 class BaseRealSenseDetector:
@@ -170,10 +392,14 @@ class BaseRealSenseDetector:
     使用 rs.align 将深度对齐至彩色坐标系.
 
     子类可通过文件级类属性配置行为:
-        USE_YOLO_WORLD : bool  - 使用 YOLO-World (True) 或标准 YOLOv8 (False)
-        USE_SAM        : bool  - 是否加载 SAM 模型
-        LOG_NAME       : str   - 日志文件名 (不含路径, 写入 logs/RealSense/)
-        TARGET_CLASS_ID: int   - 标准 YOLO 目标类别 ID (默认 39 = bottle)
+        USE_FINETUNED_KETTLE : bool  - 使用微调水壶 YOLOv8n (与 USE_YOLO_WORLD/标准 YOLO 互斥)
+        USE_YOLO_WORLD       : bool  - 使用 YOLO-World (与 USE_FINETUNED_KETTLE/标准 YOLO 互斥)
+        USE_SAM              : bool  - 是否加载 SAM 模型
+        LOG_NAME             : str   - 日志文件名 (不含路径, 写入 logs/RealSense/)
+        TARGET_CLASS_ID      : int   - 标准 YOLO 目标类别 ID (默认 39 = bottle)
+
+    三种检测模式互斥, 优先级: USE_FINETUNED_KETTLE > USE_YOLO_WORLD > 标准 YOLO.
+    SAM 独立于检测模式, 可与任何模式共存.
     """
     USE_YOLO_WORLD = False
     USE_FINETUNED_KETTLE = False
@@ -263,7 +489,7 @@ class BaseRealSenseDetector:
         # 初始化日志
         self._init_logging()
 
-        # 耗时统计
+        # 耗时统计 (YOLO 和 SAM)
         self._yolo_time_ms = 0.0
         self._sam_time_ms = 0.0
 
@@ -427,9 +653,26 @@ class BaseRealSenseDetector:
 
     # ------------------------------------------------------------
     def _init_models(self):
-        """初始化 YOLO (标准/YOLO-World) 与 SAM 模型."""
-        if self.USE_YOLO_WORLD:
-            # ---- YOLO-World ----
+        """
+        初始化检测模型 (三选一互斥) 与 SAM (可选).
+
+        优先级: USE_FINETUNED_KETTLE > USE_YOLO_WORLD > 标准 YOLOv8.
+        仅加载高优先级模式所需的模型, 避免性能浪费.
+        """
+        self.model = None
+        self.sam_model = None
+
+        if self.USE_FINETUNED_KETTLE:
+            # ---- 微调水壶模型 (独占) ----
+            kettle_path = self.KETTLE_MODEL_PATH
+            print("[INFO] 加载微调水壶模型: %s" % kettle_path)
+            if not os.path.exists(kettle_path):
+                raise FileNotFoundError("微调水壶模型不存在: %s" % kettle_path)
+            self.model = YOLO(kettle_path)
+            self.model.to(self.KETTLE_DEVICE)
+
+        elif self.USE_YOLO_WORLD:
+            # ---- YOLO-World (独占) ----
             model_path = self.YW_MODEL_PATH
             print("[INFO] 加载 YOLO-World 模型: %s" % model_path)
             if not os.path.exists(model_path):
@@ -439,16 +682,16 @@ class BaseRealSenseDetector:
             _model.set_classes(self.YW_CLASSES)  # type: ignore[union-attr]
             self.model = _model
             print("[INFO] YOLO-World 词汇表: %s" % str(self.YW_CLASSES))
+
         else:
-            # ---- 标准 YOLOv8 ----
+            # ---- 标准 YOLOv8 (当前两种未启用时的默认模式) ----
             model_path = self.MODEL_NAME
             model_path_pt = "%s.pt" % model_path
             if os.path.exists(model_path_pt):
                 model_path = model_path_pt
             self.model = YOLO(model_path).to(self.DEVICE)
 
-        # ---- SAM (可选) ----
-        self.sam_model = None
+        # ---- SAM (可选, 与任何检测模式兼容) ----
         if self.USE_SAM:
             sam_path = os.path.join(_project_root, "model", self.SAM_MODEL_NAME)
             if not os.path.exists(sam_path):
@@ -462,16 +705,6 @@ class BaseRealSenseDetector:
                     self.sam_model = SAM(sam_path)
                 self.sam_model.to(self.SAM_DEVICE)
                 print("[INFO] SAM 模型已加载: %s" % sam_path)
-
-        # ---- 微调水壶模型 (可选) ----
-        self.kettle_model = None
-        if self.USE_FINETUNED_KETTLE:
-            kettle_path = self.KETTLE_MODEL_PATH
-            print("[INFO] 加载微调水壶模型: %s" % kettle_path)
-            if not os.path.exists(kettle_path):
-                raise FileNotFoundError("微调水壶模型不存在: %s" % kettle_path)
-            self.kettle_model = YOLO(kettle_path)
-            self.kettle_model.to(self.KETTLE_DEVICE)
 
     # ------------------------------------------------------------
     def inject_frames(self, color_image, depth_image, depth_colormap, aligned_depth_frame):
@@ -583,37 +816,47 @@ class BaseRealSenseDetector:
                 datetime.datetime.now().strftime("%H:%M:%S"), tag, text))
 
     # ------------------------------------------------------------
-    def detect_targets(self, color_image):
+    def _detect_targets(self, color_image):
         """
-        标准 YOLO 检测.
-        仅当 USE_YOLO_WORLD=False 时使用.
-        返回 [(x1, y1, x2, y2, conf, class_id), ...]
+        标准 YOLO 检测 (私有方法, 返回最优结果).
+        仅当 USE_FINETUNED_KETTLE=False 且 USE_YOLO_WORLD=False 时使用 (标准 YOLO 模式).
+        返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
         """
+        if self.USE_FINETUNED_KETTLE:
+            raise NotImplementedError("USE_FINETUNED_KETTLE=True 时请使用 _detect_kettle_finetuned")
         if self.USE_YOLO_WORLD:
             raise NotImplementedError("USE_YOLO_WORLD=True 时请使用 _detect_kettle_bbox")
+        if self.model is None:
+            return None
         results = self.model(
             color_image, conf=self.CONF_THRESHOLD,
             classes=[self.TARGET_CLASS_ID], verbose=False
         )
-        detections = []
+        best = None
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
             confs = result.boxes.conf.cpu().numpy()
-            class_ids = result.boxes.cls.cpu().numpy().astype(int)
-            for box, conf, cls_id in zip(boxes, confs, class_ids):
-                x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                detections.append([x1, y1, x2, y2, float(conf), int(cls_id)])
-        return detections
+            for box, conf in zip(boxes, confs):
+                if best is None or conf > best["conf"]:
+                    best = {
+                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
+                        "conf": float(conf),
+                    }
+        return best
 
     # ------------------------------------------------------------
     def _detect_kettle_bbox(self, color_image):
         """
         YOLO-World 检测水壶 bbox.
-        仅当 USE_YOLO_WORLD=True 时使用.
+        仅当 USE_FINETUNED_KETTLE=False 且 USE_YOLO_WORLD=True 时使用.
         返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
         """
+        if self.USE_FINETUNED_KETTLE:
+            raise NotImplementedError("USE_FINETUNED_KETTLE=True 时请使用 _detect_kettle_finetuned")
         if not self.USE_YOLO_WORLD:
-            raise NotImplementedError("USE_YOLO_WORLD=False 时请使用 detect_targets")
+            raise NotImplementedError("USE_YOLO_WORLD=False 时请使用 _detect_targets")
+        if self.model is None:
+            return None
         results = self.model(color_image, conf=self.YW_CONF_THRESHOLD, verbose=False)
         best = None
         for result in results:
@@ -633,12 +876,12 @@ class BaseRealSenseDetector:
     def _detect_kettle_finetuned(self, color_image):
         """
         微调 YOLOv8n 检测水壶 bbox.
-        仅当 USE_FINETUNED_KETTLE=True 时使用.
+        仅当 USE_FINETUNED_KETTLE=True 时使用 (独占, 不使用 self.model 以外的模型).
         返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
         """
-        if self.kettle_model is None:
+        if self.model is None:
             return None
-        results = self.kettle_model(
+        results = self.model(
             color_image, conf=self.KETTLE_CONF_THRESHOLD, verbose=False
         )
         best = None

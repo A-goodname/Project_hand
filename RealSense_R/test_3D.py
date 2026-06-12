@@ -117,13 +117,13 @@ class RealSenseYOLO3DDetector(BaseRealSenseDetector):
                     continue
 
                 # ---- YOLO 检测 ----
-                detections = self.detect_targets(color_image)
+                det = self._detect_targets(color_image)
 
                 # ---- 3D 位置计算与可视化 ----
                 display_img = color_image.copy()
 
-                for det in detections:
-                    bbox = det[:4]
+                if det is not None:
+                    bbox = det["bbox"]
                     position = self.get_3d_position(bbox, depth_frame)
 
                     if position is not None:

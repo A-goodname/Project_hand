@@ -121,17 +121,13 @@ class RealSenseYOLO3DDetector(BaseRealSenseDetector):
                     continue
 
                 # ---- YOLO 检测 ----
-                detections = self.detect_targets(color_image)
-
-                # 只保留置信度最高的一个检测
-                if detections:
-                    detections = [max(detections, key=lambda d: d[4])]
+                det = self._detect_targets(color_image)
 
                 # ---- 3D 位置计算与可视化 ----
                 display_img = color_image.copy()
 
-                for det in detections:
-                    bbox = det[:4]
+                if det is not None:
+                    bbox = det["bbox"]
                     position = self.get_3d_position(bbox, aligned_depth_frame)
 
                     if position is not None:

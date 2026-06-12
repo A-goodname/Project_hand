@@ -20,3 +20,41 @@ resolution:
   width: 640                        # 图像宽度
   height: 480                       # 图像高度
   fps: 30                           # 帧率
+
+sam:
+  model: "sam2_b.pt"                # SAM 模型: sam_b.pt | mobile_sam.pt | FastSAM-s.pt | sam2_b.pt (相对项目根目录, 含 .pt 后缀)
+  conf: 0.3                         # SAM 检测置信度阈值
+  device: gpu                       # 运行设备: gpu(优先) | cpu(强制)
+
+yolo_world:
+  model: "./model/yolov8m-worldv2.pt"     # YOLO-World 模型路径(相对项目根目录, 含 .pt 后缀)
+  conf_threshold: 0.25                    # 检测置信度阈值
+  classes: ["kettle", "electric kettle", "water jug", "teapot"]    # 检测词汇表
+  device: gpu                             # 运行设备: gpu(优先) | cpu(强制)
+
+kettle_model:
+  model: "./model/kettle_yolov8n_finetune.pt"   # 微调水壶模型路径 (含 .pt 后缀)
+  conf_threshold: 0.7                            # 检测置信度阈值
+  device: gpu                                    # 运行设备: gpu(优先) | cpu(强制)
+
+handle:
+  handle_side: "right"                  # 把手在哪一侧: "right" / "left"
+  handle_min_ratio: 0.03                # 把手占壶身最小面积比
+  handle_max_ratio: 0.40                # 把手占壶身最大面积比
+  roi_expand_ratio: 0.1                # SAM ROI 左右拓展比例(相对 bbox 宽度)
+  skip_frames: 10                       # 跳帧数 (mobile_SAM 用 10, SAM2_b 用 90)
+  handle_center_deviation_ratio: 0.1    # 把手 x 中心偏差容差(相对把手宽度比例)
+
+red_tape:
+  enabled: true                         # 是否启用红色胶带辅助检测 (总开关)
+  min_area: 20                          # 红色区域最小有效面积(像素)
+
+cup:
+  model_name: "./model/yolov8m"         # cup 专用模型路径
+  enabled: true                         # 是否启用水杯检测
+  target_class_id: 41                   # COCO类别ID (41=cup)
+  conf_threshold: 0.5                   # YOLO检测置信度阈值
+  height: 0.100                         # 杯高先验 (米)
+  rim_radius: 0.035                     # 杯口半径先验 (米)
+  rim_offset_ratio: 0.6                 # 倒水时壶嘴偏移杯口中心的比例 (0~1)
+  device: gpu                           # 运行设备: gpu(优先) | cpu(强制)

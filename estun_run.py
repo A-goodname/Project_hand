@@ -497,11 +497,10 @@ def main():
 
             # ---- [Step 3] YOLO 检测 -> 6D 位姿 -> 稳定化 -> 更新 last_known_pose ----
             display_img = color_image.copy()
-            detections = detector.detect_targets(color_image)
+            det = detector._detect_targets(color_image)
 
-            if detections:
-                best_det = max(detections, key=lambda d: d[4])
-                position, rotation, point_cloud = detector.compute_6d_pose(best_det, depth_frame)
+            if det is not None:
+                position, rotation, point_cloud = detector.compute_6d_pose(det["bbox"], depth_frame)
 
                 if position is not None and rotation is not None:
                     smooth_pos, smooth_rot = detector._pose_smoother.update(position, rotation)
@@ -527,7 +526,7 @@ def main():
                                 detector.last_known_pose = (mean_pos, mean_euler)
 
                         # 在彩色图上绘制检测框和位姿信息
-                        x1, y1, x2, y2, conf = best_det
+                        x1, y1, x2, y2 = det["bbox"]
                         cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                         K = np.array([

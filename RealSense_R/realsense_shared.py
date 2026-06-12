@@ -488,13 +488,17 @@ def visualize_pose(image, center_3d, rot, K, scale=0.08):
 
 class BaseRealSenseDetector:
     """
-    RealSense 检测器基类, 封装通用基础设施.
+    RealSense 水壶把手检测器基类, 封装通用基础设施.
 
     子类可通过文件级类属性配置行为:
-        USE_YOLO_WORLD : bool  - 使用 YOLO-World (True) 或标准 YOLOv8 (False)
-        USE_SAM        : bool  - 是否加载 SAM 模型
-        LOG_NAME       : str   - 日志文件名 (不含路径, 写入 logs/RealSense_R/)
-        TARGET_CLASS_ID: int   - 标准 YOLO 目标类别 ID (默认 39 = bottle)
+        USE_FINETUNED_KETTLE : bool  - 使用微调水壶 YOLOv8n (与 USE_YOLO_WORLD/标准 YOLO 互斥)
+        USE_YOLO_WORLD       : bool  - 使用 YOLO-World (与 USE_FINETUNED_KETTLE/标准 YOLO 互斥)
+        USE_SAM              : bool  - 是否加载 SAM 模型
+        LOG_NAME             : str   - 日志文件名 (不含路径, 写入 logs/RealSense_R/)
+        TARGET_CLASS_ID      : int   - 标准 YOLO 目标类别 ID (默认 39 = bottle)
+
+    三种检测模式互斥, 优先级: USE_FINETUNED_KETTLE > USE_YOLO_WORLD > 标准 YOLO.
+    SAM 独立于检测模式, 可与任何模式共存.
     """
     USE_YOLO_WORLD = False
     USE_FINETUNED_KETTLE = False
@@ -755,9 +759,26 @@ class BaseRealSenseDetector:
 
     # ------------------------------------------------------------
     def _init_models(self):
-        """初始化 YOLO (标准/YOLO-World) 与 SAM 模型."""
-        if self.USE_YOLO_WORLD:
-            # ---- YOLO-World ----
+        """
+        初始化检测模型 (三选一互斥) 与 SAM (可选).
+
+        优先级: USE_FINETUNED_KETTLE > USE_YOLO_WORLD > 标准 YOLOv8.
+        仅加载高优先级模式所需的模型, 避免性能浪费.
+        """
+        self.model = None
+        self.sam_model = None
+
+        if self.USE_FINETUNED_KETTLE:
+            # ---- 微调水壶模型 (独占) ----
+            kettle_path = self.KETTLE_MODEL_PATH
+            print("[INFO] 加载微调水壶模型: %s" % kettle_path)
+            if not os.path.exists(kettle_path):
+                raise FileNotFoundError("微调水壶模型不存在: %s" % kettle_path)
+            self.model = YOLO(kettle_path)
+            self.model.to(self.KETTLE_DEVICE)
+
+        elif self.USE_YOLO_WORLD:
+            # ---- YOLO-World (独占) ----
             model_path = self.YW_MODEL_PATH
             print("[INFO] 加载 YOLO-World 模型: %s" % model_path)
             if not os.path.exists(model_path):
@@ -767,16 +788,16 @@ class BaseRealSenseDetector:
             _model.set_classes(self.YW_CLASSES)  # type: ignore[union-attr]
             self.model = _model
             print("[INFO] YOLO-World 词汇表: %s" % str(self.YW_CLASSES))
+
         else:
-            # ---- 标准 YOLOv8 ----
+            # ---- 标准 YOLOv8 (当前两种未启用时的默认模式) ----
             model_path = self.MODEL_NAME
             model_path_pt = "%s.pt" % model_path
             if os.path.exists(model_path_pt):
                 model_path = model_path_pt
             self.model = YOLO(model_path).to(self.DEVICE)
 
-        # ---- SAM (可选) ----
-        self.sam_model = None
+        # ---- SAM (可选, 与任何检测模式兼容) ----
         if self.USE_SAM:
             sam_path = os.path.join(_project_root, "model", self.SAM_MODEL_NAME)
             if not os.path.exists(sam_path):
@@ -790,16 +811,6 @@ class BaseRealSenseDetector:
                     self.sam_model = SAM(sam_path)
                 self.sam_model.to(self.SAM_DEVICE)
                 print("[INFO] SAM 模型已加载: %s" % sam_path)
-
-        # ---- 微调水壶模型 (可选) ----
-        self.kettle_model = None
-        if self.USE_FINETUNED_KETTLE:
-            kettle_path = self.KETTLE_MODEL_PATH
-            print("[INFO] 加载微调水壶模型: %s" % kettle_path)
-            if not os.path.exists(kettle_path):
-                raise FileNotFoundError("微调水壶模型不存在: %s" % kettle_path)
-            self.kettle_model = YOLO(kettle_path)
-            self.kettle_model.to(self.KETTLE_DEVICE)
 
     # ------------------------------------------------------------
     def inject_frames(self, color_image, depth_image, depth_colormap, depth_frame):
@@ -934,36 +945,47 @@ class BaseRealSenseDetector:
                 datetime.datetime.now().strftime("%H:%M:%S"), tag, text))
 
     # ------------------------------------------------------------
-    def detect_targets(self, color_image):
+    def _detect_targets(self, color_image):
         """
-        标准 YOLO 检测.
-        仅当 USE_YOLO_WORLD=False 时使用.
-        返回 [(x1, y1, x2, y2, conf, class_id), ...]
+        标准 YOLO 检测 (私有方法, 返回最优结果).
+        仅当 USE_FINETUNED_KETTLE=False 且 USE_YOLO_WORLD=False 时使用 (标准 YOLO 模式).
+        返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
         """
+        if self.USE_FINETUNED_KETTLE:
+            raise NotImplementedError("USE_FINETUNED_KETTLE=True 时请使用 _detect_kettle_finetuned")
         if self.USE_YOLO_WORLD:
             raise NotImplementedError("USE_YOLO_WORLD=True 时请使用 _detect_kettle_bbox")
+        if self.model is None:
+            return None
         results = self.model(
             color_image, conf=self.CONF_THRESHOLD,
             classes=[self.TARGET_CLASS_ID], verbose=False
         )
-        detections = []
+        best = None
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
             confs = result.boxes.conf.cpu().numpy()
-            class_ids = result.boxes.cls.cpu().numpy().astype(int)
-            for box, conf, cls_id in zip(boxes, confs, class_ids):
-                detections.append([*box, float(conf), int(cls_id)])
-        return detections
+            for box, conf in zip(boxes, confs):
+                if best is None or conf > best["conf"]:
+                    best = {
+                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
+                        "conf": float(conf),
+                    }
+        return best
 
     # ------------------------------------------------------------
     def _detect_kettle_bbox(self, color_image):
         """
         YOLO-World 检测水壶 bbox.
-        仅当 USE_YOLO_WORLD=True 时使用.
+        仅当 USE_FINETUNED_KETTLE=False 且 USE_YOLO_WORLD=True 时使用.
         返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
         """
+        if self.USE_FINETUNED_KETTLE:
+            raise NotImplementedError("USE_FINETUNED_KETTLE=True 时请使用 _detect_kettle_finetuned")
         if not self.USE_YOLO_WORLD:
-            raise NotImplementedError("USE_YOLO_WORLD=False 时请使用 detect_targets")
+            raise NotImplementedError("USE_YOLO_WORLD=False 时请使用 _detect_targets")
+        if self.model is None:
+            return None
         results = self.model(color_image, conf=self.YW_CONF_THRESHOLD, verbose=False)
         best = None
         for result in results:
@@ -983,12 +1005,12 @@ class BaseRealSenseDetector:
     def _detect_kettle_finetuned(self, color_image):
         """
         微调 YOLOv8n 检测水壶 bbox.
-        仅当 USE_FINETUNED_KETTLE=True 时使用.
+        仅当 USE_FINETUNED_KETTLE=True 时使用 (独占).
         返回 {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
         """
-        if self.kettle_model is None:
+        if self.model is None:
             return None
-        results = self.kettle_model(
+        results = self.model(
             color_image, conf=self.KETTLE_CONF_THRESHOLD, verbose=False
         )
         best = None

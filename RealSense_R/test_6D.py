@@ -190,27 +190,6 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
             cv2.arrowedLine(image, (cx_2d, cy_2d), (ex_2d, ey_2d), color, 3, tipLength=0.2)
 
     # ------------------------------------------------------------
-    def detect_targets(self, color_image):
-        """
-        覆盖基类 detect_targets, 提供 5 元素返回格式 (兼容原 test_6D 行为).
-        与基类逻辑一致, 无额外日志写入.
-        """
-        # 调用基类推理
-        results = self.model(
-            color_image, conf=self.CONF_THRESHOLD,
-            classes=[self.TARGET_CLASS_ID], verbose=False
-        )
-
-        detections = []
-        for result in results:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confs):
-                detections.append([int(box[0]), int(box[1]), int(box[2]), int(box[3]), float(conf)])
-
-        return detections
-
-    # ------------------------------------------------------------
     def run(self):
         """主循环."""
         print("按 'q' 键退出程序...")
@@ -226,17 +205,13 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
                     continue
 
                 # ---- YOLO 检测 ----
-                detections = self.detect_targets(color_image)
-
-                # 只保留置信度最高的一个检测
-                if detections:
-                    detections = [max(detections, key=lambda d: d[4])]
+                det = self._detect_targets(color_image)
 
                 # ---- 6D 位姿计算与可视化 ----
                 display_img = color_image.copy()
 
-                for det in detections:
-                    position, rotation, point_cloud = self.compute_6d_pose(det, depth_frame)
+                if det is not None:
+                    position, rotation, point_cloud = self.compute_6d_pose(det["bbox"], depth_frame)
 
                     if position is not None and rotation is not None:
                         smooth_pos, smooth_rot = self._pose_smoother.update(position, rotation)
@@ -257,7 +232,7 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
                        
                         
 
-                        x1, y1, x2, y2, conf = det
+                        x1, y1, x2, y2 = det["bbox"]
                         cv2.rectangle(display_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                         # 使用彩色内参投影 (彩色坐标系 -> 彩色图)
