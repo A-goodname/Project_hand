@@ -358,20 +358,20 @@ def detect_red_tape(bgr_img, hsv_low1=None, hsv_up1=None,
     # 先检查有效像素数
     total_px = np.sum(red_mask)
     if total_px < min_area:
-        return red_mask, None, 0
+        return None, None, 0
 
     # 保留最大连通分量 (排除小噪声)
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         red_mask.astype(np.uint8), connectivity=8
     )
     if num_labels <= 1:
-        return red_mask, None, 0
+        return None, None, 0
 
     areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
     largest_idx, largest_area = max(areas, key=lambda x: x[1])
 
     if largest_area < min_area:
-        return red_mask, None, 0
+        return None, None, 0
 
     red_mask = (labels == largest_idx)
 
@@ -535,8 +535,8 @@ class BaseRealSenseDetector:
         if "pose_alpha" in _sm:
             self.SMOOTH_POSE_ALPHA = _sm["pose_alpha"]
 
-        # ---- 标准 YOLO (仅当 USE_YOLO_WORLD=False 时读取) ----
-        if not self.USE_YOLO_WORLD:
+        # ---- 标准 YOLO (仅当 USE_FINETUNED_KETTLE=False 且 USE_YOLO_WORLD=False 时读取) ----
+        if not self.USE_FINETUNED_KETTLE and not self.USE_YOLO_WORLD:
             _model = cfg.get("model", {})
             if "name" in _model:
                 self.MODEL_NAME = os.path.join(_project_root, _model["name"])
@@ -586,18 +586,18 @@ class BaseRealSenseDetector:
         # ---- 把手 (仅当 USE_SAM=True 时读取, 因为把手分离依赖 SAM) ----
         if self.USE_SAM:
             _handle = cfg.get("handle", {})
-            if "handle_side" in _handle:
-                self.HANDLE_SIDE = _handle["handle_side"]
-            if "handle_min_ratio" in _handle:
-                self.HANDLE_MIN_RATIO = _handle["handle_min_ratio"]
-            if "handle_max_ratio" in _handle:
-                self.HANDLE_MAX_RATIO = _handle["handle_max_ratio"]
+            if "side" in _handle:
+                self.HANDLE_SIDE = _handle["side"]
+            if "min_ratio" in _handle:
+                self.HANDLE_MIN_RATIO = _handle["min_ratio"]
+            if "max_ratio" in _handle:
+                self.HANDLE_MAX_RATIO = _handle["max_ratio"]
             if "roi_expand_ratio" in _handle:
                 self.ROI_EXPAND_RATIO = _handle["roi_expand_ratio"]
             if "skip_frames" in _handle:
                 self.SKIP_FRAMES = _handle["skip_frames"]
-            if "handle_center_deviation_ratio" in _handle:
-                self.HANDLE_CENTER_DEVIATION_RATIO = _handle["handle_center_deviation_ratio"]
+            if "center_deviation_ratio" in _handle:
+                self.HANDLE_CENTER_DEVIATION_RATIO = _handle["center_deviation_ratio"]
 
         # ---- 红色胶带 (始终读取, 不管 USE_SAM) ----
         _rt = cfg.get("red_tape", {})
@@ -768,26 +768,69 @@ class BaseRealSenseDetector:
         return x, y, d
 
     # ------------------------------------------------------------
-    def _get_anchor_depth(self, bbox, aligned_depth_frame):
+    def _get_anchor_depth(self, bbox, aligned_depth_frame, multi_sample=False):
         """
-        获取 bbox 中心锚点深度 (单点).
-        由于深度已对齐, 可直接在彩色 bbox 中心读取深度.
+        获取 bbox 区域锚点深度.
 
         参数:
             bbox                : [x1, y1, x2, y2], 彩色坐标系检测框
             aligned_depth_frame : rs.depth_frame, 对齐后的深度帧
+            multi_sample        : bool, 是否使用多点均匀采样取中位数.
+                                  默认 False (单点, 水瓶用).
+                                  True 时在 bbox 内 50 点采样取中位数 (水壶用).
 
         返回:
-            (cx_color, cy_color, center_depth) 或 None
+            multi_sample=False: (cx_color, cy_color, center_depth) 或 None
+            multi_sample=True : float (深度中值) 或 None
         """
-        cx_color = (int(bbox[0]) + int(bbox[2])) // 2
-        cy_color = (int(bbox[1]) + int(bbox[3])) // 2
+        if multi_sample:
+            # 多点采样: bbox 内 50 点均匀随机采样, 取有效深度中位数
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            h_roi = y2 - y1
+            w_roi = x2 - x1
+            depths = []
+            np.random.seed(0)
+            for _ in range(50):
+                cy = y1 + np.random.randint(0, max(h_roi, 1))
+                cx = x1 + np.random.randint(0, max(w_roi, 1))
+                d = aligned_depth_frame.get_distance(cx, cy)
+                if self.DEPTH_MIN < d < self.DEPTH_MAX:
+                    depths.append(d)
+            if len(depths) < 5:
+                return None
+            depths.sort()
+            return depths[len(depths) // 2]
+        else:
+            # 单点: bbox 中心点 (默认行为, 水瓶用)
+            cx_color = (int(bbox[0]) + int(bbox[2])) // 2
+            cy_color = (int(bbox[1]) + int(bbox[3])) // 2
+            depth_val = aligned_depth_frame.get_distance(cx_color, cy_color)
+            if not (self.DEPTH_MIN < depth_val < self.DEPTH_MAX):
+                return None
+            return cx_color, cy_color, depth_val
 
-        depth_val = aligned_depth_frame.get_distance(cx_color, cy_color)
-        if not (self.DEPTH_MIN < depth_val < self.DEPTH_MAX):
-            return None
+    # ------------------------------------------------------------
+    def _detect_red_on_handle(self, handle_mask, color_image):
+        """
+        在 handle_mask 原始区域内检测红色胶带 (不扩展).
 
-        return cx_color, cy_color, depth_val
+        参数:
+            handle_mask : np.ndarray (H, W), bool, 把手 mask
+            color_image : np.ndarray (H, W, 3), BGR 彩色图
+
+        返回:
+            red_center : (cx, cy) 或 None, 红色胶带中心 (全图坐标)
+            red_mask   : np.ndarray (H, W), bool 或 None
+            red_area   : int, 红色面积
+        """
+        masked_img = cv2.bitwise_and(color_image, color_image,
+                                     mask=handle_mask.astype(np.uint8) * 255)
+        red_mask_full, red_center, red_area = detect_red_tape(
+            masked_img, min_area=self.RED_TAPE_MIN_AREA
+        )
+        if red_center is None or red_area <= 0:
+            return None, None, 0
+        return red_center, red_mask_full, red_area
 
     # ------------------------------------------------------------
     def _init_logging(self):
@@ -816,6 +859,32 @@ class BaseRealSenseDetector:
                 datetime.datetime.now().strftime("%H:%M:%S"), tag, text))
 
     # ------------------------------------------------------------
+    @staticmethod
+    def _parse_yolo_results(results):
+        """
+        从 YOLO results 中提取置信度最高的检测结果.
+
+        参数:
+            results : list[ultralytics.Results], YOLO 推理结果
+
+        返回:
+            {"bbox": [x1, y1, x2, y2], "conf": float} 或 None
+        """
+        best = None
+        for result in results:
+            if result.boxes is None:
+                continue
+            boxes = result.boxes.xyxy.cpu().numpy()
+            confs = result.boxes.conf.cpu().numpy()
+            for box, conf_val in zip(boxes, confs):
+                if best is None or conf_val > best["conf"]:
+                    best = {
+                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
+                        "conf": float(conf_val),
+                    }
+        return best
+
+    # ------------------------------------------------------------
     def _detect_targets(self, color_image):
         """
         标准 YOLO 检测 (私有方法, 返回最优结果).
@@ -832,17 +901,7 @@ class BaseRealSenseDetector:
             color_image, conf=self.CONF_THRESHOLD,
             classes=[self.TARGET_CLASS_ID], verbose=False
         )
-        best = None
-        for result in results:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confs):
-                if best is None or conf > best["conf"]:
-                    best = {
-                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
-                        "conf": float(conf),
-                    }
-        return best
+        return self._parse_yolo_results(results)
 
     # ------------------------------------------------------------
     def _detect_kettle_bbox(self, color_image):
@@ -858,19 +917,7 @@ class BaseRealSenseDetector:
         if self.model is None:
             return None
         results = self.model(color_image, conf=self.YW_CONF_THRESHOLD, verbose=False)
-        best = None
-        for result in results:
-            if result.boxes is None:
-                continue
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confs):
-                if best is None or conf > best["conf"]:
-                    best = {
-                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
-                        "conf": float(conf),
-                    }
-        return best
+        return self._parse_yolo_results(results)
 
     # ------------------------------------------------------------
     def _detect_kettle_finetuned(self, color_image):
@@ -884,19 +931,7 @@ class BaseRealSenseDetector:
         results = self.model(
             color_image, conf=self.KETTLE_CONF_THRESHOLD, verbose=False
         )
-        best = None
-        for result in results:
-            if result.boxes is None:
-                continue
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confs):
-                if best is None or conf > best["conf"]:
-                    best = {
-                        "bbox": [int(box[0]), int(box[1]), int(box[2]), int(box[3])],
-                        "conf": float(conf),
-                    }
-        return best
+        return self._parse_yolo_results(results)
 
     # ------------------------------------------------------------
     def _segment_full_mask(self, rgb_image, bbox):

@@ -279,14 +279,7 @@ def main():
                     break
                 continue
 
-            # ---- [Step 3b] 缓存原始深度帧 ----
-            try:
-                frames = detector.pipeline.wait_for_frames()
-                detector._cached_raw_depth = frames.get_depth_frame()
-            except Exception:
-                detector._cached_raw_depth = None
-
-            # ---- [Step 3c] YOLO 检测 + PCA 6D ----
+            # ---- [Step 3b] YOLO 检测 + PCA 6D ----
             display_img = color_image.copy()
             det = detector._detect_targets(color_image)
 

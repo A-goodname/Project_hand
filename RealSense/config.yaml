@@ -38,12 +38,12 @@ kettle_model:
   device: gpu                                    # 运行设备: gpu(优先) | cpu(强制)
 
 handle:
-  handle_side: "right"                  # 把手在哪一侧: "right" / "left"
-  handle_min_ratio: 0.03                # 把手占壶身最小面积比
-  handle_max_ratio: 0.40                # 把手占壶身最大面积比
-  roi_expand_ratio: 0.1                # SAM ROI 左右拓展比例(相对 bbox 宽度)
+  side: "right"                         # 把手在哪一侧: "right" / "left"
+  min_ratio: 0.03                       # 把手占壶身最小面积比
+  max_ratio: 0.40                       # 把手占壶身最大面积比
+  roi_expand_ratio: 0.1                 # SAM ROI 左右拓展比例(相对 bbox 宽度)
   skip_frames: 10                       # 跳帧数 (mobile_SAM 用 10, SAM2_b 用 90)
-  handle_center_deviation_ratio: 0.1    # 把手 x 中心偏差容差(相对把手宽度比例)
+  center_deviation_ratio: 0.1           # 把手 x 中心偏差容差(相对把手宽度比例)
 
 red_tape:
   enabled: true                         # 是否启用红色胶带辅助检测 (总开关)

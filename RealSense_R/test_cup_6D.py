@@ -236,26 +236,13 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         """
         # ---- Phase 1: YOLO 检测 ----
         _t0 = time.perf_counter()
-        # 使用基类的 detect_targets, 但限制 class_id = cup
-        results = self.model(
-            color_image, conf=self.CONF_THRESHOLD,
-            classes=[self.TARGET_CLASS_ID], verbose=False
-        )
-        detections = []
-        for result in results:
-            boxes = result.boxes.xyxy.cpu().numpy()
-            confs = result.boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confs):
-                detections.append([int(box[0]), int(box[1]),
-                                   int(box[2]), int(box[3]), float(conf)])
+        best = self._detect_targets(color_image)
         self._yolo_time_ms = (time.perf_counter() - _t0) * 1000
 
-        if not detections:
+        if best is None:
             return (None, None, None, None, None, None, None, None)
 
-        # 只保留置信度最高的一个
-        best = max(detections, key=lambda d: d[4])
-        bbox = best[:4]
+        bbox = best["bbox"]
 
         # ---- Phase 2: 点云提取 ----
         anchor = self._get_anchor_depth(bbox, depth_frame)

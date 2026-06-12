@@ -67,7 +67,6 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
 
         # --- estun_run.py 外部使用的属性 ---
         self.last_known_pose: Optional[tuple] = None
-        self._cached_raw_depth = None
 
     # ------------------------------------------------------------
     @staticmethod

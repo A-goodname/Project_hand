@@ -141,53 +141,6 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
         self._handle_smoother = PositionSmoother(alpha=self.SMOOTH_ALPHA)
 
     # ------------------------------------------------------------
-    def _get_anchor_depth(self, bbox, aligned_depth_frame):
-        """
-        覆盖基类: bbox 内均匀采样 50 个点, 取有效深度中位数.
-        深度已对齐, 可直接在彩色坐标 (cx, cy) 读取.
-        """
-        x1, y1, x2, y2 = [int(v) for v in bbox]
-        h_roi = y2 - y1
-        w_roi = x2 - x1
-
-        depths = []
-        np.random.seed(0)
-        for _ in range(50):
-            cy = y1 + np.random.randint(0, max(h_roi, 1))
-            cx = x1 + np.random.randint(0, max(w_roi, 1))
-            d = aligned_depth_frame.get_distance(cx, cy)
-            if self.DEPTH_MIN < d < self.DEPTH_MAX:
-                depths.append(d)
-
-        if len(depths) < 5:
-            return None
-        depths.sort()
-        return depths[len(depths) // 2]
-
-    # ------------------------------------------------------------
-    def _detect_red_on_handle(self, handle_mask, color_image):
-        """
-        在 handle_mask 原始区域内检测红色胶带 (不扩展).
-
-        参数:
-            handle_mask : np.ndarray (H, W), bool, 把手 mask
-            color_image : np.ndarray (H, W, 3), BGR 彩色图
-
-        返回:
-            red_center : (cx, cy) 或 None, 红色胶带中心 (全图坐标)
-            red_mask   : np.ndarray (H, W), bool 或 None
-            red_area   : int, 红色面积
-        """
-        masked_img = cv2.bitwise_and(color_image, color_image,
-                                     mask=handle_mask.astype(np.uint8) * 255)
-        red_mask_full, red_center, red_area = detect_red_tape(
-            masked_img, min_area=self.RED_TAPE_MIN_AREA
-        )
-        if red_center is None or red_area <= 0:
-            return None, None, 0
-        return red_center, red_mask_full, red_area
-
-    # ------------------------------------------------------------
     def detect_handle(self, color_image, aligned_depth_frame):
         """
         主检测函数: 微调 YOLO → SAM → 扫描线分离 → 3D.
@@ -220,7 +173,7 @@ class RealSenseHandle3DDetector(BaseRealSenseDetector):
         bbox = best["bbox"]
 
         # === Step 2: 获取锚点深度 (用于 3D 定位的 Z 过滤) ===
-        anchor_depth = self._get_anchor_depth(bbox, aligned_depth_frame)
+        anchor_depth = self._get_anchor_depth(bbox, aligned_depth_frame, multi_sample=True)
         if anchor_depth is None:
             print("[WARN] No valid anchor depth, skip 3D positioning")
 

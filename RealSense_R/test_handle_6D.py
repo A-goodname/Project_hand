@@ -190,7 +190,6 @@ class RealSenseHandle6DDetector(BaseRealSenseDetector):
 
         # --- estun_handle_run.py 外部使用的属性 ---
         self.last_known_pose: Optional[tuple] = None
-        self._cached_raw_depth = None
 
         # ---- 6D 位姿平滑 ----
         self._pose_smoother = PoseSmoother(alpha=self.SMOOTH_POSE_ALPHA)

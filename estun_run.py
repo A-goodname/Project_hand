@@ -24,10 +24,9 @@ ESTUN RealSense 6D 抓取系统
   主线程:
     [Init] 加载标定 / 手 / 检测器 / TCP -> 主循环
     [Step1] 获取帧
-    [Step2] 缓存原始深度帧
-    [Step3] YOLO 检测 -> 6D 位姿 -> cam2ee 转换 -> 稳定化
-    [Step4] 显示画面
-    [Step5] 非阻塞 accept -> 子线程 handle_client
+    [Step2] YOLO 检测 -> 6D 位姿 -> cam2ee 转换 -> 稳定化
+    [Step3] 显示画面
+    [Step4] 非阻塞 accept -> 子线程 handle_client
 
   子线程 handle_client (daemon=True):
     [Phase A] 接收机器人初始位姿 (5s 超时)
@@ -488,14 +487,7 @@ def main():
                     break
                 continue
 
-            # ---- [Step 2] 缓存原始深度帧 (用于 anchor 映射) ----
-            try:
-                frames = detector.pipeline.wait_for_frames()
-                detector._cached_raw_depth = frames.get_depth_frame()
-            except Exception:
-                detector._cached_raw_depth = None
-
-            # ---- [Step 3] YOLO 检测 -> 6D 位姿 -> 稳定化 -> 更新 last_known_pose ----
+            # ---- [Step 2] YOLO 检测 -> 6D 位姿 -> 稳定化 -> 更新 last_known_pose ----
             display_img = color_image.copy()
             det = detector._detect_targets(color_image)
 
@@ -551,7 +543,7 @@ def main():
             else:
                 detector._pose_smoother.reset()
 
-            # ---- [Step 4] 显示: 拼接彩色/深度图, 绘制 6D 坐标系和位置信息 ----
+            # ---- [Step 3] 显示: 拼接彩色/深度图, 绘制 6D 坐标系和位置信息 ----
             if depth_colormap is not None and display_img.shape[:2] == depth_colormap.shape[:2]:
                 images = np.hstack((display_img, depth_colormap))
             else:
@@ -563,7 +555,7 @@ def main():
                 running = False
                 break
 
-            # ---- [Step 5] 非阻塞 accept -> 子线程 handle_client, 主循环继续 ----
+            # ---- [Step 4] 非阻塞 accept -> 子线程 handle_client ----
             try:
                 conn, addr = server.accept()
             except BlockingIOError:
