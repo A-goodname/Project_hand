@@ -23,7 +23,37 @@
 
 - 相机参数从 `config.yaml` 和 `D435i_info.yaml` 加载 (不依赖 SDK 读取的 NaN 参数)
 - 彩色->深度像素映射通过 `rs2_project_color_pixel_to_depth_pixel` 手动计算
-- 不依赖 `rs.align` (相机硬件参数损坏, 结果不可靠)
+- **不依赖 `rs.align`** (相机硬件参数损坏, 结果不可靠)
+- 与 `RealSense/` (新版) 的基类 `BaseRealSenseDetector` 及共享工具函数完全独立, 互不依赖
+
+## RealSense 模块
+
+存放路径: `RealSense/`
+
+- **rs.align 简化版**: 适用于内参完好的 D435i 相机, 使用 `rs.align(rs.stream.color)` 代替 `rs2_project_color_pixel_to_depth_pixel` 手动映射
+- 相机参数从 `D435i_info.yaml` 加载彩色内参 (与 `RealSense_R/` 共用 YAML 格式)
+- 基类 `BaseRealSenseDetector` 及共享工具函数 (`realsense_shared.py`) 与 `RealSense_R/` 版本独立, 但结构和接口高度相似
+- 三种互斥检测模式: 标准 YOLOv8 + YOLO-World + 微调 YOLOv8n (优先级: 微调 > YOLO-World > 标准)
+- 把手检测依赖 SAM, 使用 `scanline_find_handle` 水平扫描线分离壶身与把手
+- 红色胶带辅助检测通过 `detect_red_tape` 实现
+- **检测脚本清单**:
+  - `test_6D.py`: 标准 6D 检测 (瓶身)
+  - `test_3D.py`: 纯 3D 检测
+  - `test_handle_6D.py`: 把手 6D 位姿检测 (SAM + 扫描线分离)
+  - `test_handle_3D.py`: 把手纯 3D 检测
+  - `test_cup_6D.py`: 水杯 6D 检测 + 杯口位置 + 倒水目标点 (新增)
+  - `test_align.py`: rs.align 对齐链路验证
+- 配置入口: `RealSense/config.yaml`, 包含 `cup` 段 (水杯几何参数)
+- 日志输出至 `logs/RealSense/`
+- 两种模块差异小结:
+  | 特性 | RealSense_R (旧) | RealSense (新) |
+  |------|-----------------|----------------|
+  | 深度对齐 | `rs2_project_color_pixel_to_depth_pixel` 手动映射 | `rs.align` 自动对齐 |
+  | 基类文件 | `RealSense_R/realsense_shared.py` | `RealSense/realsense_shared.py` |
+  | 配置文件 | `RealSense_R/config.yaml` | `RealSense/config.yaml` |
+  | 适用相机 | 内参受损的旧相机 | 内参完好的新相机 |
+  | 检测脚本 | `test_6D.py` / `test_handle_6D.py` / `test_cup_6D.py` | 同名脚本, 使用 `rs.align` 简化版本 |
+  | 融合入口 | `estun_handle_cup_run.py` 引用 `RealSense_R/` | 待迁移 |
 - YOLO 使用标准彩色模型 (非灰度模型)
 - **支持三种水壶检测模型**: 标准 YOLOv8 (瓶身), YOLO-World (零样本), 微调 YOLOv8n (高置信度水壶, 需预先训练)
 - **红色胶带辅助检测**: 通过 `red_tape` 配置段控制 (enabled/min_area), `detect_red_tape()` 使用 HSV 双阈值 + 中位数中心 + 最大连通分量; 替换把手 3D 位置, 旋转保持 PCA 不变

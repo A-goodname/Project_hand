@@ -45,7 +45,8 @@ pip install -r requirements.txt
 | `estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
 | `estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
-| `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 |
+| `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
+| `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
 | `Orbbec/` | Orbbec Gemini 215微距相机模块 |
 | `EpicEye/` | Epic Eye Pixel Pro相机模块（灰度YOLO检测） |
 | `Omnihand/` | 灵巧手USB串口控制（手势、速度、使能） |
@@ -91,9 +92,10 @@ pip install -r requirements.txt
 
 所有配置通过YAML文件管理，无需改代码：
 
-- **RealSense 检测模型/目标类别 (瓶身)** → 修改 `RealSense_R/config.yaml` 中的 `model.name` 和 `model.target_class_id`
-- **RealSense 水壶检测模型 (把手)** → 修改 `RealSense_R/config.yaml` 中的 `kettle_model.model` (微调YOLOv8n) 或 `yolo_world.model` (YOLO-World)
-- **RealSense 把手检测参数** → 修改 `RealSense_R/config.yaml` 中的 `handle` 段 (handle_side/skip_frames/handle_center_deviation_ratio 等)
+- **RealSense 检测模型/目标类别 (瓶身)** → 修改对应模块 `config.yaml` 中的 `model.name` 和 `model.target_class_id` (`RealSense_R/` 或 `RealSense/`)
+- **RealSense 水壶检测模型 (把手)** → 修改对应模块 `config.yaml` 中的 `kettle_model.model` (微调YOLOv8n) 或 `yolo_world.model` (YOLO-World)
+- **RealSense 把手检测参数** → 修改对应模块 `config.yaml` 中的 `handle` 段 (side/skip_frames/center_deviation_ratio 等)
+- **RealSense 水杯检测参数** → 修改对应模块 `config.yaml` 中的 `cup` 段 (height/rim_radius/rim_offset_ratio)
 - **EpicEye 检测模型/目标类别** → 修改 `EpicEye/epiceye_config.yaml` 中的 `model.gray_path` 和 `model.class_id`
 - **切换运行设备** → 修改对应相机模块配置文件中的 `model.device`（gpu/cpu）
 - **修改机器人参数** → 修改 `estun_config.yaml`
@@ -102,11 +104,10 @@ pip install -r requirements.txt
 - **切换抓取模式** → 修改 `estun_config.yaml` 中的 `orientation_mode`（free/vertical/horizontal/fixed）
 - **切换抓取方向** → 修改 `estun_config.yaml` 中的 `grasp_direction`（right/left）
 - **固定姿态配置** → 修改 `estun_config.yaml` 中的 `fixed_abc.right` / `fixed_abc.left` (fixed 模式)
-- **把手跳帧控制** → 修改 `RealSense_R/config.yaml` 中的 `handle.skip_frames`（每N帧检测一次）
+- **把手跳帧控制** → 修改对应模块 `config.yaml` 中的 `handle.skip_frames`（每N帧检测一次）
 - **把手抓取点偏移** → 微调 `estun_config.yaml` 中的 `handle_grasp.pre_offset` / `handle_grasp.target_offset`
-- **红色胶带辅助检测** → 修改 `RealSense_R/config.yaml` 中的 `red_tape.enabled` / `red_tape.min_area`
-- **SAM 模型选择** → 修改 `RealSense_R/config.yaml` 中的 `sam.model` (当前为 sam2_b.pt)
-- **水壶检测模型** → 修改 `RealSense_R/config.yaml` 中的 `kettle_model.model` (微调模型路径)
+- **红色胶带辅助检测** → 修改对应模块 `config.yaml` 中的 `red_tape.enabled` / `red_tape.min_area`
+- **SAM 模型选择** → 修改对应模块 `config.yaml` 中的 `sam.model` (当前为 sam2_b.pt)
 
 ## 核心流程
 
