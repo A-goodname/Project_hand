@@ -19,7 +19,7 @@
 
 - 训练好的模型文件: `model/kettle_yolov8n_finetune.pt`
 - 检测置信度显著提升 (mAP50 ≥ 0.99), 误检率大幅降低
-- 独立测试脚本: `kettle_training/test_finetuned.py`
+- 独立测试脚本: `KettleTraining/test_finetuned.py`
 
 ---
 
@@ -29,7 +29,7 @@
 
 ### 采集脚本
 
-`kettle_training/collect_kettle_data.py`: 使用 RealSense 彩色流拍摄, 按空格键保存, 按 q 退出.
+`KettleTraining/collect_kettle_data.py`: 使用 RealSense 彩色流拍摄, 按空格键保存, 按 q 退出.
 
 ### 采集要求
 
@@ -48,7 +48,7 @@
 
 ## Step 2: 数据标注
 
-使用 OpenCV 自研标注工具 `kettle_training/label_tool.py` 标注.
+使用 OpenCV 自研标注工具 `KettleTraining/label_tool.py` 标注.
 
 ### 标注工具 (替代 LabelImg)
 
@@ -70,7 +70,7 @@
 
 ```
 Project_hand/
-└── kettle_training/
+└── KettleTraining/
     ├── images/              # 原始图片 (JPG)
     │   ├── kettle_000.jpg
     │   ├── kettle_001.jpg
@@ -82,10 +82,10 @@ Project_hand/
     └── dataset.yaml         # 数据集配置文件
 ```
 
-### 数据集配置文件 `kettle_training/dataset.yaml`
+### 数据集配置文件 `KettleTraining/dataset.yaml`
 
 ```yaml
-path: ./kettle_training   # 数据集根目录 (相对项目根目录)
+path: ./KettleTraining   # 数据集根目录 (相对项目根目录)
 train: images              # 训练集图片路径
 val: images                # 验证集图片路径 (数据量少, 复用训练集)
 nc: 1                      # 类别数 (仅 kettle)
@@ -100,7 +100,7 @@ names: ["kettle"]           # 类别名称
 
 ### 训练脚本
 
-`kettle_training/train_kettle.py`: 基于 COCO 预训练的 YOLOv8n 微调.
+`KettleTraining/train_kettle.py`: 基于 COCO 预训练的 YOLOv8n 微调.
 
 ### 训练参数
 
@@ -118,7 +118,7 @@ names: ["kettle"]           # 类别名称
 ### 运行训练
 
 ```bash
-D:\Environment\miniconda\envs\Proj\python.exe kettle_training/train_kettle.py
+D:\Environment\miniconda\envs\Proj\python.exe KettleTraining/train_kettle.py
 ```
 
 ### 训练输出
@@ -148,10 +148,10 @@ copy runs\train\kettle_finetune\weights\best.pt model\kettle_yolov8n_finetune.pt
 
 ### 独立测试脚本
 
-`kettle_training/test_finetuned.py`: 直接加载微调模型进行实时检测, 不依赖对 `config.yaml` 的修改.
+`KettleTraining/test_finetuned.py`: 直接加载微调模型进行实时检测, 不依赖对 `config.yaml` 的修改.
 
 ```bash
-D:\Environment\miniconda\envs\Proj\python.exe kettle_training/test_finetuned.py
+D:\Environment\miniconda\envs\Proj\python.exe KettleTraining/test_finetuned.py
 ```
 
 ### 检测结果可视化
@@ -174,16 +174,16 @@ D:\Environment\miniconda\envs\Proj\python.exe kettle_training/test_finetuned.py
 
 | 文件 | 说明 |
 |------|------|
-| `kettle_training/collect_kettle_data.py` | 数据采集脚本 |
-| `kettle_training/label_tool.py` | OpenCV 标注工具 |
-| `kettle_training/train_kettle.py` | 训练脚本 (YOLOv8n) |
-| `kettle_training/test_finetuned.py` | 独立测试脚本 |
-| `kettle_training/dataset.yaml` | 数据集配置 |
+| `KettleTraining/collect_kettle_data.py` | 数据采集脚本 |
+| `KettleTraining/label_tool.py` | OpenCV 标注工具 |
+| `KettleTraining/train_kettle.py` | 训练脚本 (YOLOv8n) |
+| `KettleTraining/test_finetuned.py` | 独立测试脚本 |
+| `KettleTraining/dataset.yaml` | 数据集配置 |
 | `model/kettle_yolov8n_finetune.pt` | 训练好的模型 |
 
 ## 注意事项
 
-1. 训练时确保 `kettle_training/images/` 与 `kettle_training/labels/` 文件数一致, 否则 Ultralytics 会跳过无标签图片
+1. 训练时确保 `KettleTraining/images/` 与 `KettleTraining/labels/` 文件数一致, 否则 Ultralytics 会跳过无标签图片
 2. 每次训练前建议删除旧的 `runs/train/kettle_finetune/` 目录, 避免混淆
 3. `labels.cache` 是 Ultralytics 自动生成的标签缓存, 已在 `.gitignore` 中忽略, 可安全删除
 4. YOLOv8n 在 MX450 上约 9 分钟跑完 50 epochs, 比 v8m 快约 3 倍

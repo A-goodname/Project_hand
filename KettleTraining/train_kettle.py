@@ -5,8 +5,8 @@
 基于 COCO 预训练的 YOLOv8n, 用自采 50 张水壶照片微调.
 使用 CUDA 加速训练.
 
-使用方法:
-    python kettle_training/train_kettle.py
+    使用方法:
+        python KettleTraining/train_kettle.py
 
 训练完成后:
     - 最佳模型: runs/train/kettle_finetune/weights/best.pt
@@ -44,7 +44,7 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
     print("[INFO] Starting training, save to: %s" % save_dir)
     model.train(
-        data=os.path.join(_project_root, "kettle_training", "dataset.yaml"),
+        data=os.path.join(_project_root, "KettleTraining", "dataset.yaml"),
         epochs=50,
         imgsz=640,
         batch=8,

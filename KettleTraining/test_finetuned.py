@@ -5,8 +5,8 @@
 独立测试脚本, 不依赖 config.yaml / yolo_world_detect.py 的修改.
 直接加载 kettle_yolov8n_finetune.pt 进行实时检测.
 
-使用方法:
-    python kettle_training/test_finetuned.py
+    使用方法:
+        python KettleTraining/test_finetuned.py
 
 按 'q' 键退出.
 """

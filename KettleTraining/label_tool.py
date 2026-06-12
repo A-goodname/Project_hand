@@ -6,7 +6,7 @@
 类别: kettle (class_id=0)
 
 使用方法:
-1. 运行: python kettle_training/label_tool.py
+1. 运行: python KettleTraining/label_tool.py
 2. 鼠标拖动画框 (左上→右下)
 3. 按 [Space] 保存并跳转到下一张
 4. 按 [d] 跳过当前图片

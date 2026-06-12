@@ -2,12 +2,12 @@
 """
 RealSense 水壶数据集采集脚本
 ============================
-采集水壶不同角度的彩色图像, 保存至 kettle_training/images/.
+采集水壶不同角度的彩色图像, 保存至 KettleTraining/images/.
 多角度要求: 旋转 0-360 度, 俯仰 ±30 度, 不同距离 0.3-1.0m.
 
 使用方法:
 1. 连接 Intel RealSense 相机
-2. 运行: python kettle_training/collect_kettle_data.py
+2. 运行: python KettleTraining/collect_kettle_data.py
 3. [Space] 保存当前帧, [q] 退出
 """
 
@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
-# 保存目录: kettle_training/images/
+# 保存目录: KettleTraining/images/
 SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
 os.makedirs(SAVE_DIR, exist_ok=True)
 

@@ -137,9 +137,9 @@
 - 输出文件: `calibration_result.yaml` (含全部方法), `board_in_base.yaml` (仅最佳方法的标定板位姿)
 - 数据采集: `collect_data.py`, 角点可视化: `visualize_corners.py`
 
-## Kettle_training 模块
+## KettleTraining 模块
 
-存放路径: `kettle_training/`
+存放路径: `KettleTraining/`
 
 - 独立的水壶检测模型微调流程, 不依赖项目其他模块的配置文件
 - 使用 YOLOv8n (轻量级) 替代 YOLO-World 进行水壶零样本检测

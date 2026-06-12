@@ -30,6 +30,6 @@ doc/*.pdf
 _commit_msg*.txt
 
 # dataset
-kettle_training/labels/
-kettle_training/labels.cache
+KettleTraining/labels/
+KettleTraining/labels.cache
 runs/
