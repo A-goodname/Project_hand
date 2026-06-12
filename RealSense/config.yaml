@@ -14,6 +14,7 @@ depth:
 
 smoothing:
   alpha: 0.4                        # PositionSmoother 位置 EMA 时域平滑系数
+  pose_alpha: 0.3                   # PoseSmoother 位姿 EMA 时域平滑系数 (含旋转矩阵)
 
 resolution:
   width: 640                        # 图像宽度

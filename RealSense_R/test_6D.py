@@ -192,7 +192,8 @@ class RealSenseYOLO6DPoseDetector(BaseRealSenseDetector):
     # ------------------------------------------------------------
     def detect_targets(self, color_image):
         """
-        覆盖基类 detect_targets, 增加 YOLO 日志写入 (兼容原 test_6D 行为).
+        覆盖基类 detect_targets, 提供 5 元素返回格式 (兼容原 test_6D 行为).
+        与基类逻辑一致, 无额外日志写入.
         """
         # 调用基类推理
         results = self.model(
