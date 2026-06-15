@@ -194,7 +194,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 |------|-----|------|
 | `enabled` | true | 总开关 |
 | `spout_offset.t_offset` | [-0.06, 0.17, 0.0] | 壶嘴在抓取末端系下的偏移 (m), 已实际测量 |
-| `gripper_offset.t_cup_offset` | [0.06, -0.04, 0.08] | 抓水杯的夹爪平移偏移 (m) |
+| `gripper_offset.t_cup_offset` | [0.06, -0.04, 0.08] | 抓水杯的灵巧手平移偏移 (m) |
 | `gripper_offset.r_cup_offset` | [0, 0, -90] | 灵巧手安装角度 (度) |
 | `pre_offset.t_offset` | [-0.0, 0.0, -0.05] | 预抓取平移偏移 (m) |
 | `target_offset.t_offset` | [-0.2, 0, 0] | 递杯平移偏移 (m) |

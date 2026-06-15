@@ -20,7 +20,7 @@ estun 把手+水杯融合位姿转换验证 Demo
   - logs/estun_handle_cup_demo_*.log   : 6 个位姿 + 中间结果
 
 流程:
-  [Step 1] 加载配置 (标定矩阵 / 夹爪偏移 / 水杯偏移)
+  [Step 1] 加载配置 (标定矩阵 / 灵巧手偏移 / 水杯偏移)
   [Step 2] 初始化 Handle 检测器 (启动 pipeline)
   [Step 3] 初始化 Cup 检测器 (不启动 pipeline)
   [Step 4] 主循环: 同步检测 Handle + Cup → cam2ee → 稳定化

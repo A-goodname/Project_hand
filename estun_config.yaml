@@ -1,5 +1,5 @@
 # ESTUN 机器人配置（从 RealSense_R/config.yaml 独立）
-# 夹爪偏移约定：先平移 t_offset，再绕 Z 轴旋转 r_offset.C
+# 灵巧手偏移约定：先平移 t_offset，再绕 Z 轴旋转 r_offset.C
 # p_gripper = R_z(C)^T @ (p_flange - t_offset)
 
 estun:
@@ -24,14 +24,14 @@ estun:
 
   grasp_direction: "right"       # 抓取方向: right(右手/掌心向左) | left(左手/掌心向右)
 
-  # --- 瓶身夹爪偏移 (estun_run / estun_epiceye_run / 各 demo 使用) ---
+  # --- 瓶身灵巧手偏移 (estun_run / estun_epiceye_run / 各 demo 使用) ---
   gripper_offset:
     t_offset: [0.055, -0.045, 0.075]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转,考虑从安装位置旋转到C=0时的末端坐标（末端一起旋转）
     r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}; 当C = -90时, X增加=灵巧手向下, Y增加=灵巧手向左, Z增加=灵巧手向后
 
   # --- 把手抓取 (estun_handle_run / estun_handle_demo 使用) ---
   handle_grasp:
-    gripper_offset:                    # 把手夹爪偏移 (独立于瓶身)
+    gripper_offset:                    # 把手灵巧手偏移 (独立于瓶身)
       t_handle_offset: [0.04, -0.03, 0.078]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
       r_handle_offset: [0, 0, -90]               # 灵巧手安装角度, 同瓶身
     pre_offset:
@@ -50,7 +50,7 @@ estun:
     enabled: true                           # 总开关
     spout_offset:                           # [必填] 壶嘴相对把手抓取点的偏移 (倒水用)
       t_offset: [-0.06, 0.17, 0.0]          # (x, y, z) m, 需物理测量后填写
-    gripper_offset:                         # 抓水杯的夹爪偏移
+    gripper_offset:                         # 抓水杯的灵巧手偏移
       t_cup_offset: [0.0, 0.0, 0.08]        # (x, y, z) m, 需微调
       r_cup_offset: [0, 0, -90]             # (A, B, C) 度, 灵巧手安装角度
     pre_offset:                             # 末端系下预抓取偏移

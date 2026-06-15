@@ -21,7 +21,7 @@ ESTUN EpicEye 6D 抓取系统
   5. 机器人作为 TCP 客户端连接本服务器
 
 输入:
-  - estun_config.yaml               : TCP 服务器 / 灵巧手 / 夹爪偏移 / 抓取模式
+  - estun_config.yaml               : TCP 服务器 / 灵巧手 / 灵巧手偏移 / 抓取模式
   - EpicEye/epiceye_config.yaml     : 相机 IP / 灰度模型 / 深度 / 手眼矩阵
 
 输出:
@@ -39,7 +39,7 @@ ESTUN EpicEye 6D 抓取系统
 
   子线程 handle_client (daemon=True):
     [Phase A] 接收机器人初始位姿 (5s 超时)
-    [Phase B] 轮询 last_known_pose -> 手眼矩阵 -> 夹爪补偿 -> 基坐标 -> 发送
+    [Phase B] 轮询 last_known_pose -> 手眼矩阵 -> 灵巧手补偿 -> 基坐标 -> 发送
     [Phase C] CRP 指令循环: GRIP / RELEASE
 
 架构:
@@ -177,7 +177,7 @@ def load_epiceye_cam2ee():
     t = T[:3, 3]
     t_str = f"({t[0]:.4f}, {t[1]:.4f}, {t[2]:.4f})"
     print(f"[INFO] 已加载手眼矩阵 (cam->ee), 平移: {t_str} m")
-    print("[INFO] 注意: 还需叠加 gripper_offset 变换才得到最终夹爪 TCP 位姿")
+    print("[INFO] 注意: 还需叠加 gripper_offset 变换才得到最终灵巧手 TCP 位姿")
     return T
 
 
@@ -436,8 +436,8 @@ def handle_client(conn, addr, T_cam2ee, gripper_t_offset, gripper_r_offset, orie
         conn              : socket, 客户端连接
         addr              : (str, int), 客户端地址
         T_cam2ee          : np.ndarray, 4x4 相机 -> 末端法兰变换矩阵
-        gripper_t_offset  : np.ndarray, 夹爪平移偏移
-        gripper_r_offset  : np.ndarray, 夹爪旋转偏移
+        gripper_t_offset  : np.ndarray, 灵巧手平移偏移
+        gripper_r_offset  : np.ndarray, 灵巧手旋转偏移
         orientation_mode  : str, 抓取模式
     """
     print(f"[INFO] 客户端已连接: {addr}", flush=True)

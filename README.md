@@ -37,7 +37,7 @@ pip install -r requirements.txt
 | `estun_run.py` | **主入口 (RealSense实时版-瓶身)**，整合检测→位姿转换→TCP服务器→灵巧手控制 |
 | `estun_epiceye_run.py` | **主入口 (EpicEye单次触发版-瓶身)**，EpicEye相机单次拍照→6D抓取 |
 | `estun_handle_run.py` | **主入口 (RealSense Handle 6D版)**，微调YOLOv8n+SAM2+扫描线分离把手→3点位姿 |
-| `estun_config.yaml` | 机器人IP、灵巧手串口、夹爪偏移、抓取模式、把手偏移等配置 |
+| `estun_config.yaml` | 机器人IP、灵巧手串口、灵巧手偏移、抓取模式、把手偏移等配置 |
 | `utils_shared.py` | 共享工具库：坐标变换工具 + 灵巧手控制，瓶身入口共用 |
 | `estun_demo.py` | 演示脚本：RealSense版位姿转换链路验证 (瓶身, 无硬件依赖) |
 | `estun_epiceye_demo.py` | 演示脚本：EpicEye版位姿转换链路验证 (瓶身, 无硬件依赖) |

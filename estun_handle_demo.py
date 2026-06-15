@@ -22,7 +22,7 @@ estun 把手位姿转换验证 Demo (RealSense Handle 版)
   - (fine_tune_mode) 建议的新 t_handle_offset 值
 
 流程:
-  [Step 1] 加载配置 (标定矩阵 / 夹爪偏移 / fixed_abc)
+  [Step 1] 加载配置 (标定矩阵 / 灵巧手偏移 / fixed_abc)
   [Step 2] 初始化 RealSense 相机 + Handle6D 检测器
   [Step 3] 主循环: get_frames -> detect_handle_6d -> cam2ee -> 稳定化
   [Step 4] 控制台输入机械臂当前位姿 [X,Y,Z,A,B,C]
@@ -32,7 +32,7 @@ estun 把手位姿转换验证 Demo (RealSense Handle 版)
 
 orientation_mode 说明:
   - vertical: 末端 Z 轴水平指向物体, 沿瓶身轴线竖直向下 (默认)
-  - free:     仅叠加夹爪安装偏移, 不做方向修正
+  - free:     仅叠加灵巧手安装偏移, 不做方向修正
   - fixed:    P1/P2 姿态使用 estun_config.yaml 中 fixed_abc 配置的固定值,
               P3 在固定姿态上叠加 target 旋转; 位置仍由 3D 检测提供;
               适用于 PCA 失效时提供兜底姿态

@@ -13,14 +13,14 @@ estun 位姿转换验证 Demo (RealSense 版)
 
 输入:
   - RealSense_R/config.yaml           : 相机 / YOLO 模型配置
-  - estun_config.yaml                 : 夹爪偏移 / 抓取模式
+  - estun_config.yaml                 : 灵巧手偏移 / 抓取模式
   - calib_data/calibration_result.yaml: 手眼标定矩阵
 
 输出:
   - logs/estun_demo_*.log             : 转换结果日志
 
 流程:
-  [Step 1] 加载配置 (标定矩阵 / 夹爪偏移 / YOLO 模型)
+  [Step 1] 加载配置 (标定矩阵 / 灵巧手偏移 / YOLO 模型)
   [Step 2] 初始化 RealSense 相机 + YOLO 检测器
   [Step 3] 主循环: get_frames -> YOLO -> PCA 6D -> 平滑 -> 稳定化
   [Step 4] 控制台输入机械臂当前位姿 [X,Y,Z,A,B,C]

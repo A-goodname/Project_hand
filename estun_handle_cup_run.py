@@ -157,7 +157,7 @@ def load_cam2ee(yaml_path):
     path = Path(yaml_path)
     if not path.exists():
         print(f"[WARN] 手眼标定结果未找到: {yaml_path}")
-        print("[WARN] 将直接发送相机坐标系位姿 (无夹爪变换)")
+        print("[WARN] 将直接发送相机坐标系位姿 (无灵巧手变换)")
         return I
 
     with open(yaml_path, "r", encoding="utf-8") as f:
@@ -188,7 +188,7 @@ def load_cam2ee(yaml_path):
 
     t = T[:3, 3]
     print(f"[INFO] 已加载标定矩阵: {use_method}.T_cam_to_gripper (cam->ee), 平移: {t} m")
-    print("[INFO] 注意: 还需叠加 handle_gripper_offset 才得到最终夹爪 TCP 位姿")
+    print("[INFO] 注意: 还需叠加 handle_gripper_offset 才得到最终灵巧手 TCP 位姿")
     return T
 
 

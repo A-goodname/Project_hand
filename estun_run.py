@@ -30,7 +30,7 @@ ESTUN RealSense 6D 抓取系统
 
   子线程 handle_client (daemon=True):
     [Phase A] 接收机器人初始位姿 (5s 超时)
-    [Phase B] 轮询 last_known_pose -> 夹爪偏移补偿 -> 基坐标转换 -> 发送目标
+    [Phase B] 轮询 last_known_pose -> 灵巧手偏移补偿 -> 基坐标转换 -> 发送目标
     [Phase C] CRP 指令循环: GRIP / RELEASE
 
 架构:
@@ -116,8 +116,8 @@ def load_cam2ee(yaml_path):
     """
     从标定结果加载 相机 -> 末端法兰 变换矩阵 (4x4 齐次矩阵)
 
-    注意: 此矩阵是 cam -> 末端法兰 (ee), 不是 cam -> 夹爪 TCP
-    还需叠加 gripper_offset 变换才能得到最终夹爪 TCP 位姿
+    注意: 此矩阵是 cam -> 末端法兰 (ee), 不是 cam -> 灵巧手 TCP
+    还需叠加 gripper_offset 变换才能得到最终灵巧手 TCP 位姿
 
     读取 calibration_result.yaml 中 use_method 指定的方法对应的
     T_cam_to_gripper (实际含义是 cam -> ee)
@@ -132,7 +132,7 @@ def load_cam2ee(yaml_path):
     path = Path(yaml_path)
     if not path.exists():
         print(f"[WARN] 手眼标定结果未找到: {yaml_path}")
-        print("[WARN] 将直接发送相机坐标系位姿 (无夹爪变换)")
+        print("[WARN] 将直接发送相机坐标系位姿 (无灵巧手变换)")
         return I
 
     with open(yaml_path, "r", encoding="utf-8") as f:
@@ -164,7 +164,7 @@ def load_cam2ee(yaml_path):
     t = T[:3, 3]
     t_str = f"({t[0]:.4f}, {t[1]:.4f}, {t[2]:.4f})"
     print(f"[INFO] 已加载标定矩阵: {use_method}.T_cam_to_gripper (cam->ee), 平移: {t_str} m")
-    print("[INFO] 注意: 还需叠加 gripper_offset 变换才得到最终夹爪 TCP 位姿")
+    print("[INFO] 注意: 还需叠加 gripper_offset 变换才得到最终灵巧手 TCP 位姿")
     return T
 
 
@@ -309,7 +309,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
         return
 
     # ---- [Phase B] 等待主循环产生稳定位姿 -> 基坐标转换 -> 补偿偏移 (30s 超时) ----
-    # 预计算夹爪偏移变换 (常量, 在循环外执行一次)
+    # 预计算灵巧手偏移变换 (常量, 在循环外执行一次)
     _, t_fl2gr = compute_gripper_offset_transform(GRIPPER_T_OFFSET, GRIPPER_R_OFFSET)
     print("[INFO] 等待稳定目标位姿...", flush=True)
     target_sent = False
@@ -440,7 +440,7 @@ def main():
         print("[INFO] 使用单位矩阵 (直接发送相机坐标系位姿)")
     else:
         print("[INFO] 标定矩阵已加载, 位姿将转换到末端坐标系")
-        print("[INFO] 后续还将叠加 gripper_offset 得到夹爪 TCP 位姿")
+        print("[INFO] 后续还将叠加 gripper_offset 得到灵巧手 TCP 位姿")
 
     # ---- [Init 2] 初始化灵巧手 (OmniHand / 模拟) ----
     init_hand()

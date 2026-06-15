@@ -1,0 +1,91 @@
+ESTUN 把手+水杯融合抓取示教器代码
+===============================
+与 estun_handle_cup_run.py 配合使用. 本机分两阶段发送共 6 个位姿:
+  Phase 1 — Handle P1/P2/P3_pour
+  Phase 2 — Cup P1/P2/P3
+
+输入:
+  位姿 H P1 (抓取点)      : 起始标记 H P1:, 结束标记 )
+  位姿 H P2 (预抓取点)     : 起始标记 H P2:, 结束标记 ]
+  位姿 H P3 (倒水点)       : 起始标记 H P3:, 结束标记 }
+  位姿 C P1 (抓取点)       : 起始标记 C P1:, 结束标记 )
+  位姿 C P2 (预抓取点)     : 起始标记 C P2:, 结束标记 ]
+  位姿 C P3 (递杯点)       : 起始标记 C P3:, 结束标记 }
+
+单位: 位置 m, 角度 deg
+
+流程:
+  Phase 1 — Handle:
+    MovL H P2 -> SocketSendStr('PREGRIP') -> MovL H P1 ->
+    SocketSendStr('GRIPDONE') -> MovL H P3(倒水) -> Wait 1s ->
+    MovL H P1 -> SocketSendStr('PREGRIP') -> MovL H P2 ->
+    SocketSendStr('RESET') -> SocketSendStr('CUP') -> 等待回复
+  Phase 2 — Cup:
+    MovL C P2 -> SocketSendStr('RELEASE') -> MovL C P1 ->
+    SocketSendStr('GRIP') -> MovL C P3(递杯) -> Wait 1s ->
+    MovL C P1 -> SocketSendStr('RELEASE') -> MovL C P2 ->
+    SocketSendStr('RESET') -> MovL Home
+
+SocketCreat(socketflag)
+if socketflag != 0
+    return
+while true
+    GetCurCpos P0
+    socketstr1 = CposTostr(P0)
+    SocketSendStr(socketstr1)
+    if socketflag == 0
+        SocketReadStr(sock, str1, 2, socketflag, "", "")
+        if socketflag == 0
+            # ---- Phase 1: Handle 三个位姿 ----
+            H_P1 = TranStrToCpos(str1, ",", H_P1, flag, "(", ")", "deg", "m")
+            H_P2 = TranStrToCpos(str1, ",", H_P2, flag, "[", "]", "deg", "m")
+            H_P3 = TranStrToCpos(str1, ",", H_P3, flag, "{", "}", "deg", "m")
+
+            if flag == 0
+                # === Handle 流程 ===
+                MovL H_P2                    # 到预抓取点
+                SocketSendStr('PREGRIP')     # → 本机: 灵巧手 PREGRIP
+                Wait 1s
+                MovL H_P1                    # 到抓取点
+                SocketSendStr('GRIPDONE')    # → 本机: 灵巧手 GRIPDONE
+                Wait 1s
+                MovL H_P3                    # 到倒水位置
+                Wait 2s                     # 倒水延时
+                MovL H_P1                    # 回到抓取点
+                SocketSendStr('PREGRIP')     # → 本机: 灵巧手 PREGRIP
+                Wait 1s
+                MovL H_P2                    # 回到预抓取点
+                SocketSendStr('RESET')       # → 本机: 灵巧手 RESET
+                Wait 1s
+
+                # ---- 通知本机切换到 Cup 阶段 ----
+                SocketSendStr('CUP')         # → 本机: 请求 Cup 位姿
+                Wait 1s
+
+                # ---- Phase 2: Cup 三个位姿 ----
+                SocketReadStr(sock, str2, 2, socketflag, "", "")
+                if socketflag == 0
+                    C_P1 = TranStrToCpos(str2, ",", C_P1, flag, "(", ")", "deg", "m")
+                    C_P2 = TranStrToCpos(str2, ",", C_P2, flag, "[", "]", "deg", "m")
+                    C_P3 = TranStrToCpos(str2, ",", C_P3, flag, "{", "}", "deg", "m")
+
+                    if flag == 0
+                        # === Cup 流程 ===
+                        MovL C_P2                    # 到预抓取点
+                        SocketSendStr('RELEASE')     # → 本机: 灵巧手 PAPER(张开)
+                        Wait 1s
+                        MovL C_P1                    # 到抓取点
+                        SocketSendStr('GRIP')        # → 本机: 灵巧手 GRIP(夹紧)
+                        Wait 1s
+                        MovL C_P3                    # 到递杯位置
+                        Wait 2s                     # 等人取杯
+                        MovL C_P1                    # 回到抓取点
+                        SocketSendStr('RELEASE')     # → 本机: 灵巧手 PAPER(释放)
+                        Wait 1s
+                        MovL C_P2                    # 回到预抓取点
+                        SocketSendStr('RESET')       # → 本机: 灵巧手 RESET
+                        Wait 1s
+                        MovL Home                    # 回原点
+                        SocketClose
+                        Return
+    Wait 1s

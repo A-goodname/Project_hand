@@ -91,7 +91,7 @@ def transform_pose_to_base(pose_ee, robot_xyz, robot_ABC):
 
 def compute_gripper_offset_transform(t_offset_std, r_offset):
     """
-    计算末端法兰 -> 夹爪 TCP 的变换矩阵
+    计算末端法兰 -> 灵巧手 TCP 的变换矩阵
 
     t_offset_std 是 C=0 (右手大拇指向上) 时的标准平移偏移
     根据实际 r_offset.C 将标准偏移旋转到当前方向:
@@ -106,8 +106,8 @@ def compute_gripper_offset_transform(t_offset_std, r_offset):
         r_offset     : np.ndarray, 旋转偏移 [A, B, C], 度 (A=B=0)
 
     返回:
-        R_fl2gr : np.ndarray, 3x3 旋转矩阵 (法兰 -> 夹爪)
-        t_fl2gr : np.ndarray, 3x1 平移向量 (法兰 -> 夹爪, 已旋转到实际方向)
+        R_fl2gr : np.ndarray, 3x3 旋转矩阵 (法兰 -> 灵巧手)
+        t_fl2gr : np.ndarray, 3x1 平移向量 (法兰 -> 灵巧手, 已旋转到实际方向)
     """
     R = euler_to_rotation_matrix(*r_offset, order="zyx")  # = R_z(C)
     t_effective = R @ np.array(t_offset_std, dtype=float)
@@ -125,7 +125,7 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None,
         R_obj(:,2) = Z轴 (指向相机)
 
     模式说明:
-        free      : 仅叠加固定夹爪安装偏移 Rz(C)
+        free      : 仅叠加固定灵巧手安装偏移 Rz(C)
         vertical  : 末端XY平面与基坐标系Z轴平行,
                     ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
         horizontal: 暂未实现
@@ -161,7 +161,7 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None,
 
     # 第二步: 按模式计算
     if mode == "free":
-        # 仅叠加固定夹爪安装偏移,不做方向修正
+        # 仅叠加固定灵巧手安装偏移,不做方向修正
         R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
         return R @ R_offset.T
 
