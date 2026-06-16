@@ -384,8 +384,6 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
             c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
             cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
             cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
-            if GRASP_DIRECTION == "right" and not (-100 <= cC1 <= -80):
-                cC1 = -90.0
 
             c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
             c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
