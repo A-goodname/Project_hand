@@ -13,7 +13,7 @@ estun 位姿转换验证 Demo (RealSense 版)
 
 输入:
   - RealSense_R/config.yaml           : 相机 / YOLO 模型配置
-  - estun_config.yaml                 : 灵巧手偏移 / 抓取模式
+  - Estun/estun_config.yaml           : 灵巧手偏移 / 抓取模式
   - calib_data/calibration_result.yaml: 手眼标定矩阵
 
 输出:
@@ -37,13 +37,12 @@ from datetime import datetime
 from typing import Any, Optional, Tuple
 
 
-# ---- 将项目根目录加入 sys.path ----
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入位姿转换工具 (纯 numpy, 无硬件依赖) ----
-from utils_shared import (
+from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
     compute_gripper_offset_transform,
@@ -65,7 +64,7 @@ MODEL_NAME = os.path.join(_project_root, _cfg["model"]["name"])
 CONF_THRESHOLD = _cfg["model"]["conf_threshold"]
 
 # ---- 加载 ESTUN 配置 ----
-_estun_cfg_path = os.path.join(_project_root, "estun_config.yaml")
+_estun_cfg_path = os.path.join(_project_root, "Estun", "estun_config.yaml")
 if not os.path.exists(_estun_cfg_path):
     print(f"[FATAL] ESTUN 配置文件未找到: {_estun_cfg_path}")
     sys.exit(1)

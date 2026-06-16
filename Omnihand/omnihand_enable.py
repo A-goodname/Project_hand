@@ -2,10 +2,15 @@
 """
 交互式使能/失能/校准控制
 """
-try:
-    from .omnihand_usb_serial import OmniHandSerial  # 作为包被导入时
-except ImportError:
-    from omnihand_usb_serial import OmniHandSerial   # 直接运行脚本时
+
+import os
+import sys
+
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from Omnihand.omnihand_usb_serial import OmniHandSerial
 import time
 
 PORT = "COM5"           # 串口号 (Windows: COMx, Linux: /dev/ttyUSB0)

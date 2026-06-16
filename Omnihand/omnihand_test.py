@@ -20,6 +20,10 @@ import os
 import time
 import traceback
 
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 # Windows GBK 编码兼容: 替换 emoji 为普通字符
 if sys.platform == "win32" and os.environ.get("PYTHONIOENCODING") is None:
     import io
@@ -44,20 +48,12 @@ HOME_POS = 2048
 
 # ============================ 导入 ============================
 
-try:
-    from .omnihand_usb_serial import (
-        OmniHandSerial,
-        OmniHandError,
-        TimeoutError,
-        ProtocolError,
-    )
-except ImportError:
-    from omnihand_usb_serial import (
-        OmniHandSerial,
-        OmniHandError,
-        TimeoutError,
-        ProtocolError,
-    )
+from Omnihand.omnihand_usb_serial import (
+    OmniHandSerial,
+    OmniHandError,
+    TimeoutError,
+    ProtocolError,
+)
 
 
 # ============================ 辅助函数 ============================

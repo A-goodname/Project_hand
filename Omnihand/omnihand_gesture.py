@@ -30,14 +30,17 @@ OmniHand O10 手势控制模块
         hand.do_gesture(Gesture.MIDDLE)   # 竖中指
 """
 
+import os
+import sys
 import time
 from enum import Enum
 from typing import List, Dict, Optional, Tuple
 
-try:
-    from .omnihand_usb_serial import OmniHandSerial  # 作为包被导入时 (from Omnihand.xxx)
-except ImportError:
-    from omnihand_usb_serial import OmniHandSerial   # 直接运行脚本时 (python xxx.py)
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from Omnihand.omnihand_usb_serial import OmniHandSerial
 
 
 # ============================================================================

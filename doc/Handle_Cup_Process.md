@@ -188,7 +188,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 
 ## 7. 配置参数说明
 
-### 7.1 `estun_config.yaml` — cup_grasp 段
+### 7.1 `Estun/estun_config.yaml` — cup_grasp 段
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
@@ -251,7 +251,7 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 
 ### 8.4 灵巧手手势映射 (函数式重构)
 
-2026-06-11 将 `HandController` 类 (位于 `estun_handle_run.py` / `estun_handle_cup_run.py` 中) 重构为 `utils_shared.py` 的函数式接口, 统一三套抓取流程:
+2026-06-11 将 `HandController` 类 (位于 `Estun/estun_handle_run.py` / `Estun/estun_handle_cup_run.py` 中) 重构为 `Estun/utils_shared.py` 的函数式接口, 统一三套抓取流程:
 
 | 函数 | 手势 | 适用场景 |
 |------|------|----------|
@@ -263,9 +263,9 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 | `release_object()` | PAPER | 水瓶/水杯释放/预抓取张开 |
 | `disable_hand()` | RESET→disable→close | 关闭灵巧手 |
 
-移除 `estun_handle_run.py` 和 `estun_handle_cup_run.py` 中的 `HandController` 类及 `OmniHandGesture` 直接依赖, 统一从 `utils_shared` 导入.
+移除 `Estun/estun_handle_run.py` 和 `Estun/estun_handle_cup_run.py` 中的 `HandController` 类及 `OmniHandGesture` 直接依赖, 统一从 `Estun/utils_shared` 导入.
 
 ### 8.5 当前状态
 
 - `test_cup_6D.py`: 已验证通过, Y 轴方向固定, 杯口/倒水位置稳定
-- `estun_handle_cup_demo.py / estun_handle_cup_run.py`: 已创建但未经实际相机运行验证, 下次开机后需测试双检测器同步及 6 点位姿输出
+- `Estun/estun_handle_cup_demo.py / Estun/estun_handle_cup_run.py`: 已创建但未经实际相机运行验证, 下次开机后需测试双检测器同步及 6 点位姿输出

@@ -8,12 +8,12 @@ ESTUN RealSense 6D 抓取系统
 使用说明:
   1. 连接 RealSense 相机
   2. 连接灵巧手 (USB 串口)
-  3. 运行 python estun_run.py
+  3. 运行 python Estun/estun_run.py
   4. 机器人作为 TCP 客户端连接本服务器
 
 输入:
   - RealSense_R/config.yaml         : 相机 / YOLO 模型配置
-  - estun_config.yaml               : ESTUN 机器人 / 灵巧手 / 标定配置
+  - Estun/estun_config.yaml         : ESTUN 机器人 / 灵巧手 / 标定配置
   - calib_data/calibration_result.yaml : 手眼标定矩阵 (可选)
 
 输出:
@@ -55,13 +55,13 @@ import yaml
 
 
 # ---- 将项目根目录加入 sys.path,以导入 RealSense_R / Omnihand 包 ----
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入自定义包 ----
 from RealSense_R.test_6D import RealSenseYOLO6DPoseDetector
-from utils_shared import (
+from Estun.utils_shared import (
     euler_to_rotation_matrix, transform_pose_to_base,
     compute_gripper_offset_transform, compute_grasp_rotation,
     post_correct_angles,
@@ -80,7 +80,7 @@ MODEL_NAME = os.path.join(_project_root, _cfg["model"]["name"])
 CONF_THRESHOLD = _cfg["model"]["conf_threshold"]
 
 # ---- 加载 ESTUN 配置 (独立文件) ----
-_estun_cfg_path = os.path.join(_project_root, "estun_config.yaml")
+_estun_cfg_path = os.path.join(_project_root, "Estun", "estun_config.yaml")
 if not os.path.exists(_estun_cfg_path):
     print(f"[FATAL] ESTUN 配置文件未找到: {_estun_cfg_path}")
     sys.exit(1)

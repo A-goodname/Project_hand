@@ -1,5 +1,6 @@
 camera:
   name: Intel RealSense D435i
+  serial: "342222071364"
   resolution: [640, 480]
 
 depth:

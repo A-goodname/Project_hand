@@ -17,11 +17,11 @@ ESTUN EpicEye 6D 抓取系统
   1. 连接 EpicEye 相机
   2. 连接灵巧手 (USB 串口)
   3. 确认 EpicEye/epiceye_config.yaml 中 handeye_matrix 已正确填入
-  4. 运行 python estun_epiceye_run.py
+  4. 运行 python Estun/estun_epiceye_run.py
   5. 机器人作为 TCP 客户端连接本服务器
 
 输入:
-  - estun_config.yaml               : TCP 服务器 / 灵巧手 / 灵巧手偏移 / 抓取模式
+  - Estun/estun_config.yaml         : TCP 服务器 / 灵巧手 / 灵巧手偏移 / 抓取模式
   - EpicEye/epiceye_config.yaml     : 相机 IP / 灰度模型 / 深度 / 手眼矩阵
 
 输出:
@@ -63,23 +63,19 @@ from ultralytics import YOLO
 
 
 # ---- 将项目根目录加入 sys.path ----
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# ---- 从 utils_shared 导入共享辅助函数 ----
-from utils_shared import (
+# ---- 导入自定义包 ----
+from EpicEye.epiceye_camera import EpicEyeCamera
+from EpicEye.test_6D import _parse_ply, _filter_ply_by_bbox, _list_captures
+from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
     compute_gripper_offset_transform,
     compute_grasp_rotation,
     post_correct_angles,
-)
-
-# ---- 导入自定义包 ----
-from EpicEye.epiceye_camera import EpicEyeCamera
-from EpicEye.test_6D import _parse_ply, _filter_ply_by_bbox, _list_captures
-from utils_shared import (
     init_hand, grip_object, release_object, disable_hand,
 )
 
@@ -93,7 +89,7 @@ stop_event = threading.Event()
 # =============================================================
 
 # ---- 加载 ESTUN 配置 ----
-_estun_cfg_path = os.path.join(_project_root, "estun_config.yaml")
+_estun_cfg_path = os.path.join(_project_root, "Estun", "estun_config.yaml")
 if not os.path.exists(_estun_cfg_path):
     print(f"[FATAL] ESTUN 配置文件未找到: {_estun_cfg_path}")
     sys.exit(1)

@@ -13,7 +13,7 @@ estun 把手+水杯融合位姿转换验证 Demo
 
 输入:
   - RealSense_R/config.yaml            : 相机 / YOLO / SAM / cup 配置
-  - estun_config.yaml                  : 机器人 / 把手偏移 / 水杯偏移配置
+  - Estun/estun_config.yaml            : 机器人 / 把手偏移 / 水杯偏移配置
   - calib_data/calibration_result.yaml : 手眼标定矩阵
 
 输出:
@@ -39,12 +39,12 @@ from typing import Any, Optional, Tuple
 
 
 # ---- 将项目根目录加入 sys.path ----
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入位姿转换工具 ----
-from utils_shared import (
+from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
     compute_gripper_offset_transform,
@@ -64,7 +64,7 @@ with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
 # ---- 加载 ESTUN 配置 ----
-_estun_cfg_path = os.path.join(_project_root, "estun_config.yaml")
+_estun_cfg_path = os.path.join(_project_root, "Estun", "estun_config.yaml")
 if not os.path.exists(_estun_cfg_path):
     print(f"[FATAL] ESTUN 配置文件未找到: {_estun_cfg_path}")
     sys.exit(1)

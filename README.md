@@ -34,16 +34,18 @@ pip install -r requirements.txt
 
 | 路径 | 说明 |
 |------|------|
-| `estun_run.py` | **主入口 (RealSense实时版-瓶身)**，整合检测→位姿转换→TCP服务器→灵巧手控制 |
-| `estun_epiceye_run.py` | **主入口 (EpicEye单次触发版-瓶身)**，EpicEye相机单次拍照→6D抓取 |
-| `estun_handle_run.py` | **主入口 (RealSense Handle 6D版)**，微调YOLOv8n+SAM2+扫描线分离把手→3点位姿 |
-| `estun_config.yaml` | 机器人IP、灵巧手串口、灵巧手偏移、抓取模式、把手偏移等配置 |
-| `utils_shared.py` | 共享工具库：坐标变换工具 + 灵巧手控制，瓶身入口共用 |
-| `estun_demo.py` | 演示脚本：RealSense版位姿转换链路验证 (瓶身, 无硬件依赖) |
-| `estun_epiceye_demo.py` | 演示脚本：EpicEye版位姿转换链路验证 (瓶身, 无硬件依赖) |
-| `estun_handle_demo.py` | 演示脚本：RealSense Handle版位姿转换链路验证 (把手, 无硬件依赖) |
-| `estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
-| `estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令 |
+| `Estun/estun_run.py` | **主入口 (RealSense实时版-瓶身)**，整合检测→位姿转换→TCP服务器→灵巧手控制 |
+| `Estun/estun_epiceye_run.py` | **主入口 (EpicEye单次触发版-瓶身)**，EpicEye相机单次拍照→6D抓取 |
+| `Estun/estun_handle_run.py` | **主入口 (RealSense Handle 6D版)**，微调YOLOv8n+SAM2+扫描线分离把手→3点位姿 |
+| `Estun/estun_config.yaml` | 机器人IP、灵巧手串口、灵巧手偏移、抓取模式、把手偏移等配置 |
+| `Estun/utils_shared.py` | 共享工具库：坐标变换工具 + 灵巧手控制，瓶身入口共用 |
+| `Estun/estun_demo.py` | 演示脚本：RealSense版位姿转换链路验证 (瓶身, 无硬件依赖) |
+| `Estun/estun_epiceye_demo.py` | 演示脚本：EpicEye版位姿转换链路验证 (瓶身, 无硬件依赖) |
+| `Estun/estun_handle_demo.py` | 演示脚本：RealSense Handle版位姿转换链路验证 (把手, 无硬件依赖) |
+| `Estun/estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
+| `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令 |
+| `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
+| `Estun/__init__.py` | Estun 包标记文件 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
 | `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
@@ -66,25 +68,25 @@ pip install -r requirements.txt
 ### RealSense 实时版 (瓶身)
 
 1. 连接 RealSense 相机和灵巧手（USB串口）
-2. 修改 `estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
-3. 运行 `python estun_run.py`
+2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
+3. 运行 `python Estun/estun_run.py`
 4. 机器人作为TCP客户端连接本服务器，接收6D目标位姿
 
 ### EpicEye 单次触发版 (瓶身)
 
 1. 连接 EpicEye 相机和灵巧手（USB串口）
 2. 确认 `EpicEye/epiceye_config.yaml` 中 `handeye_matrix` 已正确填入
-3. 修改 `estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
-4. 运行 `python estun_epiceye_run.py`
+3. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
+4. 运行 `python Estun/estun_epiceye_run.py`
 5. 机器人作为TCP客户端连接本服务器，接收6D目标位姿
 
 ### RealSense Handle 6D 版 (把手)
 
 1. 连接 RealSense 相机和灵巧手（USB串口）
-2. 修改 `estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
+2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
 3. 确认 `RealSense_R/config.yaml` 中 `handle.skip_frames` 跳帧参数和 `handle.handle_side` 把手侧
 4. 可选: 在把手上贴红色胶带并启用 `red_tape.enabled` 辅助检测
-5. 运行 `python estun_handle_run.py`
+5. 运行 `python Estun/estun_handle_run.py`
 6. 机器人作为TCP客户端连接本服务器，接收 P1(抓取点)/P2(预抓取点)/P3(目标点) 三组位姿
 7. 机器人依次发送 PREGRIP/GRIPDONE/RESET 指令控制灵巧手
 
@@ -98,14 +100,14 @@ pip install -r requirements.txt
 - **RealSense 水杯检测参数** → 修改对应模块 `config.yaml` 中的 `cup` 段 (height/rim_radius/rim_offset_ratio)
 - **EpicEye 检测模型/目标类别** → 修改 `EpicEye/epiceye_config.yaml` 中的 `model.gray_path` 和 `model.class_id`
 - **切换运行设备** → 修改对应相机模块配置文件中的 `model.device`（gpu/cpu）
-- **修改机器人参数** → 修改 `estun_config.yaml`
-- **调整瓶身抓取位置** → 微调 `estun_config.yaml` 中的 `gripper_offset.t_offset`
-- **调整把手抓取位置** → 微调 `estun_config.yaml` 中的 `handle_grasp.gripper_offset.t_handle_offset`
-- **切换抓取模式** → 修改 `estun_config.yaml` 中的 `orientation_mode`（free/vertical/horizontal/fixed）
-- **切换抓取方向** → 修改 `estun_config.yaml` 中的 `grasp_direction`（right/left）
-- **固定姿态配置** → 修改 `estun_config.yaml` 中的 `fixed_abc.right` / `fixed_abc.left` (fixed 模式)
+- **修改机器人参数** → 修改 `Estun/estun_config.yaml`
+- **调整瓶身抓取位置** → 微调 `Estun/estun_config.yaml` 中的 `gripper_offset.t_offset`
+- **调整把手抓取位置** → 微调 `Estun/estun_config.yaml` 中的 `handle_grasp.gripper_offset.t_handle_offset`
+- **切换抓取模式** → 修改 `Estun/estun_config.yaml` 中的 `orientation_mode`（free/vertical/horizontal/fixed）
+- **切换抓取方向** → 修改 `Estun/estun_config.yaml` 中的 `grasp_direction`（right/left）
+- **固定姿态配置** → 修改 `Estun/estun_config.yaml` 中的 `fixed_abc.right` / `fixed_abc.left` (fixed 模式)
 - **把手跳帧控制** → 修改对应模块 `config.yaml` 中的 `handle.skip_frames`（每N帧检测一次）
-- **把手抓取点偏移** → 微调 `estun_config.yaml` 中的 `handle_grasp.pre_offset` / `handle_grasp.target_offset`
+- **把手抓取点偏移** → 微调 `Estun/estun_config.yaml` 中的 `handle_grasp.pre_offset` / `handle_grasp.target_offset`
 - **红色胶带辅助检测** → 修改对应模块 `config.yaml` 中的 `red_tape.enabled` / `red_tape.min_area`
 - **SAM 模型选择** → 修改对应模块 `config.yaml` 中的 `sam.model` (当前为 sam2_b.pt)
 

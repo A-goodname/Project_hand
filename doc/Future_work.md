@@ -117,9 +117,9 @@
 
 ```
 Project_hand/
-├── estun_run.py                    # 眼在手上: RealSense 瓶身抓取 (现有)
-├── estun_handle_run.py             # 眼在手上: 把手抓取 + 倒水 (现有, 待扩展)
-├── estun_epiceye_run.py            # 眼在手上: EpicEye 瓶身抓取 (现有)
+├── Estun/estun_run.py                    # 眼在手上: RealSense 瓶身抓取 (现有)
+├── Estun/estun_handle_run.py             # 眼在手上: 把手抓取 + 倒水 (现有, 待扩展)
+├── Estun/estun_epiceye_run.py            # 眼在手上: EpicEye 瓶身抓取 (现有)
 │
 ├── hand_to_eye/                    # [新建] 眼在手外模块
 │   ├── __init__.py

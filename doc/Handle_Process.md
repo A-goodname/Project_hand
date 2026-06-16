@@ -22,7 +22,7 @@
 | 方向 | 状态 | 说明 |
 |------|------|------|
 | 右手 (`right`) | ✅ 已实现 | 掌心向左, 已完成测试与验证 |
-| 左手 (`left`)  | ❌ 部分配置 | `estun_config.yaml` 中 `fixed_abc.left` 已预留配置位, 但未完成标定与测试 |
+| 左手 (`left`)  | ❌ 部分配置 | `Estun/estun_config.yaml` 中 `fixed_abc.left` 已预留配置位, 但未完成标定与测试 |
 
 - `grasp_direction` 配置项已支持切换, `fixed_abc` 段已预留左右手独立配置
 - 左手抓取需要补充标定 `fixed_abc` 数据后进行验证
@@ -128,4 +128,4 @@
 | `horizontal` | ❌ | 暂未实现 |
 
 - **C 值约束**: vertical/free 模式下 P1 的 C 角固定到 `[-100, -80]`, 使手指垂直于把手
-- `fixed_abc` 左右手独立配置 (`estun_config.yaml`)
+- `fixed_abc` 左右手独立配置 (`Estun/estun_config.yaml`)

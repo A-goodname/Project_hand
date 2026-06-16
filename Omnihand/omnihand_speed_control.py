@@ -19,40 +19,30 @@ OmniHand O10 速度控制模块 — 软件插值版
         ctrl.do_gesture_with_speed(Gesture.PAPER, speed_level=SpeedLevel.MEDIUM)
 """
 
+import os
+import sys
 import time
 import math
 from enum import Enum
 from typing import List, Dict, Optional, Tuple, Callable
 
-try:
-    from .omnihand_usb_serial import (
-        OmniHandSerial,
-        OmniHandError,
-        TimeoutError,
-        ProtocolError,
-    )
-except ImportError:
-    from omnihand_usb_serial import (
-        OmniHandSerial,
-        OmniHandError,
-        TimeoutError,
-        ProtocolError,
-    )
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
-try:
-    from .omnihand_gesture import (
-        OmniHandGesture,
-        Gesture,
-        KinematicsConverter,
-        GESTURE_NAMES,
-    )
-except ImportError:
-    from omnihand_gesture import (
-        OmniHandGesture,
-        Gesture,
-        KinematicsConverter,
-        GESTURE_NAMES,
-    )
+from Omnihand.omnihand_usb_serial import (
+    OmniHandSerial,
+    OmniHandError,
+    TimeoutError,
+    ProtocolError,
+)
+
+from Omnihand.omnihand_gesture import (
+    OmniHandGesture,
+    Gesture,
+    KinematicsConverter,
+    GESTURE_NAMES,
+)
 
 
 # ============================================================================

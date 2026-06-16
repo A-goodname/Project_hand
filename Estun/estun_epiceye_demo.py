@@ -12,7 +12,7 @@ estun_epiceye 位姿转换验证 Demo
   - 去除: socket / 灵巧手 / cv2 / 多线程 / 主循环
 
 输入:
-  - estun_config.yaml               : TCP 配置 (仅用 gripper_offset / orientation_mode)
+  - Estun/estun_config.yaml         : TCP 配置 (仅用 gripper_offset / orientation_mode)
   - EpicEye/epiceye_config.yaml     : 相机 / YOLO / 深度 / 手眼矩阵 / 运行模式
 
 输出:
@@ -36,12 +36,12 @@ from datetime import datetime
 
 
 # ---- 将项目根目录加入 sys.path ----
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入位姿转换工具 (纯 numpy, 无硬件依赖) ----
-from utils_shared import (
+from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
     compute_gripper_offset_transform,
@@ -56,7 +56,7 @@ from EpicEye.test_6D import EpicEyeYOLO6DPoseDetector
 # =============================================================
 
 # ---- 加载 ESTUN 配置 ----
-_estun_cfg_path = os.path.join(_project_root, "estun_config.yaml")
+_estun_cfg_path = os.path.join(_project_root, "Estun", "estun_config.yaml")
 if not os.path.exists(_estun_cfg_path):
     print(f"[FATAL] ESTUN 配置文件未找到: {_estun_cfg_path}")
     sys.exit(1)
