@@ -1,31 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-estun 把手+水杯融合位姿转换验证 Demo
+estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块版)
 =============================================
-整合 Handle 6D 检测器与 Cup 6D 检测器 (共享 RealSense pipeline),
-实现完整 6 点位姿计算: Handle P1/P2/P3_pour + Cup P1/P2/P3.
+整合 Handle 6D 检测器 (微调 YOLOv8n + SAM + 扫描线分离) 与 Cup 6D 检测器 (YOLOv8m COCO),
+共享 RealSense pipeline, 使用 RealSense/ 新模块 (rs.align 简化深度对齐).
 
-与 estun_handle_demo.py 的差异:
-  - 双检测器: RealSenseHandle6DDetector + RealSenseCup6DDetector
-  - Cup 检测器不启动 pipeline (start_pipeline=False), 复用 Handle 的帧
-  - 新增倒水位置 P3_pour 计算 (基于 spout_offset 反算)
-  - 新增水杯抓取位姿计算
+与 estun_handle_cup_demo.py (RealSense_R 版) 的差异:
+  - 检测器切换至 RealSense/ 新模块 (rs.align 版)
+  - 检测频率解耦: Handle 跳帧 (90) + Cup 跳帧 (10), 各自独立稳定
+  - Cup 加入 handle_side 偏移选择 (t_cup_offset / t_cup_offset_left)
+  - Cup P1 加入 B/C 角 clamp (back/left 分模式)
+  - 去掉 fine_tune_mode 相关逻辑
 
 输入:
-  - RealSense_R/config.yaml            : 相机 / YOLO / SAM / cup 配置
-  - Estun/estun_config.yaml            : 机器人 / 把手偏移 / 水杯偏移配置
+  - RealSense/config.yaml            : 相机 / YOLO / SAM / cup 配置 (新模块)
+  - Estun/estun_config.yaml          : 机器人 / 把手偏移 / 水杯偏移配置
   - calib_data/calibration_result.yaml : 手眼标定矩阵
 
 输出:
-  - logs/estun_handle_cup_demo_*.log   : 6 个位姿 + 中间结果
+  - logs/estun_handle_cup_demo_*.log : 6 个位姿 + 中间结果
 
 流程:
   [Step 1] 加载配置 (标定矩阵 / 灵巧手偏移 / 水杯偏移)
   [Step 2] 初始化 Handle 检测器 (启动 pipeline)
   [Step 3] 初始化 Cup 检测器 (不启动 pipeline)
-  [Step 4] 主循环: 同步检测 Handle + Cup → cam2ee → 稳定化
+  [Step 4] 主循环: 独立频率检测 Handle + Cup → cam2ee → 各自稳定化
   [Step 5] 控制台输入机械臂当前位姿
-  [Step 6] 位姿转换: 计算 6 个位姿
+  [Step 6] 位姿转换: 计算 6 个位姿 (Handle P1/P2/P3 + Cup P1/P2/P3)
   [Step 7] 写入日志
 """
 
@@ -51,15 +52,15 @@ from Estun.utils_shared import (
     compute_grasp_rotation,
     post_correct_angles,
 )
-from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
+from RealSense.realsense_shared import rotation_matrix_to_euler_angles
 
 
 # =============================================================
 # 配置加载
 # =============================================================
 
-# ---- 加载 RealSense / YOLO 配置 ----
-_cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
+# ---- 加载 RealSense / YOLO 配置 (新模块 RealSense/) ----
+_cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
 with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
@@ -84,8 +85,17 @@ HANDLE_PRE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["r_offse
 HANDLE_TARGET_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["t_offset"], dtype=float)
 HANDLE_TARGET_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["r_offset"], dtype=float)
 
-# ---- 水杯偏移 ----
-CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset"], dtype=float)
+# ---- cup handle_side (从 RealSense config 的 cup 段读取) ----
+CUP_HANDLE_SIDE = _cfg.get("cup", {}).get("handle_side", "back")
+print(f"[INFO] cup handle_side: {CUP_HANDLE_SIDE}")
+
+# ---- 水杯偏移 (根据 handle_side 选择对应偏移) ----
+if CUP_HANDLE_SIDE == "left":
+    CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset_left"], dtype=float)
+    print(f"[INFO] 使用 left 模式偏移 t_cup_offset_left")
+else:
+    CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset"], dtype=float)
+    print(f"[INFO] 使用 back 模式偏移 t_cup_offset")
 CUP_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["r_cup_offset"], dtype=float)
 CUP_PRE_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["t_offset"], dtype=float)
 CUP_PRE_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["r_offset"], dtype=float)
@@ -100,7 +110,7 @@ POUR_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pour_offset"]["r_offset"], dty
 # ---- 方向模式 ----
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
 GRASP_DIRECTION = _cfg_estun["grasp_direction"]
-HANDLE_SIDE = _cfg["handle"]["handle_side"]
+HANDLE_SIDE = _cfg["handle"]["side"]
 
 # 把手模式下: 抓取方向自动与 handle_side 一致
 if HANDLE_SIDE != GRASP_DIRECTION:
@@ -118,7 +128,9 @@ if len(FIXED_ABC_CFG) != 3:
 else:
     FIXED_ABC = np.array(FIXED_ABC_CFG, dtype=float)
 
-SKIP_FRAMES = _cfg["handle"]["skip_frames"]
+# ---- 检测跳帧参数 ----
+SKIP_FRAMES = _cfg["handle"]["skip_frames"]       # Handle 检测: 每 N 帧一次
+CUP_SKIP_FRAMES = 10                               # Cup 检测: 每 10 帧一次 (YOLO 快, 无需长跳帧)
 
 VALID_MODES = {"vertical", "horizontal", "free", "fixed"}
 if ORIENTATION_MODE not in VALID_MODES:
@@ -214,7 +226,7 @@ class PoseStabilizer:
 
 def main():
     print("=" * 60)
-    print("  estun 把手+水杯融合位姿转换验证 Demo")
+    print("  estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块)")
     print("  标定: " + CALIB_RESULT_PATH)
     print("=" * 60, flush=True)
 
@@ -231,9 +243,9 @@ def main():
     print(f"[INFO] 壶嘴偏移 spout_offset:        ({SPOUT_T_OFFSET[0]:.4f}, {SPOUT_T_OFFSET[1]:.4f}, {SPOUT_T_OFFSET[2]:.4f}) m")
     print(f"[INFO] 倒水防碰撞偏移:               ({POUR_T_OFFSET_BASE[0]:.4f}, {POUR_T_OFFSET_BASE[1]:.4f}, {POUR_T_OFFSET_BASE[2]:.4f}) m (基系 Z)")
 
-    # ---- [Step 2] 初始化 Handle 检测器 (启动 pipeline) ----
-    from RealSense_R.test_handle_6D import RealSenseHandle6DDetector
-    print("[INFO] 初始化 RealSense Handle 6D 检测器...")
+    # ---- [Step 2] 初始化 Handle 检测器 (启动 pipeline, RealSense 新模块) ----
+    from RealSense.test_handle_6D import RealSenseHandle6DDetector
+    print("[INFO] 初始化 RealSense Handle 6D 检测器 (新模块, rs.align)...")
     try:
         handle_detector = RealSenseHandle6DDetector(config_dict=_cfg)
     except Exception as e:
@@ -241,9 +253,9 @@ def main():
         print("[FATAL] 请确认已连接 RealSense D400 系列相机")
         return
 
-    # ---- [Step 3] 初始化 Cup 检测器 (不启动 pipeline, 复用帧) ----
-    from RealSense_R.test_cup_6D import RealSenseCup6DDetector
-    print("[INFO] 初始化 RealSense Cup 6D 检测器 (复用 pipeline)...")
+    # ---- [Step 3] 初始化 Cup 检测器 (不启动 pipeline, 复用帧, RealSense 新模块) ----
+    from RealSense.test_cup_6D import RealSenseCup6DDetector
+    print("[INFO] 初始化 RealSense Cup 6D 检测器 (新模块, 复用 pipeline)...")
     try:
         cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=False)
     except Exception as e:
@@ -254,7 +266,7 @@ def main():
             pass
         return
 
-    # ---- [Step 4] 主循环: 同步检测 + 稳定化 ----
+    # ---- [Step 4] 主循环: 独立频率检测 + 各自稳定化 ----
     handle_stabilizer = PoseStabilizer(
         window=STABLE_WINDOW, pos_thresh=POS_THRESHOLD, angle_thresh=ANGLE_THRESHOLD
     )
@@ -262,24 +274,25 @@ def main():
         window=STABLE_WINDOW, pos_thresh=POS_THRESHOLD, angle_thresh=ANGLE_THRESHOLD
     )
 
-    cv2.namedWindow("estun Handle+Cup Demo (RealSense)", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("estun Handle+Cup Demo (RealSense 新模块)", cv2.WINDOW_NORMAL)
 
-    handle_stable_pose_ee: Any = None  # (pos_ee, euler_ee) or None
-    cup_stable_pose_cam: Any = None  # (pos_cam, euler_cam) or None
+    handle_stable_pose_ee: Any = None   # (pos_ee, euler_ee) or None
+    cup_stable_pose_cam: Any = None     # (pos_cam, euler_cam) or None
     cup_stable_rim_pour: Optional[Tuple[np.ndarray, np.ndarray, float]] = None  # (rim_pos, pour_target, rim_r)
 
     running = True
-    frame_counter = 0
+    h_frame_counter = 0   # Handle 帧计数器 (每 SKIP_FRAMES 帧检测)
+    c_frame_counter = 0   # Cup 帧计数器 (每 CUP_SKIP_FRAMES 帧检测)
     cached_handle = None
     cached_cup = None
 
-    print(f"\n[INFO] 正在同步检测把手+水杯并稳定位姿 (跳帧: 每 {SKIP_FRAMES} 帧检测一次)...")
+    print(f"\n[INFO] 正在检测把手+水杯 (Handle 每 {SKIP_FRAMES} 帧, Cup 每 {CUP_SKIP_FRAMES} 帧)...")
     print("[INFO] 两者均稳定后自动停止, 请输入机械臂位姿")
     print("[INFO] 按 q 退出\n")
 
     try:
         while running:
-            # ---- 获取帧 (从 Handle 检测器) ----
+            # ---- 获取帧 (从 Handle 检测器, 每帧都取) ----
             color_image, depth_image, depth_colormap, depth_frame = handle_detector.get_frames()
             if color_image is None or depth_frame is None:
                 if cv2.waitKey(30) & 0xFF == ord("q"):
@@ -288,12 +301,13 @@ def main():
                     break
                 continue
 
-            frame_counter += 1
             display_img = color_image.copy()
 
-            # ---- 每 SKIP_FRAMES 帧执行一次检测 ----
-            if frame_counter % SKIP_FRAMES == 1:
-                # === Handle 检测 ===
+            # ---- Handle 检测: 每 SKIP_FRAMES 帧执行一次 ----
+            h_frame_counter += 1
+            do_handle_det = (h_frame_counter % SKIP_FRAMES == 1)
+
+            if do_handle_det:
                 h_result = handle_detector.detect_handle_6d(color_image, depth_frame)
                 body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler, red_mask, red_center = h_result
 
@@ -318,7 +332,21 @@ def main():
                 else:
                     handle_detector._pose_smoother.reset()
 
-                # === Cup 检测 (注入帧到 Cup 检测器) ===
+                cached_handle = (body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler)
+            else:
+                if cached_handle is not None:
+                    body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler = cached_handle
+                else:
+                    body_mask = handle_mask = None
+                    h_stage = "none"
+                    yolo_bbox = h_pos = h_rot = h_euler = None
+
+            # ---- Cup 检测: 每 CUP_SKIP_FRAMES 帧执行一次, 独立于 Handle ----
+            c_frame_counter += 1
+            do_cup_det = (c_frame_counter % CUP_SKIP_FRAMES == 1)
+
+            if do_cup_det:
+                # 注入帧到 Cup 检测器 (每检测帧都注入新帧)
                 cup_detector.inject_frames(color_image, depth_image, depth_colormap, depth_frame)
                 (c_bbox, c_pos, c_rot, c_euler, c_point_cloud,
                  c_rim_pos, c_pour_target, c_rim_r) = cup_detector.compute_cup_6d_pose(color_image, depth_frame)
@@ -344,33 +372,24 @@ def main():
                 else:
                     cup_detector._pose_smoother.reset()
 
-                cached_handle = (body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler)
                 cached_cup = (c_bbox, c_pos, c_rot, c_euler, c_point_cloud, c_rim_pos, c_pour_target, c_rim_r)
-
-                # ---- 两者都稳定则退出主循环 ----
-                if handle_stable_pose_ee is not None and cup_stable_pose_cam is not None:
-                    print("[INFO] Handle + Cup 均稳定, 停止检测", flush=True)
-                    running = False
-                    break
             else:
-                if cached_handle is not None:
-                    body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler = cached_handle
-                else:
-                    body_mask = handle_mask = None
-                    h_stage = "none"
-                    yolo_bbox = h_pos = h_rot = h_euler = None
-
                 if cached_cup is not None:
                     c_bbox, c_pos, c_rot, c_euler, c_point_cloud, c_rim_pos, c_pour_target, c_rim_r = cached_cup
                 else:
                     c_bbox = c_pos = c_rot = c_euler = c_point_cloud = c_rim_pos = c_pour_target = c_rim_r = None
+
+            # ---- 两者都稳定则退出主循环 ----
+            if handle_stable_pose_ee is not None and cup_stable_pose_cam is not None:
+                print("[INFO] Handle + Cup 均稳定, 停止检测", flush=True)
+                running = False
+                break
 
             # ---- 可视化 (Handle + Cup) ----
             if cached_handle is not None:
                 handle_detector.visualize(display_img, body_mask, handle_mask,
                                           h_stage, yolo_bbox, h_pos, h_rot, h_euler)
 
-            # ---- Cup 可视化 ----
             if cached_cup is not None and c_bbox is not None:
                 cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler,
                                            c_rim_pos, c_pour_target, c_rim_r)
@@ -378,8 +397,9 @@ def main():
             # ---- 状态文字 ----
             h_status = "H:OK" if handle_stable_pose_ee is not None else "H:..."
             c_status = "C:OK" if cup_stable_pose_cam is not None else "C:..."
-            cv2.putText(display_img, f"Status: {h_status} {c_status}",
-                        (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+            det_info = f"H:{h_frame_counter % SKIP_FRAMES}/{SKIP_FRAMES}  C:{c_frame_counter % CUP_SKIP_FRAMES}/{CUP_SKIP_FRAMES}"
+            cv2.putText(display_img, f"Status: {h_status} {c_status}  {det_info}",
+                        (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 2)
 
             # ---- 显示 ----
             if depth_colormap is not None:
@@ -388,7 +408,7 @@ def main():
                 vis_panel = np.hstack((display_img, depth_small))
             else:
                 vis_panel = display_img
-            cv2.imshow("estun Handle+Cup Demo (RealSense)", vis_panel)
+            cv2.imshow("estun Handle+Cup Demo (RealSense 新模块)", vis_panel)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("\n[INFO] 用户按 q 退出", flush=True)
                 running = False
@@ -545,6 +565,24 @@ def main():
     c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
     cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
     cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
+    # ---- 根据 cup handle_side 施加角度约束 (移植自 estun_cup_demo.py) ----
+    if CUP_HANDLE_SIDE == "back":
+        # back 模式: 把手背对相机, 灵巧手右侧抓取
+        # B 角 clamp 到 [70, 90], 使灵巧手从水平方向接近水杯
+        if not (70 <= cB1 <= 90):
+            print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (back 模式)")
+            cB1 = 80.0
+        # C 角 clamp 到 [-120, -100], 使灵巧手手指垂直于杯身
+        if not (-120 <= cC1 <= -100):
+            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
+            cC1 = -110.0
+    else:
+        # left 模式: 把手在相机左侧, 灵巧手右侧抓取 (递给人)
+        # B 角暂不约束, 由 compute_grasp_rotation 自然决定 (杯身竖直时 B 角天然合理)
+        # C 角 clamp 到 [-100, -80], 默认 -90, 参考水壶约束
+        if not (-100 <= cC1 <= -80):
+            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式, 参考水壶)")
+            cC1 = -90.0
 
     c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
     c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
@@ -582,7 +620,7 @@ def main():
     print(f"  C P3 (递杯点):   {msg_cp3}")
     print("=" * 60)
 
-    # ---- 写入日志 ----
+    # ---- [Step 7] 写入日志 ----
     log_dir = os.path.join(_project_root, "logs")
     os.makedirs(log_dir, exist_ok=True)
     ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -590,13 +628,14 @@ def main():
 
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("=" * 60 + "\n")
-        f.write("  estun 把手+水杯融合位姿转换验证 Demo\n")
+        f.write("  estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块)\n")
         f.write("=" * 60 + "\n\n")
 
         f.write("--- 配置参数 ---\n")
         f.write(f"orientation_mode: {ORIENTATION_MODE}\n")
         f.write(f"grasp_direction:  {GRASP_DIRECTION}\n")
-        f.write(f"handle_side:      {HANDLE_SIDE}\n\n")
+        f.write(f"handle_side:      {HANDLE_SIDE}\n")
+        f.write(f"cup_handle_side:  {CUP_HANDLE_SIDE}\n\n")
 
         f.write("--- 偏移参数 ---\n")
         f.write(f"t_handle_effective: ({t_handle_effective[0]:.4f}, {t_handle_effective[1]:.4f}, {t_handle_effective[2]:.4f})\n")

@@ -687,18 +687,18 @@ class BaseRealSenseDetector:
         # ---- 把手 (仅当 USE_SAM=True 时读取, 因为把手分离依赖 SAM) ----
         if self.USE_SAM:
             _handle = cfg.get("handle", {})
-            if "handle_side" in _handle:
-                self.HANDLE_SIDE = _handle["handle_side"]
-            if "handle_min_ratio" in _handle:
-                self.HANDLE_MIN_RATIO = _handle["handle_min_ratio"]
-            if "handle_max_ratio" in _handle:
-                self.HANDLE_MAX_RATIO = _handle["handle_max_ratio"]
+            if "side" in _handle:
+                self.HANDLE_SIDE = _handle["side"]
+            if "min_ratio" in _handle:
+                self.HANDLE_MIN_RATIO = _handle["min_ratio"]
+            if "max_ratio" in _handle:
+                self.HANDLE_MAX_RATIO = _handle["max_ratio"]
             if "roi_expand_ratio" in _handle:
                 self.ROI_EXPAND_RATIO = _handle["roi_expand_ratio"]
             if "skip_frames" in _handle:
                 self.SKIP_FRAMES = _handle["skip_frames"]
-            if "handle_center_deviation_ratio" in _handle:
-                self.HANDLE_CENTER_DEVIATION_RATIO = _handle["handle_center_deviation_ratio"]
+            if "center_deviation_ratio" in _handle:
+                self.HANDLE_CENTER_DEVIATION_RATIO = _handle["center_deviation_ratio"]
 
         # ---- 红色胶带 (始终读取, 不管 USE_SAM) ----
         _rt = cfg.get("red_tape", {})

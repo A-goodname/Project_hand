@@ -173,7 +173,7 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
     CUP_HEIGHT = 0.12             # 杯高先验 (m), 需用户填写
     RIM_RADIUS = 0.04             # 杯口半径先验 (m), 需用户填写
     RIM_OFFSET_RATIO = 0.6        # 倒水偏移比例 (0~1)
-    HANDLE_SIDE = "back"          # 把手方向: back | left | right
+    CUP_HANDLE_SIDE = "back"          # 把手方向: back | left | right
     CUP_MODEL_NAME = ""           # cup 专用模型, 为空时使用基类 MODEL_NAME
 
     def __init__(self, config_dict=None, start_pipeline=True):
@@ -219,7 +219,7 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         if "rim_offset_ratio" in _cup:
             self.RIM_OFFSET_RATIO = _cup["rim_offset_ratio"]
         if "handle_side" in _cup:
-            self.HANDLE_SIDE = _cup["handle_side"]
+            self.CUP_HANDLE_SIDE = _cup["handle_side"]
 
     # ------------------------------------------------------------
     def compute_cup_6d_pose(self, color_image, depth_frame):
@@ -254,14 +254,14 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         _, _, center_depth = anchor
 
         # ---- 根据 handle_side 裁剪 bbox (排除把手侧的背景点) ----
-        if self.HANDLE_SIDE in ("left", "right"):
+        if self.CUP_HANDLE_SIDE in ("left", "right"):
             fx = self.color_intrinsics.fx
             rim_px = max(1, int(self.RIM_RADIUS * fx / center_depth))
             x1_orig, x2_orig = bbox[0], bbox[2]
-            if self.HANDLE_SIDE == "left":
+            if self.CUP_HANDLE_SIDE == "left":
                 # 把手在左侧, 从右边界向左取 2 倍杯口半径
                 bbox[0] = max(int(x2_orig) - 2 * rim_px, int(x1_orig))
-            elif self.HANDLE_SIDE == "right":
+            elif self.CUP_HANDLE_SIDE == "right":
                 # 把手在右侧, 从左边界向右取 2 倍杯口半径
                 bbox[2] = min(int(x1_orig) + 2 * rim_px, int(x2_orig))
             # 确保裁剪后 bbox 宽度合理, 否则回退到原始 bbox
@@ -452,7 +452,7 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         cv2.putText(display, "YOLO: %dms" % int(self._yolo_time_ms),
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        cv2.putText(display, "Handle: %s" % self.HANDLE_SIDE,
+        cv2.putText(display, "Handle: %s" % self.CUP_HANDLE_SIDE,
                     (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         if position is not None and euler is not None:

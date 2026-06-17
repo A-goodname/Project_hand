@@ -101,7 +101,7 @@ HANDLE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["r_handl
 # ---- 方向模式 ----
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
 GRASP_DIRECTION = _cfg_estun["grasp_direction"]
-HANDLE_SIDE = _cfg["handle"]["handle_side"]  # 视觉检测侧
+HANDLE_SIDE = _cfg["handle"]["side"]  # 视觉检测侧
 
 # 把手模式下: 抓取方向自动与 handle_side 一致
 if HANDLE_SIDE != GRASP_DIRECTION:

@@ -123,7 +123,7 @@ POUR_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pour_offset"]["r_offset"], dty
 # ---- 方向模式 ----
 ORIENTATION_MODE = _cfg_estun["orientation_mode"]
 GRASP_DIRECTION = _cfg_estun["grasp_direction"]
-HANDLE_SIDE = _cfg["handle"]["handle_side"]
+HANDLE_SIDE = _cfg["handle"]["side"]
 
 if HANDLE_SIDE != GRASP_DIRECTION:
     print(f"[INFO] grasp_direction ({GRASP_DIRECTION}) 自动切换为 handle_side ({HANDLE_SIDE})")
