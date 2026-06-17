@@ -41,7 +41,6 @@ handle:
   handle_min_ratio: 0.03        # 把手占壶身最小面积比 
   handle_max_ratio: 0.40        # 把手占壶身最大面积比 
   roi_expand_ratio: 0.1         # SAM ROI 左右拓展比例(相对 bbox 宽度), 弥补 YOLO 框过紧
-  erode_max_iter: 15            # 空洞膨胀最大迭代次数
   skip_frames: 90              # 跳帧数 (SAM2_b 推理约 3s, 150帧≈5s 检测一次; mobile_SAM 可用 10)
   handle_center_deviation_ratio: 0.1  # 把手 x 中心偏差容差(相对把手宽度比例), 用于切掉底部误检
 

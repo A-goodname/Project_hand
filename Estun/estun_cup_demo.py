@@ -3,7 +3,7 @@
 estun 水杯位姿转换验证 Demo (RealSense Cup 版)
 =============================================
 基于 estun_handle_cup_demo.py 剥离 Handle 检测部分, 仅保留 Cup 单检测链路.
-使用 RealSense_R/test_cup_6D.py 的 RealSenseCup6DDetector (独立启动 pipeline).
+使用 RealSense/test_cup_6D.py 的 RealSenseCup6DDetector (独立启动 pipeline, rs.align 简化版).
 
 与 estun_handle_cup_demo.py 的差异:
   - 单检测器: RealSenseCup6DDetector (start_pipeline=True, 独立 pipeline)
@@ -13,7 +13,7 @@ estun 水杯位姿转换验证 Demo (RealSense Cup 版)
   - 支持 fine_tune_mode: 手动调整后反算新 t_cup_offset
 
 输入:
-  - RealSense_R/config.yaml            : 相机 / YOLO / cup 配置
+  - RealSense/config.yaml              : 相机 / YOLO / cup 配置 (新相机)
   - Estun/estun_config.yaml            : 机器人 / cup_grasp 偏移 / fine_tune_mode
   - calib_data/calibration_result.yaml : 手眼标定矩阵
 
@@ -53,7 +53,7 @@ from Estun.utils_shared import (
     compute_grasp_rotation,
     post_correct_angles,
 )
-from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
+from RealSense.realsense_shared import rotation_matrix_to_euler_angles
 
 
 # =============================================================
@@ -61,7 +61,7 @@ from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 # =============================================================
 
 # ---- 加载 RealSense / YOLO / cup 配置 ----
-_cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
+_cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
 with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
@@ -203,8 +203,8 @@ def main():
     print(f"[INFO] 水杯偏移 t_cup_effective: ({t_cup_effective[0]:.4f}, {t_cup_effective[1]:.4f}, {t_cup_effective[2]:.4f}) m")
 
     # ---- [Step 2] 初始化 Cup 检测器 (启动独立 pipeline) ----
-    from RealSense_R.test_cup_6D import RealSenseCup6DDetector
-    print("[INFO] 初始化 RealSense Cup 6D 检测器 (独立 pipeline)...")
+    from RealSense.test_cup_6D import RealSenseCup6DDetector
+    print("[INFO] 初始化 RealSense Cup 6D 检测器 (新相机, rs.align 版)...")
     try:
         cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=True)
     except Exception as e:
@@ -362,6 +362,13 @@ def main():
     c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
     cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
     cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
+    if not (70 <= cB1 <= 90):
+        print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (水杯抓取合理范围)")
+        cB1 = 80.0
+    # C 角 clamp: 右手抓取时约束到 [-120, -100], 使灵巧手手指垂直于杯身
+    if not (-120 <= cC1 <= -100):
+        print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (右手抓取约束)")
+        cC1 = -110.0
 
     c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
     c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
@@ -437,7 +444,7 @@ def main():
         print("请将机械臂移动到上述目标位姿, 然后手动微调")
         print("使灵巧手掌心正对水杯, 手指包覆杯身")
         print("输入微调后的实际机械臂位姿 [X,Y,Z,A,B,C]")
-        print("(X,Y,Z 单位 mm, A,B,C 单位 deg)")
+        print("(X,Y,Z 单位 mm, A,B,C 单位 deg, 仅使用 XYZ 计算, ABC 记录)")
         print("直接回车跳过微调")
 
         adj_input = input("微调后位姿: ").strip()
@@ -447,23 +454,15 @@ def main():
             if len(adj_parts) == 6:
                 try:
                     adj_xyz = np.array([float(p) / 1000.0 for p in adj_parts[:3]])
-                    adj_ABC = np.array([float(p) for p in adj_parts[3:6]])
 
-                    # 反求新偏移:
-                    # 物体在基系下位置 (不变) = R_ee_base_orig @ mean_cpos_ee + robot_xyz
-                    R_ee_base_orig = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-                    p_obj_base = R_ee_base_orig @ c_pos_ee + np.array(robot_xyz)
-
-                    # 物体在调整后末端系下位置
-                    R_ee_base_adj = euler_to_rotation_matrix(*adj_ABC, order="zyx")
-                    pos_ee_current = R_ee_base_adj.T @ (p_obj_base - adj_xyz)
-
-                    # 正确偏移 = pos_ee_current (物体在当前末端系下位置)
-                    t_effective_new = pos_ee_current
+                    # 增量公式: t_eff_new = t_cup_effective + R_ee_base.T @ (P1_xyz - adj_xyz)
+                    diff_xyz = np.array([c_pos_base_1[0], c_pos_base_1[1], c_pos_base_1[2]]) - adj_xyz
+                    delta_ee = R_ee_base.T @ diff_xyz
+                    t_effective_new = t_cup_effective + delta_ee
 
                     # 反推标准偏移 (C=0 时的 t_cup_offset)
-                    Rz = euler_to_rotation_matrix(0, 0, CUP_R_OFFSET[2], order="zyx")  # Rz(-90度)
-                    t_offset_new = Rz.T @ t_effective_new  # = Rz(90度) @ t_effective_new
+                    Rz = euler_to_rotation_matrix(0, 0, CUP_R_OFFSET[2], order="zyx")  # Rz(CUP_R_OFFSET[2])
+                    t_offset_new = Rz.T @ t_effective_new
 
                     print(f"\n[FINE TUNE] 建议新偏移:")
                     print(f"  t_effective_new = ({t_effective_new[0]:.4f}, {t_effective_new[1]:.4f}, {t_effective_new[2]:.4f})")
@@ -472,8 +471,7 @@ def main():
                     # 追加写入日志
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write("\n--- fine_tune 结果 ---\n")
-                        f.write(f"调整后机械臂位姿: xyz=({adj_xyz[0]:.4f},{adj_xyz[1]:.4f},{adj_xyz[2]:.4f}) m, "
-                                f"ABC=({adj_ABC[0]:.2f},{adj_ABC[1]:.2f},{adj_ABC[2]:.2f}) deg\n")
+                        f.write(f"调整后 XYZ: ({adj_xyz[0]:.4f},{adj_xyz[1]:.4f},{adj_xyz[2]:.4f}) m\n")
                         f.write(f"建议 t_effective_new: ({t_effective_new[0]:.4f},{t_effective_new[1]:.4f},{t_effective_new[2]:.4f})\n")
                         f.write(f"建议 t_cup_offset:    ({t_offset_new[0]:.4f},{t_offset_new[1]:.4f},{t_offset_new[2]:.4f})\n")
 

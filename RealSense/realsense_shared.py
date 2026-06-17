@@ -445,7 +445,7 @@ class BaseRealSenseDetector:
     HANDLE_MIN_RATIO = 0.05
     HANDLE_MAX_RATIO = 0.55
     ROI_EXPAND_RATIO = 0.3
-    SKIP_FRAMES = 10
+    SKIP_FRAMES = 90
     HANDLE_CENTER_DEVIATION_RATIO = 0.3
 
     # ---- 红色胶带 ----
