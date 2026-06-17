@@ -176,6 +176,7 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
     CUP_HEIGHT = 0.12             # 杯高先验 (m), 需用户填写
     RIM_RADIUS = 0.04             # 杯口半径先验 (m), 需用户填写
     RIM_OFFSET_RATIO = 0.6        # 倒水偏移比例 (0~1)
+    HANDLE_SIDE = "back"          # 把手方向: back | left | right (config fallback)
     CUP_MODEL_NAME = ""           # cup 专用模型, 为空时使用基类 MODEL_NAME
 
     def __init__(self, config_dict=None, start_pipeline=True):
@@ -191,6 +192,7 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         self.last_known_pose = None   # (pos_cam, euler_cam) 或 None
         self._cached_pour_target = None  # pour_target 3D 点或 None
         self._last_axis_vec = None   # 最近一帧的主轴方向 (杯底→杯口), 供 smooth 路径使用
+        # HANDLE_SIDE 直接从 config 读取 (self.HANDLE_SIDE)
 
     # ------------------------------------------------------------
     def _apply_config(self, cfg):
@@ -220,6 +222,8 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
             self.RIM_RADIUS = _cup["rim_radius"]
         if "rim_offset_ratio" in _cup:
             self.RIM_OFFSET_RATIO = _cup["rim_offset_ratio"]
+        if "handle_side" in _cup:
+            self.HANDLE_SIDE = _cup["handle_side"]
 
     # ------------------------------------------------------------
     def compute_cup_6d_pose(self, color_image, aligned_depth_frame):
@@ -256,6 +260,21 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         if anchor is None:
             return (bbox, None, None, None, None, None, None, None)
         _, _, center_depth = anchor
+
+        # ---- 根据 handle_side 裁剪 bbox (排除把手侧的背景点) ----
+        if self.HANDLE_SIDE in ("left", "right"):
+            fx = self.color_intrinsics.fx
+            rim_px = max(1, int(self.RIM_RADIUS * fx / center_depth))
+            x1_orig, x2_orig = bbox[0], bbox[2]
+            if self.HANDLE_SIDE == "left":
+                # 把手在左侧, 从右边界向左取 2 倍杯口半径
+                bbox[0] = max(int(x2_orig) - 2 * rim_px, int(x1_orig))
+            elif self.HANDLE_SIDE == "right":
+                # 把手在右侧, 从左边界向右取 2 倍杯口半径
+                bbox[2] = min(int(x1_orig) + 2 * rim_px, int(x2_orig))
+            # 确保裁剪后 bbox 宽度合理, 否则回退到原始 bbox
+            if bbox[2] - bbox[0] < 4:
+                bbox[0], bbox[2] = x1_orig, x2_orig
 
         x1_c, y1_c = int(bbox[0]), int(bbox[1])
         x2_c, y2_c = int(bbox[2]), int(bbox[3])
@@ -436,26 +455,29 @@ class RealSenseCup6DDetector(BaseRealSenseDetector):
         cv2.putText(display, "YOLO: %dms" % int(self._yolo_time_ms),
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
+        cv2.putText(display, "Handle: %s" % self.HANDLE_SIDE,
+                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
         if position is not None and euler is not None:
             text_p = "Pos: (%.2f, %.2f, %.2f) m" % tuple(position)
             text_e = "Euler: (A=%.1f, B=%.1f, C=%.1f)" % tuple(euler)
-            cv2.putText(display, text_p, (10, 55),
+            cv2.putText(display, text_p, (10, 75),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            cv2.putText(display, text_e, (10, 75),
+            cv2.putText(display, text_e, (10, 95),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         if rim_pos is not None:
             text_rim = "Rim: (%.2f, %.2f, %.2f) m" % tuple(rim_pos)
-            cv2.putText(display, text_rim, (10, 100),
+            cv2.putText(display, text_rim, (10, 120),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
         if pour_target is not None:
             text_pour = "Pour: (%.2f, %.2f, %.2f) m" % tuple(pour_target)
-            cv2.putText(display, text_pour, (10, 120),
+            cv2.putText(display, text_pour, (10, 140),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
         if rim_r is not None:
-            cv2.putText(display, "Rim_r: %.2fm" % rim_r, (10, 140),
+            cv2.putText(display, "Rim_r: %.2fm" % rim_r, (10, 160),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
         return display

@@ -57,4 +57,5 @@ cup:
   height: 0.100                         # 杯高先验 (米)
   rim_radius: 0.035                     # 杯口半径先验 (米)
   rim_offset_ratio: 0.6                 # 倒水时壶嘴偏移杯口中心的比例 (0~1)
+  handle_side: "back"                   # 把手方向: back(默认,把手背对相机,不修改bbox) | left(把手在左侧) | right(把手在右侧)
   device: gpu                           # 运行设备: gpu(优先) | cpu(强制)

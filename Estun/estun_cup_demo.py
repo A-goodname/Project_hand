@@ -78,8 +78,17 @@ STABLE_WINDOW = _cfg_estun["stabilization"]["window"]
 POS_THRESHOLD = _cfg_estun["stabilization"]["pos_threshold"]
 ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 
-# ---- cup_grasp 偏移 ----
-CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset"], dtype=float)
+# ---- handle_side (从 RealSense config 读取, 需在 CUP_T_OFFSET 之前) ----
+HANDLE_SIDE = _cfg.get("cup", {}).get("handle_side", "back")
+print(f"[INFO] handle_side: {HANDLE_SIDE}")
+
+# ---- cup_grasp 偏移 (根据 handle_side 选择对应偏移) ----
+if HANDLE_SIDE == "left":
+    CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset_left"], dtype=float)
+    print(f"[INFO] 使用 left 模式偏移 t_cup_offset_left")
+else:
+    CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset"], dtype=float)
+    print(f"[INFO] 使用 back 模式偏移 t_cup_offset")
 CUP_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["r_cup_offset"], dtype=float)
 CUP_PRE_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["t_offset"], dtype=float)
 CUP_PRE_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["r_offset"], dtype=float)
@@ -362,13 +371,24 @@ def main():
     c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
     cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
     cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
-    if not (70 <= cB1 <= 90):
-        print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (水杯抓取合理范围)")
-        cB1 = 80.0
-    # C 角 clamp: 右手抓取时约束到 [-120, -100], 使灵巧手手指垂直于杯身
-    if not (-120 <= cC1 <= -100):
-        print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (右手抓取约束)")
-        cC1 = -110.0
+    # ---- 根据 handle_side 施加角度约束 ----
+    if HANDLE_SIDE == "back":
+        # back 模式: 把手背对相机, 灵巧手右侧抓取
+        # B 角 clamp 到 [70, 90], 使灵巧手从水平方向接近水杯
+        if not (70 <= cB1 <= 90):
+            print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (back 模式)")
+            cB1 = 80.0
+        # C 角 clamp 到 [-120, -100], 使灵巧手手指垂直于杯身
+        if not (-120 <= cC1 <= -100):
+            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
+            cC1 = -110.0
+    else:
+        # left 模式: 把手在相机左侧, 灵巧手右侧抓取 (递给人)
+        # B 角暂不约束, 由 compute_grasp_rotation 自然决定 (杯身竖直时 B 角天然合理)
+        # C 角 clamp 到 [-100, -80], 默认 -90, 参考水壶约束
+        if not (-100 <= cC1 <= -80):
+            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式, 参考水壶)")
+            cC1 = -90.0
 
     c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
     c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
@@ -412,7 +432,8 @@ def main():
         f.write("--- 配置参数 ---\n")
         f.write(f"orientation_mode: {ORIENTATION_MODE}\n")
         f.write(f"grasp_direction:  {GRASP_DIRECTION}\n")
-        f.write(f"fine_tune_mode:   {FINE_TUNE_MODE}\n\n")
+        f.write(f"fine_tune_mode:   {FINE_TUNE_MODE}\n")
+        f.write(f"handle_side:      {HANDLE_SIDE}\n\n")
 
         f.write("--- 偏移参数 ---\n")
         f.write(f"t_cup_effective: ({t_cup_effective[0]:.4f}, {t_cup_effective[1]:.4f}, {t_cup_effective[2]:.4f})\n")
@@ -464,16 +485,18 @@ def main():
                     Rz = euler_to_rotation_matrix(0, 0, CUP_R_OFFSET[2], order="zyx")  # Rz(CUP_R_OFFSET[2])
                     t_offset_new = Rz.T @ t_effective_new
 
-                    print(f"\n[FINE TUNE] 建议新偏移:")
+                    offset_name = "t_cup_offset_left" if HANDLE_SIDE == "left" else "t_cup_offset"
+                    print(f"\n[FINE TUNE] 建议新偏移 ({HANDLE_SIDE} 模式):")
                     print(f"  t_effective_new = ({t_effective_new[0]:.4f}, {t_effective_new[1]:.4f}, {t_effective_new[2]:.4f})")
-                    print(f"  t_cup_offset    = ({t_offset_new[0]:.4f}, {t_offset_new[1]:.4f}, {t_offset_new[2]:.4f})")
+                    print(f"  {offset_name}    = ({t_offset_new[0]:.4f}, {t_offset_new[1]:.4f}, {t_offset_new[2]:.4f})")
 
                     # 追加写入日志
                     with open(log_path, "a", encoding="utf-8") as f:
                         f.write("\n--- fine_tune 结果 ---\n")
+                        f.write(f"当前 handle_side: {HANDLE_SIDE}\n")
                         f.write(f"调整后 XYZ: ({adj_xyz[0]:.4f},{adj_xyz[1]:.4f},{adj_xyz[2]:.4f}) m\n")
                         f.write(f"建议 t_effective_new: ({t_effective_new[0]:.4f},{t_effective_new[1]:.4f},{t_effective_new[2]:.4f})\n")
-                        f.write(f"建议 t_cup_offset:    ({t_offset_new[0]:.4f},{t_offset_new[1]:.4f},{t_offset_new[2]:.4f})\n")
+                        f.write(f"建议 {offset_name}:    ({t_offset_new[0]:.4f},{t_offset_new[1]:.4f},{t_offset_new[2]:.4f})\n")
 
                     print(f"[LOG] 微调结果已追加至: {log_path}")
 

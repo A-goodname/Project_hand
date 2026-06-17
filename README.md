@@ -42,6 +42,7 @@ pip install -r requirements.txt
 | `Estun/estun_demo.py` | 演示脚本：RealSense版位姿转换链路验证 (瓶身, 无硬件依赖) |
 | `Estun/estun_epiceye_demo.py` | 演示脚本：EpicEye版位姿转换链路验证 (瓶身, 无硬件依赖) |
 | `Estun/estun_handle_demo.py` | 演示脚本：RealSense Handle版位姿转换链路验证 (把手, 无硬件依赖) |
+| `Estun/estun_cup_demo.py` | **演示脚本：水杯单检测位姿转换验证**，独立 pipeline，支持 back/left handle_side 多模式角度约束 |
 | `Estun/estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
 | `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令 |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
@@ -97,7 +98,7 @@ pip install -r requirements.txt
 - **RealSense 检测模型/目标类别 (瓶身)** → 修改对应模块 `config.yaml` 中的 `model.name` 和 `model.target_class_id` (`RealSense_R/` 或 `RealSense/`)
 - **RealSense 水壶检测模型 (把手)** → 修改对应模块 `config.yaml` 中的 `kettle_model.model` (微调YOLOv8n) 或 `yolo_world.model` (YOLO-World)
 - **RealSense 把手检测参数** → 修改对应模块 `config.yaml` 中的 `handle` 段 (side/skip_frames/center_deviation_ratio 等)
-- **RealSense 水杯检测参数** → 修改对应模块 `config.yaml` 中的 `cup` 段 (height/rim_radius/rim_offset_ratio)
+- **RealSense 水杯检测参数** → 修改对应模块 `config.yaml` 中的 `cup` 段 (height/rim_radius/rim_offset_ratio/handle_side)
 - **EpicEye 检测模型/目标类别** → 修改 `EpicEye/epiceye_config.yaml` 中的 `model.gray_path` 和 `model.class_id`
 - **切换运行设备** → 修改对应相机模块配置文件中的 `model.device`（gpu/cpu）
 - **修改机器人参数** → 修改 `Estun/estun_config.yaml`
@@ -110,6 +111,7 @@ pip install -r requirements.txt
 - **把手抓取点偏移** → 微调 `Estun/estun_config.yaml` 中的 `handle_grasp.pre_offset` / `handle_grasp.target_offset`
 - **红色胶带辅助检测** → 修改对应模块 `config.yaml` 中的 `red_tape.enabled` / `red_tape.min_area`
 - **SAM 模型选择** → 修改对应模块 `config.yaml` 中的 `sam.model` (当前为 sam2_b.pt)
+- **调整水杯偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `cup_grasp.gripper_offset.t_cup_offset` (back 模式) 或 `t_cup_offset_left` (left 模式)
 
 ## 核心流程
 
@@ -146,3 +148,4 @@ pip install -r requirements.txt
 - **红色胶带辅助**：HSV 双阈值红色检测，替换把手 3D 位置，旋转保持 PCA 不变
 - **偏移参考系**：P2/P3 的 pre_offset / target_offset 定义在抓取点末端系 (grasp ee frame) 下，非当前末端系
 - **扫描线分离**：按 `handle_side` 取最外段（right=最右段/left=最左段），底部+顶部双向剔除 x 中心偏离行
+- **Cup handle_side 模式**：`RealSense/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + estun_cup_demo.py 的角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left

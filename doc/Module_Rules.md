@@ -126,8 +126,9 @@
   - `Estun/estun_demo.py`: RealSense 版位姿转换链路验证 (瓶身)
   - `Estun/estun_epiceye_demo.py`: EpicEye 版位姿转换链路验证 (瓶身)
   - `Estun/estun_handle_demo.py`: RealSense Handle 版位姿转换链路验证 (把手), 剥离 TCP/灵巧手/CRP 指令循环; 支持 fine_tune_mode 反算新偏移
-  - `Estun/estun_cup_demo.py`: 水杯单检测位姿转换验证 (独立 pipeline)
+  - `Estun/estun_cup_demo.py`: 水杯单检测位姿转换验证 (独立 pipeline); 从 RealSense config 读取 `cup.handle_side`, 按 handle_side 选择偏移 (t_cup_offset / t_cup_offset_left) 和角度约束 (back: B[70,90]+C[-120,-100]; left: 仅 C[-100,-80])
   - `Estun/estun_handle_cup_demo.py`: Handle+Cup 融合版位姿转换验证 (共享 pipeline)
+- **水杯偏移配置**: `estun_config.yaml` 中 `cup_grasp.gripper_offset.t_cup_offset` (back 模式) 和 `t_cup_offset_left` (left 模式)
 - **TCP 模拟脚本**:
   - `Estun/estun_test.py`: TCP 服务器模拟, 持续发送位姿并处理 GRIP/RELEASE 指令
 - **导入约定**:
