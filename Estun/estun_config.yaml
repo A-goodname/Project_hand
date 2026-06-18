@@ -32,7 +32,7 @@ estun:
   # --- 把手抓取 (estun_handle_run / estun_handle_demo 使用) ---
   handle_grasp:
     gripper_offset:                    # 把手灵巧手偏移 (独立于瓶身)
-      t_handle_offset: [0.04, -0.03, 0.078]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
+      t_handle_offset: [0.04, -0.03, 0.080]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
       r_handle_offset: [0, 0, -90]               # 灵巧手安装角度, 同瓶身
     pre_offset:
       t_offset: [0.0, -0.10, 0.03]      # 末端系下预抓取平移偏移 (x, y, z) m

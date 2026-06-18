@@ -26,7 +26,7 @@ estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块版)
   [Step 3] 初始化 Cup 检测器 (不启动 pipeline)
   [Step 4] 主循环: 独立频率检测 Handle + Cup → cam2ee → 各自稳定化
   [Step 5] 控制台输入机械臂当前位姿
-  [Step 6] 位姿转换: 计算 6 个位姿 (Handle P1/P2/P3 + Cup P1/P2/P3)
+  [Step 6] 位姿转换: 计算 6 个位姿 (Handle P1/P2 + Cup P1/P2/P3 + 倒水口 + Handle P3)
   [Step 7] 写入日志
 """
 
@@ -258,6 +258,8 @@ def main():
     print("[INFO] 初始化 RealSense Cup 6D 检测器 (新模块, 复用 pipeline)...")
     try:
         cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=False)
+        # 从 Handle 检测器拷贝彩色内参 (复用 pipeline 时不调用 _init_realsense, color_intrinsics 为 None)
+        cup_detector.color_intrinsics = handle_detector.color_intrinsics
     except Exception as e:
         print(f"[FATAL] Cup 检测器初始化失败: {e}")
         try:
@@ -278,7 +280,6 @@ def main():
 
     handle_stable_pose_ee: Any = None   # (pos_ee, euler_ee) or None
     cup_stable_pose_cam: Any = None     # (pos_cam, euler_cam) or None
-    cup_stable_rim_pour: Optional[Tuple[np.ndarray, np.ndarray, float]] = None  # (rim_pos, pour_target, rim_r)
 
     running = True
     h_frame_counter = 0   # Handle 帧计数器 (每 SKIP_FRAMES 帧检测)
@@ -348,8 +349,7 @@ def main():
             if do_cup_det:
                 # 注入帧到 Cup 检测器 (每检测帧都注入新帧)
                 cup_detector.inject_frames(color_image, depth_image, depth_colormap, depth_frame)
-                (c_bbox, c_pos, c_rot, c_euler, c_point_cloud,
-                 c_rim_pos, c_pour_target, c_rim_r) = cup_detector.compute_cup_6d_pose(color_image, depth_frame)
+                (c_bbox, c_pos, c_rot, c_euler, c_point_cloud) = cup_detector.compute_cup_6d_pose(color_image, depth_frame)
 
                 if c_pos is not None and c_rot is not None:
                     smooth_cpos, smooth_crot = cup_detector._pose_smoother.update(c_pos, c_rot)
@@ -364,20 +364,16 @@ def main():
                         mean_cpos_cam, mean_ceuler_cam = cup_stabilizer.get_mean()
                         if mean_cpos_cam is not None and mean_ceuler_cam is not None:
                             cup_stable_pose_cam = (mean_cpos_cam, mean_ceuler_cam)
-                            if c_rim_pos is not None and c_pour_target is not None and c_rim_r is not None:
-                                cup_stable_rim_pour = (c_rim_pos, c_pour_target, c_rim_r)
-                            else:
-                                cup_stable_rim_pour = None
                             print(f"[INFO] Cup 位姿已稳定!", flush=True)
                 else:
                     cup_detector._pose_smoother.reset()
 
-                cached_cup = (c_bbox, c_pos, c_rot, c_euler, c_point_cloud, c_rim_pos, c_pour_target, c_rim_r)
+                cached_cup = (c_bbox, c_pos, c_rot, c_euler, c_point_cloud)
             else:
                 if cached_cup is not None:
-                    c_bbox, c_pos, c_rot, c_euler, c_point_cloud, c_rim_pos, c_pour_target, c_rim_r = cached_cup
+                    c_bbox, c_pos, c_rot, c_euler, c_point_cloud = cached_cup
                 else:
-                    c_bbox = c_pos = c_rot = c_euler = c_point_cloud = c_rim_pos = c_pour_target = c_rim_r = None
+                    c_bbox = c_pos = c_rot = c_euler = c_point_cloud = None
 
             # ---- 两者都稳定则退出主循环 ----
             if handle_stable_pose_ee is not None and cup_stable_pose_cam is not None:
@@ -391,8 +387,7 @@ def main():
                                           h_stage, yolo_bbox, h_pos, h_rot, h_euler)
 
             if cached_cup is not None and c_bbox is not None:
-                cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler,
-                                           c_rim_pos, c_pour_target, c_rim_r)
+                cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler)
 
             # ---- 状态文字 ----
             h_status = "H:OK" if handle_stable_pose_ee is not None else "H:..."
@@ -430,22 +425,11 @@ def main():
 
     mean_hpos_ee, mean_heuler_ee = handle_stable_pose_ee
     mean_cpos_cam, mean_ceuler_cam = cup_stable_pose_cam
-    if cup_stable_rim_pour is not None:
-        rim_pos, pour_target, rim_r = cup_stable_rim_pour
-    else:
-        print("[ERROR] 未获得倒水目标点 (rim_pour 为 None), 退出")
-        try:
-            handle_detector.pipeline.stop()
-        except Exception:
-            pass
-        return
 
     print(f"\n[INFO] 稳定 Handle 末端位姿: pos=({mean_hpos_ee[0]:.3f},{mean_hpos_ee[1]:.3f},{mean_hpos_ee[2]:.3f}) "
           f"euler=({mean_heuler_ee[0]:.1f},{mean_heuler_ee[1]:.1f},{mean_heuler_ee[2]:.1f})")
     print(f"[INFO] 稳定 Cup 相机位姿:   pos=({mean_cpos_cam[0]:.3f},{mean_cpos_cam[1]:.3f},{mean_cpos_cam[2]:.3f}) "
           f"euler=({mean_ceuler_cam[0]:.1f},{mean_ceuler_cam[1]:.1f},{mean_ceuler_cam[2]:.1f})")
-    if pour_target is not None:
-        print(f"[INFO] 倒水目标点:          ({pour_target[0]:.3f},{pour_target[1]:.3f},{pour_target[2]:.3f})")
 
     # ---- [Step 5] 控制台输入机械臂位姿 ----
     print("\n" + "-" * 50)
@@ -483,9 +467,10 @@ def main():
     print("\n[INFO] 执行位姿转换...")
 
     R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
+    t_ee_base = np.array(robot_xyz, dtype=float)
 
     # ============================================================
-    # Phase 1: Handle P1 / P2 / P3_pour
+    # Phase 1a: Handle P1 / P2 (不依赖倒水口, 先计算)
     # ============================================================
 
     # Handle 位置补偿
@@ -508,14 +493,12 @@ def main():
         pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
         A2, B2, C2 = tuple(FIXED_ABC)
 
+        # P3_pour 延后到 Phase 1b (需要 Cup TCP 计算倒水口)
         R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(*HANDLE_TARGET_R_OFFSET, order="zyx")
-        # P3_pour: 倒水位置
-        pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
-        pos_ee_p3 = pos_pour_ee - R_grasp_ee @ SPOUT_T_OFFSET
-        pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
-        rot_base_3 = R_ee_base @ R_target_ee
-        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
-        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+
+        # fixed 模式变量
+        _fixed_R_grasp_ee = R_grasp_ee
+        _fixed_R_target_ee = R_target_ee
     else:
         # --- vertical/free 模式 ---
         rot_base_1 = R_ee_base @ R_grasp_ee
@@ -533,20 +516,15 @@ def main():
         pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
         A2, B2, C2 = A1, B1, C1
 
-        # P3_pour: 倒水位置
-        # spout_offset 是在抓取末端系下定义的
-        # 倒水时壶嘴对齐 pour_target, 反算抓取点 = pour_pose - spout_offset
-        pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
-        pos_ee_p3 = pos_pour_ee - R_grasp_ee_corrected @ SPOUT_T_OFFSET
-        pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
-        # 旋转: 在 P1 修正姿态上叠加倒水旋转
+        # P3_pour 延后到 Phase 1b (需要 Cup TCP 计算倒水口)
         R_pour_ee = R_grasp_ee_corrected @ euler_to_rotation_matrix(*POUR_R_OFFSET, order="zyx")
-        rot_base_3 = R_ee_base @ R_pour_ee
-        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
-        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+
+        # vertical/free 模式变量
+        _R_grasp_ee_corrected = R_grasp_ee_corrected
+        _R_pour_ee = R_pour_ee
 
     # ============================================================
-    # Phase 2: Cup P1 / P2 / P3
+    # Phase 2: Cup P1 / P2 / P3 (计算 Cup TCP 基系位置 c_pos_base_1)
     # ============================================================
 
     # Cup cam → ee
@@ -600,6 +578,58 @@ def main():
     cA3, cB3, cC3 = rotation_matrix_to_euler_angles(c_rot_base_3)
     cA3, cB3, cC3 = post_correct_angles(cA3, cB3, cC3, robot_ABC)
 
+    # ============================================================
+    # Phase 1b: 基于 Cup TCP 计算倒水口 → Handle P3
+    # ============================================================
+
+    # ---- 基于 Cup TCP (c_pos_base_1) 计算倒水口在基系下的位置 ----
+    _rim_radius = _cfg.get("cup", {}).get("rim_radius", 0.035)
+    _cup_height = _cfg.get("cup", {}).get("height", 0.100)
+    if CUP_HANDLE_SIDE == "back":
+        pour_target_base = c_pos_base_1 + np.array([_rim_radius, 0.0, _cup_height / 2.0])
+    else:  # left
+        pour_target_base = c_pos_base_1 + np.array([0.0, _rim_radius, _cup_height / 2.0])
+
+    # 反算回相机系: base → ee → cam
+    pour_target_ee_calc = R_ee_base.T @ (pour_target_base - t_ee_base)
+    pour_target = T_cam2ee[:3, :3].T @ (pour_target_ee_calc - T_cam2ee[:3, 3])
+    print(f"\n[POUR] 倒水口 (基于 Cup TCP): base=({pour_target_base[0]:.4f},{pour_target_base[1]:.4f},{pour_target_base[2]:.4f}) "
+          f"cam=({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})")
+
+    # ---- Handle P3: 倒水位置 ----
+    if ORIENTATION_MODE == "fixed":
+        # fixed 模式
+        pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
+        pos_ee_p3 = pos_pour_ee - _fixed_R_grasp_ee @ SPOUT_T_OFFSET - t_handle_effective
+        pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
+        rot_base_3 = R_ee_base @ _fixed_R_target_ee
+        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+    else:
+        # vertical/free 模式
+        pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
+        spout_rotated = _R_pour_ee @ SPOUT_T_OFFSET
+        pos_ee_p3 = pos_pour_ee - spout_rotated - t_handle_effective
+        pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
+        rot_base_3 = R_ee_base @ _R_pour_ee
+        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+
+    # ---- 基系中间量追踪 ----
+    print(f"\n[POUR] 中间量追踪 (基坐标系):")
+    print(f"  Cup TCP base:     ({c_pos_base_1[0]:.4f}, {c_pos_base_1[1]:.4f}, {c_pos_base_1[2]:.4f})")
+    print(f"  倒水口 base:      ({pour_target_base[0]:.4f}, {pour_target_base[1]:.4f}, {pour_target_base[2]:.4f})")
+    print(f"  H P1 TCP base:    ({pos_base_1[0]:.4f}, {pos_base_1[1]:.4f}, {pos_base_1[2]:.4f})")
+    if ORIENTATION_MODE != "fixed":
+        spout_P1_ee = h_pos_ee_compensated + _R_grasp_ee_corrected @ SPOUT_T_OFFSET
+        spout_P1_base = transform_pose_to_base(spout_P1_ee, robot_xyz, robot_ABC)
+        spout_P3_base = transform_pose_to_base(
+            h_pos_ee_compensated + _R_pour_ee @ SPOUT_T_OFFSET, robot_xyz, robot_ABC)
+        p3_no_offset = pos_base_3 - POUR_T_OFFSET_BASE
+        print(f"  H P1 壶嘴 base:   ({spout_P1_base[0]:.4f}, {spout_P1_base[1]:.4f}, {spout_P1_base[2]:.4f})")
+        print(f"  H P3 TCP base:    ({p3_no_offset[0]:.4f}, {p3_no_offset[1]:.4f}, {p3_no_offset[2]:.4f}) (无防碰)")
+        print(f"  H P3 壶嘴 base:   ({spout_P3_base[0]:.4f}, {spout_P3_base[1]:.4f}, {spout_P3_base[2]:.4f})")
+
     # ---- 输出 6 个位姿 ----
     msg_hp1 = f"[{pos_base_1[0]:.3f},{pos_base_1[1]:.3f},{pos_base_1[2]:.3f},{A1:.2f},{B1:.2f},{C1:.2f}]"
     msg_hp2 = f"[{pos_base_2[0]:.3f},{pos_base_2[1]:.3f},{pos_base_2[2]:.3f},{A2:.2f},{B2:.2f},{C2:.2f}]"
@@ -648,8 +678,7 @@ def main():
                 f"euler=({mean_heuler_ee[0]:.1f},{mean_heuler_ee[1]:.1f},{mean_heuler_ee[2]:.1f})\n")
         f.write(f"[Cup cam]    pos=({mean_cpos_cam[0]:.4f},{mean_cpos_cam[1]:.4f},{mean_cpos_cam[2]:.4f}) "
                 f"euler=({mean_ceuler_cam[0]:.1f},{mean_ceuler_cam[1]:.1f},{mean_ceuler_cam[2]:.1f})\n")
-        if pour_target is not None:
-            f.write(f"[Pour target] ({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})\n")
+        f.write(f"[Pour target] ({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})\n")
         f.write(f"\n")
 
         f.write("--- 机械臂位姿 ---\n")
