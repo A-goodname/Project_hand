@@ -249,9 +249,8 @@ def main():
 
             display_img = color_image.copy()
 
-            # ---- 每帧执行 Cup 检测 ----
-            (c_bbox, c_pos, c_rot, c_euler, c_point_cloud,
-             c_rim_pos, c_pour_target, c_rim_r) = cup_detector.compute_cup_6d_pose(color_image, depth_frame)
+            # ---- 每帧执行 Cup 检测 (返回 5 元组) ----
+            (c_bbox, c_pos, c_rot, c_euler, c_point_cloud) = cup_detector.compute_cup_6d_pose(color_image, depth_frame)
 
             if c_pos is not None and c_rot is not None:
                 smooth_cpos, smooth_crot = cup_detector._pose_smoother.update(c_pos, c_rot)
@@ -272,10 +271,9 @@ def main():
             else:
                 cup_detector._pose_smoother.reset()
 
-            # ---- 可视化 ----
+            # ---- 可视化 (5 参数, 无 rim/pour) ----
             if c_bbox is not None:
-                cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler,
-                                           c_rim_pos, c_pour_target, c_rim_r)
+                cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler)
 
             # ---- 状态文字 ----
             c_status = "OK" if cup_stable_pose_cam is not None else f"frame..."
