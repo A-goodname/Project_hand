@@ -34,6 +34,15 @@ estun:
     gripper_offset:                    # 把手灵巧手偏移 (独立于瓶身)
       t_handle_offset: [0.04, -0.03, 0.080]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
       r_handle_offset: [0, 0, -90]               # 灵巧手安装角度, 同瓶身
+      t_tcp_fixed: [0, 0.02, 0.06]             # 末端系下 TCP 固定偏移, 仅用于 P3 倒水位置计算 (不旋转)
+    p3_teach_offset:                            # 示教 P3 偏移 (基系, Cup P1 法兰→P3 法兰)
+      enable: true                              # 默认启用
+      back:                                     # back 模式 (已标定)
+        t_offset: [-0.1467, -0.1623, 0.2061]   # (x, y, z) m
+        r_abc: [-88.8, 36.5, -89.2]            # (A, B, C) deg
+      left:                                     # left 模式 (待标定)
+        t_offset: [0.0, 0.0, 0.0]              # (x, y, z) m
+        r_abc: [0.0, 0.0, 0.0]                 # (A, B, C) deg
     pre_offset:
       t_offset: [0.0, -0.10, 0.03]      # 末端系下预抓取平移偏移 (x, y, z) m
       r_offset: [0.0, 0.0, 0.0]         # 末端系下预抓取旋转偏移 (A, B, C) 度

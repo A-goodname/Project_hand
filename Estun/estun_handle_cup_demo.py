@@ -80,6 +80,7 @@ ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 # ---- 把手偏移 ----
 HANDLE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["t_handle_offset"], dtype=float)
 HANDLE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["r_handle_offset"], dtype=float)
+HANDLE_T_TCP_FIXED = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["t_tcp_fixed"], dtype=float)  # 末端系下固定 TCP 偏移, 仅用于 P3
 HANDLE_PRE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["t_offset"], dtype=float)
 HANDLE_PRE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["r_offset"], dtype=float)
 HANDLE_TARGET_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["t_offset"], dtype=float)
@@ -98,6 +99,15 @@ else:
     print(f"[INFO] 使用 back 模式偏移 t_cup_offset")
 CUP_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["r_cup_offset"], dtype=float)
 CUP_PRE_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["t_offset"], dtype=float)
+# ---- P3 示教偏移 (根据 cup handle_side 选择 back/left) ----
+P3_TEACH_ENABLE = _cfg_estun["handle_grasp"]["p3_teach_offset"]["enable"]
+P3_TEACH_SIDE = "back" if CUP_HANDLE_SIDE == "back" else "left"
+P3_TEACH_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]["t_offset"], dtype=float)
+P3_TEACH_R_ABC = np.array(_cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]["r_abc"], dtype=float)
+if P3_TEACH_ENABLE:
+    print(f"[INFO] P3 示教偏移: side={P3_TEACH_SIDE}, "
+          f"t_offset=({P3_TEACH_T_OFFSET[0]:.4f},{P3_TEACH_T_OFFSET[1]:.4f},{P3_TEACH_T_OFFSET[2]:.4f}) "
+          f"r_abc=({P3_TEACH_R_ABC[0]:.1f},{P3_TEACH_R_ABC[1]:.1f},{P3_TEACH_R_ABC[2]:.1f})")
 CUP_PRE_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["r_offset"], dtype=float)
 CUP_TARGET_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["target_offset"]["t_offset"], dtype=float)
 CUP_TARGET_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["target_offset"]["r_offset"], dtype=float)
@@ -582,53 +592,52 @@ def main():
     # Phase 1b: 基于 Cup TCP 计算倒水口 → Handle P3
     # ============================================================
 
-    # ---- 基于 Cup TCP (c_pos_base_1) 计算倒水口在基系下的位置 ----
-    _rim_radius = _cfg.get("cup", {}).get("rim_radius", 0.035)
-    _cup_height = _cfg.get("cup", {}).get("height", 0.100)
-    if CUP_HANDLE_SIDE == "back":
-        pour_target_base = c_pos_base_1 + np.array([_rim_radius, 0.0, _cup_height / 2.0])
-    else:  # left
-        pour_target_base = c_pos_base_1 + np.array([0.0, _rim_radius, _cup_height / 2.0])
-
-    # 反算回相机系: base → ee → cam
-    pour_target_ee_calc = R_ee_base.T @ (pour_target_base - t_ee_base)
-    pour_target = T_cam2ee[:3, :3].T @ (pour_target_ee_calc - T_cam2ee[:3, 3])
-    print(f"\n[POUR] 倒水口 (基于 Cup TCP): base=({pour_target_base[0]:.4f},{pour_target_base[1]:.4f},{pour_target_base[2]:.4f}) "
-          f"cam=({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})")
-
-    # ---- Handle P3: 倒水位置 ----
-    if ORIENTATION_MODE == "fixed":
-        # fixed 模式
-        pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
-        pos_ee_p3 = pos_pour_ee - _fixed_R_grasp_ee @ SPOUT_T_OFFSET - t_handle_effective
-        pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
-        rot_base_3 = R_ee_base @ _fixed_R_target_ee
-        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
-        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+    if P3_TEACH_ENABLE:
+        # ---- 使用示教偏移 (基系) ----
+        pos_base_3 = c_pos_base_1 + P3_TEACH_T_OFFSET + POUR_T_OFFSET_BASE
+        A3, B3, C3 = tuple(P3_TEACH_R_ABC)
+        rot_base_3 = euler_to_rotation_matrix(A3, B3, C3, order="zyx")
+        print(f"\n[POUR] 使用示教偏移: t_offset=({P3_TEACH_T_OFFSET[0]:.4f},{P3_TEACH_T_OFFSET[1]:.4f},{P3_TEACH_T_OFFSET[2]:.4f}) "
+              f"r_abc=({P3_TEACH_R_ABC[0]:.1f},{P3_TEACH_R_ABC[1]:.1f},{P3_TEACH_R_ABC[2]:.1f})")
     else:
-        # vertical/free 模式
-        pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
-        spout_rotated = _R_pour_ee @ SPOUT_T_OFFSET
-        pos_ee_p3 = pos_pour_ee - spout_rotated - t_handle_effective
-        pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
-        rot_base_3 = R_ee_base @ _R_pour_ee
-        A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
-        A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+        # ---- 基于视觉计算倒水口 ----
+        _tcp_offset_base = R_ee_base @ HANDLE_T_TCP_FIXED
+        _tcp_base = c_pos_base_1 + _tcp_offset_base
+        _rim_radius = _cfg.get("cup", {}).get("rim_radius", 0.035)
+        _cup_height = _cfg.get("cup", {}).get("height", 0.100)
+        if CUP_HANDLE_SIDE == "back":
+            pour_target_base = _tcp_base + np.array([_rim_radius, 0.0, _cup_height / 2.0])
+        else:  # left
+            pour_target_base = _tcp_base + np.array([0.0, _rim_radius, _cup_height / 2.0])
+
+        pour_target_ee_calc = R_ee_base.T @ (pour_target_base - t_ee_base)
+        pour_target = T_cam2ee[:3, :3].T @ (pour_target_ee_calc - T_cam2ee[:3, 3])
+        print(f"\n[POUR] 倒水口 (视觉): base=({pour_target_base[0]:.4f},{pour_target_base[1]:.4f},{pour_target_base[2]:.4f}) "
+              f"cam=({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})")
+
+        if ORIENTATION_MODE == "fixed":
+            pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
+            pos_ee_p3 = pos_pour_ee - _fixed_R_grasp_ee @ SPOUT_T_OFFSET - t_handle_effective
+            pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
+            rot_base_3 = R_ee_base @ _fixed_R_target_ee
+            A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+            A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
+        else:
+            pos_pour_ee = T_cam2ee[:3, :3] @ np.array(pour_target) + T_cam2ee[:3, 3]
+            spout_rotated = _R_pour_ee @ SPOUT_T_OFFSET
+            pos_ee_p3 = pos_pour_ee - spout_rotated - t_handle_effective
+            pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
+            rot_base_3 = R_ee_base @ _R_pour_ee
+            A3, B3, C3 = rotation_matrix_to_euler_angles(rot_base_3)
+            A3, B3, C3 = post_correct_angles(A3, B3, C3, robot_ABC)
 
     # ---- 基系中间量追踪 ----
     print(f"\n[POUR] 中间量追踪 (基坐标系):")
-    print(f"  Cup TCP base:     ({c_pos_base_1[0]:.4f}, {c_pos_base_1[1]:.4f}, {c_pos_base_1[2]:.4f})")
-    print(f"  倒水口 base:      ({pour_target_base[0]:.4f}, {pour_target_base[1]:.4f}, {pour_target_base[2]:.4f})")
+    print(f"  Cup P1 base:      ({c_pos_base_1[0]:.4f}, {c_pos_base_1[1]:.4f}, {c_pos_base_1[2]:.4f})")
     print(f"  H P1 TCP base:    ({pos_base_1[0]:.4f}, {pos_base_1[1]:.4f}, {pos_base_1[2]:.4f})")
-    if ORIENTATION_MODE != "fixed":
-        spout_P1_ee = h_pos_ee_compensated + _R_grasp_ee_corrected @ SPOUT_T_OFFSET
-        spout_P1_base = transform_pose_to_base(spout_P1_ee, robot_xyz, robot_ABC)
-        spout_P3_base = transform_pose_to_base(
-            h_pos_ee_compensated + _R_pour_ee @ SPOUT_T_OFFSET, robot_xyz, robot_ABC)
-        p3_no_offset = pos_base_3 - POUR_T_OFFSET_BASE
-        print(f"  H P1 壶嘴 base:   ({spout_P1_base[0]:.4f}, {spout_P1_base[1]:.4f}, {spout_P1_base[2]:.4f})")
-        print(f"  H P3 TCP base:    ({p3_no_offset[0]:.4f}, {p3_no_offset[1]:.4f}, {p3_no_offset[2]:.4f}) (无防碰)")
-        print(f"  H P3 壶嘴 base:   ({spout_P3_base[0]:.4f}, {spout_P3_base[1]:.4f}, {spout_P3_base[2]:.4f})")
+    p3_no_offset = pos_base_3 - POUR_T_OFFSET_BASE
+    print(f"  H P3 TCP base:    ({p3_no_offset[0]:.4f}, {p3_no_offset[1]:.4f}, {p3_no_offset[2]:.4f}) (无防碰)")
+    print(f"  H P3 base:        ({pos_base_3[0]:.4f}, {pos_base_3[1]:.4f}, {pos_base_3[2]:.4f}) (含防碰)")
 
     # ---- 输出 6 个位姿 ----
     msg_hp1 = f"[{pos_base_1[0]:.3f},{pos_base_1[1]:.3f},{pos_base_1[2]:.3f},{A1:.2f},{B1:.2f},{C1:.2f}]"
@@ -678,7 +687,8 @@ def main():
                 f"euler=({mean_heuler_ee[0]:.1f},{mean_heuler_ee[1]:.1f},{mean_heuler_ee[2]:.1f})\n")
         f.write(f"[Cup cam]    pos=({mean_cpos_cam[0]:.4f},{mean_cpos_cam[1]:.4f},{mean_cpos_cam[2]:.4f}) "
                 f"euler=({mean_ceuler_cam[0]:.1f},{mean_ceuler_cam[1]:.1f},{mean_ceuler_cam[2]:.1f})\n")
-        f.write(f"[Pour target] ({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})\n")
+        if not P3_TEACH_ENABLE:
+            f.write(f"[Pour target] ({pour_target[0]:.4f},{pour_target[1]:.4f},{pour_target[2]:.4f})\n")
         f.write(f"\n")
 
         f.write("--- 机械臂位姿 ---\n")
