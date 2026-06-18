@@ -36,7 +36,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入工具 ----
-from Estun.utils_shared import euler_to_rotation_matrix, transform_pose_to_base
+from Estun.utils_shared import euler_to_rotation_matrix, transform_pose_to_base, compute_gripper_offset_transform
 from RealSense.realsense_shared import rotation_matrix_to_euler_angles
 
 
@@ -103,24 +103,27 @@ def load_cam2ee(yaml_path: str) -> np.ndarray:
     return T
 
 
-def compute_cup_base(cam_pos, cam_euler, T_cam2ee, home_xyz, home_abc):
+def compute_cup_base(cam_pos, cam_euler, T_cam2ee, home_xyz, home_abc, t_cup_eff):
     """
-    将 Cup 相机系位姿转换到基坐标系下的法兰位置.
+    将 Cup 相机系位姿转换到基坐标系下的法兰位置 (含灵巧手补偿).
 
     参数:
-        cam_pos   : (x, y, z) 相机系位置 (m)
-        cam_euler : (A, B, C) 相机系欧拉角 (deg)
-        T_cam2ee  : 4x4 相机→法兰矩阵
-        home_xyz  : (x, y, z) Home 位姿位置 (m)
-        home_abc  : (A, B, C) Home 位姿欧拉角 (deg)
+        cam_pos    : (x, y, z) 相机系位置 (m)
+        cam_euler  : (A, B, C) 相机系欧拉角 (deg)
+        T_cam2ee   : 4x4 相机→法兰矩阵
+        home_xyz   : (x, y, z) Home 位姿位置 (m)
+        home_abc   : (A, B, C) Home 位姿欧拉角 (deg)
+        t_cup_eff  : (x, y, z) 水杯灵巧手有效偏移 (m)
 
     返回:
         c_pos_base : 基系下 Cup 法兰位置 (m)
     """
     c_pos_ee = T_cam2ee[:3, :3] @ np.array(cam_pos) + T_cam2ee[:3, 3]
     c_rot_ee = T_cam2ee[:3, :3] @ euler_to_rotation_matrix(*cam_euler, order="zyx")
+    # 减去灵巧手偏移得到法兰位置 (与 estun_cup_demo.py 保持一致)
+    c_pos_ee_compensated = c_pos_ee - t_cup_eff
     # 用 Home 位姿将末端系→基系
-    return transform_pose_to_base(c_pos_ee, home_xyz, home_abc)
+    return transform_pose_to_base(c_pos_ee_compensated, home_xyz, home_abc)
 
 
 def main():
@@ -147,6 +150,9 @@ def main():
     STABLE_WINDOW = 3
     POS_THRESH = 0.01
     ANGLE_THRESH = 5.0
+
+    # ---- 预计算水杯有效偏移 ----
+    _, t_cup_effective = compute_gripper_offset_transform(CUP_T_OFFSET, CUP_R_OFFSET)
 
     # ---- 日志 ----
     log_dir = os.path.join(_project_root, "logs")
@@ -223,8 +229,8 @@ def main():
         if not running:
             break
 
-        # ---- 计算 Cup P1 法兰在基系的位置 ----
-        cup_p1_base = compute_cup_base(c_pos_cam, c_euler_cam, T_cam2ee, HOME_XYZ, HOME_ABC)
+        # ---- 计算 Cup P1 法兰在基系的位置 (含灵巧手补偿) ----
+        cup_p1_base = compute_cup_base(c_pos_cam, c_euler_cam, T_cam2ee, HOME_XYZ, HOME_ABC, t_cup_effective)
         teach_count += 1
         print(f"\n{'='*50}")
         print(f"[TEACH] 第 {teach_count} 次示教")
