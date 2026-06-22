@@ -55,7 +55,13 @@ class RealSenseYOLOCupDetector:
         config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
         
         # 开始视频流
-        self.profile = self.pipeline.start(config)
+        try:
+            self.profile = self.pipeline.start(config)
+        except RuntimeError as e:
+            raise RuntimeError(
+                "[ERROR] 无法启动 RealSense 相机, 请检查连接状态. "
+                f"原始错误: {e}"
+            )
         
         # 获取深度传感器的深度比例
         depth_sensor = self.profile.get_device().first_depth_sensor()
@@ -66,7 +72,6 @@ class RealSenseYOLOCupDetector:
         
         # 加载YOLO模型
         self.model = YOLO(f'{model_name}.pt').to(DEVICE)  # Loads official YOLOv8 model
-        self.conf_threshold = conf_threshold
         
         # 创建颜色映射对象，用于可视化深度数据
         self.colorizer = rs.colorizer()
@@ -201,7 +206,8 @@ class RealSenseYOLOCupDetector:
             for i, (det, pos) in enumerate(zip(detections, positions)):
                 if det is None or pos is None:
                     continue
-                x1, y1, x2, y2, conf, _ = map(int, det[:6])
+                x1, y1, x2, y2 = map(int, det[:4])
+                conf = det[4]  # 保持 float 精度
                 
                 # 绘制边界框
                 cv2.rectangle(color_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -241,7 +247,10 @@ class RealSenseYOLOCupDetector:
                 for det in detections:
                     pos = self.get_3d_position(det, depth_image)
                     positions.append(pos)
-                    print(f"Cup detected at 3D position (x, y, z): {pos} meters")
+                    if pos is not None:
+                        print(f"Cup detected at 3D position (x, y, z): {pos} meters")
+                    else:
+                        print(f"[WARN] Cup detected but depth unavailable, skipping 3D position.")
                 
                 # 可视化结果
                 self.visualize(color_image.copy(), depth_colormap, detections, positions)
@@ -250,6 +259,8 @@ class RealSenseYOLOCupDetector:
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
                 
+        except KeyboardInterrupt:
+            print("\n[INFO] 用户中断, 正在关闭...")
         finally:
             # 停止视频流
             self.pipeline.stop()
