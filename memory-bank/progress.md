@@ -17,12 +17,28 @@
 - [x] PoseStabilizer 多帧稳定
 - [x] 代际计数器防污染
 - [x] 把手位姿转换 Demo (estun_handle_demo.py)
-- [x] Handle P1 B 角范围限制 (80,90)→85, 受 GRASP_DIRECTION==right 约束
+- [x] Handle P1 B/C 角 vertical 模式守卫 + B 角防跳变 (<90->89, >90->91)
 
 ### 水杯抓取
 - [x] 水杯 6D 检测 (RealSense/test_cup_6D.py)
 - [x] 杯口定位 + 倒水目标点
 - [x] 双检测器共享 Pipeline (estun_handle_cup_demo.py / estun_handle_cup_run.py)
+- [x] Cup P1 B/C 角 vertical 模式守卫 (back/left 分模式, B 角防跳变)
+
+### P3 示教
+- [x] 示教脚本 `estun_teach_p3.py` 日志增强: 新增 `模式: back/left` 记录
+- [x] back 模式 P3 示教数据标定 (4 次取均值)
+- [x] `p3_teach_offset.back` 配置更新为 `[0.0126, -0.1361, 0.2127]` / `[-90.0, 30.3, -90.0]`
+- [x] `cup_grasp.pour_offset.r_offset` 从 -45° 更新为 -55°
+- [x] 示教模式 P3 公式修正: 移除多余的 `+ POUR_T_OFFSET_BASE`
+- [x] **back 示教点实际倒水精度验证通过**
+
+### 抓取微调
+- [x] t_handle_offset 微调完成 (用户自行在 estun_config.yaml 调整)
+- [x] t_cup_offset 微调完成 (用户自行在 estun_config.yaml 调整)
+
+### OpenCV 窗口修复
+- [x] 窗口标题去中文: `"estun Handle+Cup Demo (RealSense 新模块)"` → `"estun Handle+Cup Demo (RealSense)"`
 
 ### 模型微调
 - [x] 水壶检测模型微调 (KettleTraining/)
@@ -40,9 +56,13 @@
 - [x] `memory-bank/` — 上下文持久化 (6 个核心文件)
 - [x] Conda 环境配置
 - [x] YAML 配置管理
+- [x] `doc/next_steps_prompt.md` 已读取并删除
 
 ## 待完成
 
+- [ ] P4 预倒水点: 机械臂端 CposOffset 实现, 定义 `[P1.x, P1.y, P3.z, P1.a, P1.b, P1.c]`
+- [ ] left 模式示教 (将 cup.handle_side 改为 "left" 后重新运行 teach_p3)
+- [ ] left 模式 t_cup_offset_left 微调
 - [ ] Orbbec 相机与主入口集成
 - [ ] RealSense (新版, rs.align) 模块与主入口集成
 - [ ] 双相机体系 (眼在手上 + 眼在手外) — 见 doc/Future_work.md
@@ -53,3 +73,4 @@
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
 - 部分脚本仍有类式灵巧手接口遗留 (已逐步迁移到函数式)
 - 水杯 handle_side=left 模式的偏移量需实际标定
+- **free 模式不应限制角度**: 当前 B/C 角约束已加 `if ORIENTATION_MODE == "vertical"` 守卫, free 模式仅做 post_correct_angles 可达性修复, 不修正角度

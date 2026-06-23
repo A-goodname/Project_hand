@@ -286,7 +286,7 @@ def main():
         window=STABLE_WINDOW, pos_thresh=POS_THRESHOLD, angle_thresh=ANGLE_THRESHOLD
     )
 
-    cv2.namedWindow("estun Handle+Cup Demo (RealSense 新模块)", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("estun Handle+Cup Demo (RealSense)", cv2.WINDOW_NORMAL)
 
     handle_stable_pose_ee: Any = None   # (pos_ee, euler_ee) or None
     cup_stable_pose_cam: Any = None     # (pos_cam, euler_cam) or None
@@ -413,7 +413,7 @@ def main():
                 vis_panel = np.hstack((display_img, depth_small))
             else:
                 vis_panel = display_img
-            cv2.imshow("estun Handle+Cup Demo (RealSense 新模块)", vis_panel)
+            cv2.imshow("estun Handle+Cup Demo (RealSense)", vis_panel)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("\n[INFO] 用户按 q 退出", flush=True)
                 running = False
@@ -515,12 +515,19 @@ def main():
         pos_base_1 = transform_pose_to_base(h_pos_ee_compensated, robot_xyz, robot_ABC)
         A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
         A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
-        if GRASP_DIRECTION == "right" and not (-100 <= C1 <= -80):
-            C1 = -90.0
-        # B 角 clamp 到 [80, 90], 超出则赋中值 85 (右手抓取)
-        if GRASP_DIRECTION == "right" and not (80 <= B1 <= 90):
-            print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
-            B1 = 85.0
+        # vertical 模式修正 B/C 角; free/fixed 模式仅可达性修复
+        if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
+            # C 角 clamp 到 [-100, -80], 使灵巧手手指垂直于把手方向
+            if not (-100 <= C1 <= -80):
+                print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
+                C1 = -90.0
+            # B 角防跳变: <90->89, >90->91, ==90 不修正
+            if B1 < 90:
+                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical, <90)")
+                B1 = 89.0
+            elif B1 > 90:
+                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical, >90)")
+                B1 = 91.0
 
         rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
         R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
@@ -557,24 +564,34 @@ def main():
     c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
     cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
     cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
-    # ---- 根据 cup handle_side 施加角度约束 (移植自 estun_cup_demo.py) ----
-    if CUP_HANDLE_SIDE == "back":
-        # back 模式: 把手背对相机, 灵巧手右侧抓取
-        # B 角 clamp 到 [70, 90], 使灵巧手从水平方向接近水杯
-        if not (70 <= cB1 <= 90):
-            print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (back 模式)")
-            cB1 = 80.0
-        # C 角 clamp 到 [-120, -100], 使灵巧手手指垂直于杯身
-        if not (-120 <= cC1 <= -100):
-            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
-            cC1 = -110.0
-    else:
-        # left 模式: 把手在相机左侧, 灵巧手右侧抓取 (递给人)
-        # B 角暂不约束, 由 compute_grasp_rotation 自然决定 (杯身竖直时 B 角天然合理)
-        # C 角 clamp 到 [-100, -80], 默认 -90, 参考水壶约束
-        if not (-100 <= cC1 <= -80):
-            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式, 参考水壶)")
-            cC1 = -90.0
+    # ---- 根据 cup handle_side 施加角度约束 (仅 vertical 模式; free 无限制, 仅可达性修复) ----
+    if ORIENTATION_MODE == "vertical":
+        if CUP_HANDLE_SIDE == "back":
+            # back 模式: 把手背对相机, 灵巧手右侧抓取
+            # B 角防跳变: <90->89, >90->91, ==90 不修正
+            if cB1 < 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 89.0 (vertical back)")
+                cB1 = 89.0
+            elif cB1 > 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 91.0 (vertical back)")
+                cB1 = 91.0
+            # C 角 clamp 到 [-120, -100], 使灵巧手手指垂直于杯身
+            if not (-120 <= cC1 <= -100):
+                print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
+                cC1 = -110.0
+        else:
+            # left 模式: 把手在相机左侧, 灵巧手右侧抓取 (递给人)
+            # B 角防跳变同 vertical back
+            if cB1 < 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 89.0 (vertical left)")
+                cB1 = 89.0
+            elif cB1 > 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 91.0 (vertical left)")
+                cB1 = 91.0
+            # C 角 clamp 到 [-100, -80], 默认 -90, 参考水壶约束
+            if not (-100 <= cC1 <= -80):
+                print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式, 参考水壶)")
+                cC1 = -90.0
 
     c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
     c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
@@ -598,7 +615,7 @@ def main():
 
     if P3_TEACH_ENABLE:
         # ---- 使用示教偏移 (基系) ----
-        pos_base_3 = c_pos_base_1 + P3_TEACH_T_OFFSET + POUR_T_OFFSET_BASE
+        pos_base_3 = c_pos_base_1 + P3_TEACH_T_OFFSET
         A3, B3, C3 = tuple(P3_TEACH_R_ABC)
         rot_base_3 = euler_to_rotation_matrix(A3, B3, C3, order="zyx")
         print(f"\n[POUR] 使用示教偏移: t_offset=({P3_TEACH_T_OFFSET[0]:.4f},{P3_TEACH_T_OFFSET[1]:.4f},{P3_TEACH_T_OFFSET[2]:.4f}) "

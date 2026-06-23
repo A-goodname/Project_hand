@@ -161,8 +161,9 @@ def main():
     log_path = os.path.join(log_dir, f"teach_p3_{ts_now}.log")
     log_lines = []
     log_lines.append(f"Home 位姿: xyz={HOME_XYZ} ABC={HOME_ABC}\n")
+    log_lines.append(f"模式: {CUP_HANDLE_SIDE}\n")
 
-    cv2.namedWindow("P3 Teach - Cup 检测", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("P3 Teach - Cup Detection", cv2.WINDOW_NORMAL)
 
     teach_count = 0
     running = True
@@ -220,7 +221,7 @@ def main():
 
             cv2.putText(display_img, f"Cup 稳定中... ({len(cup_stabilizer_buffer)}/{STABLE_WINDOW})",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.imshow("P3 Teach - Cup 检测", display_img)
+            cv2.imshow("P3 Teach - Cup Detection", display_img)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("[INFO] 用户按 q 退出")
                 running = False

@@ -375,12 +375,19 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
                 pos_base_1 = transform_pose_to_base(h_pos_ee_compensated, robot_xyz, robot_ABC)
                 A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
                 A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
-                if GRASP_DIRECTION == "right" and not (-100 <= C1 <= -80):
-                    C1 = -90.0
-                # B 角 clamp 到 [80, 90], 超出则赋中值 85 (右手抓取)
-                if GRASP_DIRECTION == "right" and not (80 <= B1 <= 90):
-                    print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
-                    B1 = 85.0
+                # vertical 模式修正 B/C 角; free/fixed 模式仅可达性修复
+                if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
+                    # C 角 clamp 到 [-100, -80], 使灵巧手手指垂直于把手方向
+                    if not (-100 <= C1 <= -80):
+                        print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
+                        C1 = -90.0
+                    # B 角防跳变: <90->89, >90->91, ==90 不修正
+                    if B1 < 90:
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical, <90)")
+                        B1 = 89.0
+                    elif B1 > 90:
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical, >90)")
+                        B1 = 91.0
 
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                 R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
@@ -409,18 +416,28 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
             c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
             cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
             cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
-            # ---- 根据 cup handle_side 施加角度约束 ----
-            if CUP_HANDLE_SIDE == "back":
-                if not (70 <= cB1 <= 90):
-                    print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (back 模式)")
-                    cB1 = 80.0
-                if not (-120 <= cC1 <= -100):
-                    print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
-                    cC1 = -110.0
-            else:
-                if not (-100 <= cC1 <= -80):
-                    print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式)")
-                    cC1 = -90.0
+            # ---- 根据 cup handle_side 施加角度约束 (仅 vertical 模式; free 无限制, 仅可达性修复) ----
+            if ORIENTATION_MODE == "vertical":
+                if CUP_HANDLE_SIDE == "back":
+                    if cB1 < 90:
+                        print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 89.0 (vertical back)")
+                        cB1 = 89.0
+                    elif cB1 > 90:
+                        print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 91.0 (vertical back)")
+                        cB1 = 91.0
+                    if not (-120 <= cC1 <= -100):
+                        print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
+                        cC1 = -110.0
+                else:
+                    if cB1 < 90:
+                        print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 89.0 (vertical left)")
+                        cB1 = 89.0
+                    elif cB1 > 90:
+                        print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 91.0 (vertical left)")
+                        cB1 = 91.0
+                    if not (-100 <= cC1 <= -80):
+                        print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式)")
+                        cC1 = -90.0
 
             c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
             c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
@@ -449,7 +466,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
             # ============================================================
             if P3_TEACH_ENABLE:
                 # ---- 使用示教偏移 (基系) ----
-                pos_base_3 = c_pos_base_1 + P3_TEACH_T_OFFSET + POUR_T_OFFSET_BASE
+                pos_base_3 = c_pos_base_1 + P3_TEACH_T_OFFSET
                 A3, B3, C3 = tuple(P3_TEACH_R_ABC)
                 rot_base_3 = euler_to_rotation_matrix(A3, B3, C3, order="zyx")
                 print(f"[POUR] 使用示教偏移: t_offset=({P3_TEACH_T_OFFSET[0]:.4f},{P3_TEACH_T_OFFSET[1]:.4f},{P3_TEACH_T_OFFSET[2]:.4f}) "

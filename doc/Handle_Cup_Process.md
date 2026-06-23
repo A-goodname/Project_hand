@@ -298,5 +298,55 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 ### 8.6 当前状态
 
 - `test_cup_6D.py`: 已验证通过, 使用新版 5 元组输出, rim/pour 检测已移除
-- `Estun/estun_handle_cup_demo.py`: 已完成 v4 重构, 倒水口基于 Cup TCP + 几何偏移, 待实际运行验证
-- `Estun/estun_handle_cup_run.py`: 已完成 v4 重构, 同步 demo 的全部改动, 待实际运行验证
+- `Estun/estun_handle_cup_demo.py`: 已完成 v4 重构 + B/C 角防跳变修正, back 模式已验证通过
+- `Estun/estun_handle_cup_run.py`: 已完成 v4 重构 + B/C 角防跳变修正, 同步 demo 改动
+
+---
+
+## 9. B/C 角约束与方向模式
+
+### 9.1 模式定义
+
+| 模式 | B/C 角修正 | 适用场景 |
+|------|-----------|----------|
+| `vertical` | B 角防跳变 + C 角区间 clamp | 侧面抓取竖直水瓶/水壶 (默认) |
+| `free` | 仅 post_correct_angles 可达性修复 | PCA 稳定, 姿态由检测决定 |
+| `fixed` | 使用配置 `fixed_abc` 固定 ABC | PCA 失效时的兜底姿态 |
+
+### 9.2 B 角防跳变策略 (仅 vertical)
+
+灵巧手右手抓取侧, B 角在 90° 附近跳变时导致灵巧手翻转. `estun_handle_cup_demo/run` + `estun_handle_demo/run` 统一实现:
+
+```python
+if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
+    # C 角 clamp: Handle [-100, -80]; Cup back [-120, -100]; Cup left [-100, -80]
+    # B 角防跳变:
+    if B < 90:  B = 89.0
+    if B > 90:  B = 91.0
+    # B == 90 时不修正 (机械臂特殊位姿)
+```
+
+**free 模式** 不做任何 B/C 角修正, 仅通过 `post_correct_angles()` 做 A/C 角 ±180° 可达性修复.
+
+**fixed 模式** 使用配置固定 ABC, 不存在跳变问题.
+
+### 9.3 P4 预倒水点
+
+**动机**: Handle P1→P3 运动时若水杯与水壶接近, 高位直接 Z 向运动可能碰撞.
+
+**定义**: `P4 = [P1.x, P1.y, P3.z, P1.a, P1.b, P1.c]` — 继承 P1 的 XY 和姿态, 取 P3 的 Z 高度.
+
+**路径**: `P2 → P1 → P4 → P3 → P4 → P1 → P2`
+
+**实现**: 由机械臂端 CposOffset 实现, Python 侧不额外发送位姿. 适用于 P3_TEACH_ENABLE=true (示教模式) 和视觉模式.
+
+**当前状态**: 待机械臂端实现.
+
+---
+
+## 10. 待办事项
+
+- [ ] P4 预倒水点: 机械臂端 CposOffset 实现
+- [ ] left 模式示教 + t_cup_offset_left 微调
+- [ ] free 模式完整姿态测试 (当前仅 vertical 模式做 B/C 修正)
+- [ ] Orbbec / RealSense 新版集成

@@ -494,13 +494,19 @@ def main():
         pos_base_1 = transform_pose_to_base(pos_ee_compensated, robot_xyz, robot_ABC)
         A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
         A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
-        # 右手抓取时约束 P1 C 值到合理范围 [-100, -80], 超出则赋中值 -90
-        if GRASP_DIRECTION == "right" and not (-100 <= C1 <= -80):
-            C1 = -90.0
-        # B 角 clamp 到 [80, 90], 超出则赋中值 85 (右手抓取)
-        if GRASP_DIRECTION == "right" and not (80 <= B1 <= 90):
-            print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
-            B1 = 85.0
+        # vertical 模式修正 B/C 角; free/fixed 模式仅可达性修复
+        if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
+            # C 角 clamp 到 [-100, -80], 使灵巧手手指垂直于把手方向
+            if not (-100 <= C1 <= -80):
+                print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
+                C1 = -90.0
+            # B 角防跳变: <90->89, >90->91, ==90 不修正
+            if B1 < 90:
+                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical, <90)")
+                B1 = 89.0
+            elif B1 > 90:
+                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical, >90)")
+                B1 = 91.0
 
         # 从修正后 P1 反推末端系下修正抓取旋转, 供 P2/P3 继承
         rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
