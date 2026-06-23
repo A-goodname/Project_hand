@@ -17,6 +17,7 @@
 - [x] PoseStabilizer 多帧稳定
 - [x] 代际计数器防污染
 - [x] 把手位姿转换 Demo (estun_handle_demo.py)
+- [x] Handle P1 B 角范围限制 (80,90)→85, 受 GRASP_DIRECTION==right 约束
 
 ### 水杯抓取
 - [x] 水杯 6D 检测 (RealSense/test_cup_6D.py)

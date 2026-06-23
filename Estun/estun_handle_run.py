@@ -338,6 +338,10 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee):
                 # 右手抓取时约束 P1 C 值到合理范围 [-100, -80], 超出则赋中值 -90
                 if GRASP_DIRECTION == "right" and not (-100 <= C1 <= -80):
                     C1 = -90.0
+                # B 角 clamp 到 [80, 90], 超出则赋中值 85 (右手抓取)
+                if GRASP_DIRECTION == "right" and not (80 <= B1 <= 90):
+                    print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
+                    B1 = 85.0
 
                 # 从修正后 P1 反推末端系下修正抓取旋转, 供 P2/P3 继承
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")

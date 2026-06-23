@@ -377,6 +377,10 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
                 A1, B1, C1 = post_correct_angles(A1, B1, C1, robot_ABC)
                 if GRASP_DIRECTION == "right" and not (-100 <= C1 <= -80):
                     C1 = -90.0
+                # B 角 clamp 到 [80, 90], 超出则赋中值 85 (右手抓取)
+                if GRASP_DIRECTION == "right" and not (80 <= B1 <= 90):
+                    print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
+                    B1 = 85.0
 
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                 R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
