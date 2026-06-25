@@ -3,6 +3,7 @@
 ## 已实现功能
 
 ### 瓶身抓取
+
 - [x] RealSense 实时版 (Estun/estun_run.py + RealSense_R/)
 - [x] EpicEye 单次触发版 (Estun/estun_epiceye_run.py + EpicEye/)
 - [x] 位姿转换链路验证 Demo (estun_demo.py / estun_epiceye_demo.py)
@@ -10,6 +11,7 @@
 - [x] 手眼标定工具 (calib_data/)
 
 ### 把手抓取
+
 - [x] RealSense Handle 6D 版 (Estun/estun_handle_run.py + RealSense_R/)
 - [x] 微调 YOLOv8n + SAM2 检测流程
 - [x] 扫描线分离把手
@@ -20,12 +22,14 @@
 - [x] Handle P1 B/C 角 vertical 模式守卫 + B 角防跳变 (<90->89, >90->91)
 
 ### 水杯抓取
+
 - [x] 水杯 6D 检测 (RealSense/test_cup_6D.py)
 - [x] 杯口定位 + 倒水目标点
 - [x] 双检测器共享 Pipeline (estun_handle_cup_demo.py / estun_handle_cup_run.py)
 - [x] Cup P1 B/C 角 vertical 模式守卫 (back/left 分模式, B 角防跳变)
 
 ### P3 示教
+
 - [x] 示教脚本 `estun_teach_p3.py` 日志增强: 新增 `模式: back/left` 记录
 - [x] back 模式 P3 示教数据标定 (4 次取均值)
 - [x] `p3_teach_offset.back` 配置更新为 `[0.0126, -0.1361, 0.2127]` / `[-90.0, 30.3, -90.0]`
@@ -34,23 +38,28 @@
 - [x] **back 示教点实际倒水精度验证通过**
 
 ### 抓取微调
+
 - [x] t_handle_offset 微调完成 (用户自行在 estun_config.yaml 调整)
 - [x] t_cup_offset 微调完成 (用户自行在 estun_config.yaml 调整)
 
 ### OpenCV 窗口修复
+
 - [x] 窗口标题去中文: `"estun Handle+Cup Demo (RealSense 新模块)"` → `"estun Handle+Cup Demo (RealSense)"`
 
 ### 模型微调
+
 - [x] 水壶检测模型微调 (KettleTraining/)
 - [x] 数据采集 + 标注工具
 
 ### 灵巧手控制
+
 - [x] USB 串口通信
 - [x] 手势动作 (actlist.json)
 - [x] 速度控制
 - [x] 使能/关闭
 
 ### 工程 (Cline 配置)
+
 - [x] `.clinerules/project.md` — 项目级规则 (Memory Bank + Git + 代码风格 + 模块 + 环境)
 - [x] `Documents\Cline\Rules\context.md` — 全局 New Task 提醒策略 (300K/15轮)
 - [x] `memory-bank/` — 上下文持久化 (6 个核心文件)
@@ -73,4 +82,4 @@
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
 - 部分脚本仍有类式灵巧手接口遗留 (已逐步迁移到函数式)
 - 水杯 handle_side=left 模式的偏移量需实际标定
-- **free 模式不应限制角度**: 当前 B/C 角约束已加 `if ORIENTATION_MODE == "vertical"` 守卫, free 模式仅做 post_correct_angles 可达性修复, 不修正角度
+- **free 模式不应限制角度**: 当前 B/C 角约束已加 `if ORIENTATION_MODE == "vertical"` 守卫, free 模式仅做 post_correct_angles 可达性修复, 不修正角度  

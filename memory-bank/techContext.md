@@ -3,7 +3,7 @@
 ## 技术栈
 
 | 类别 | 技术 |
-|------|------|
+| ------ | ------ |
 | 语言 | Python 3.11+ |
 | 深度学习 | PyTorch 2.x (CUDA 12.6), Ultralytics YOLOv8 |
 | 计算机视觉 | OpenCV, NumPy, SAM2 |
