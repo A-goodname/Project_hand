@@ -33,3 +33,7 @@ _commit_msg*.txt
 KettleTraining/labels/
 KettleTraining/labels.cache
 runs/
+
+# code tools
+.clinerules/
+.claude/

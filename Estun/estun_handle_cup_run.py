@@ -81,6 +81,8 @@ from Estun.utils_shared import (
 # ---- 全局变量 ----
 stop_event = threading.Event()
 _hand_available = False  # 灵巧手是否可用, 在 main 中初始化
+_poses_cleared = False       # daemon 线程在机械臂断开时置 True
+_waiting_for_stable = False  # 主循环在等待重稳定时置 True
 
 # ---- 加载 RealSense / YOLO 配置 ----
 _cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
@@ -177,6 +179,16 @@ if ORIENTATION_MODE not in VALID_MODES:
 elif ORIENTATION_MODE == "horizontal":
     print("[WARN] horizontal 模式暂未实现, 将使用 free 模式")
     ORIENTATION_MODE = "free"
+
+
+def fmt_pose(xyz, abc):
+    """格式化单个位姿: "x,y,z,A,B,C" (位置 m, 角度 deg)"""
+    return f"{xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f},{abc[0]:.2f},{abc[1]:.2f},{abc[2]:.2f}"
+
+
+def pack_three(p1, p2, p3):
+    """打包三个位姿: (P1)[P2]{P3} — 与 ESTUN TranStrToCpos 括号标记约定匹配"""
+    return f"({fmt_pose(p1[0], p1[1])})[{fmt_pose(p2[0], p2[1])}]{{{fmt_pose(p3[0], p3[1])}}}"
 
 
 def load_cam2ee(yaml_path):
@@ -300,7 +312,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
     # ---- 预计算工具偏移 ----
     _, t_handle_effective = compute_gripper_offset_transform(HANDLE_T_OFFSET, HANDLE_R_OFFSET)
     _, t_cup_effective = compute_gripper_offset_transform(CUP_T_OFFSET, CUP_R_OFFSET)
-    cup_pose_data = None  # (cup_p1_str + cup_p2_str + cup_p3_str), 在 Phase B 中获取, Phase C 使用
+    cup_pose_data = None  # pack_three 格式 (P1)[P2]{P3}, 在 Phase B 中获取, Phase C 使用
 
     # ---- [Phase A] 接收机器人初始末端位姿 (5s 超时) ----
     robot_xyz = None
@@ -456,10 +468,11 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
             cA3, cB3, cC3 = post_correct_angles(cA3, cB3, cC3, robot_ABC)
 
             # 缓存 cup 位姿供 Phase C 使用
-            cup_p1_str = f"[{c_pos_base_1[0]:.3f},{c_pos_base_1[1]:.3f},{c_pos_base_1[2]:.3f},{cA1:.2f},{cB1:.2f},{cC1:.2f}]"
-            cup_p2_str = f"[{c_pos_base_2[0]:.3f},{c_pos_base_2[1]:.3f},{c_pos_base_2[2]:.3f},{cA1:.2f},{cB1:.2f},{cC1:.2f}]"
-            cup_p3_str = f"{c_pos_base_3[0]:.3f},{c_pos_base_3[1]:.3f},{c_pos_base_3[2]:.3f},{cA3:.2f},{cB3:.2f},{cC3:.2f}"
-            cup_pose_data = cup_p1_str + cup_p2_str + "{" + cup_p3_str + "}"
+            cup_pose_data = pack_three(
+                ((c_pos_base_1, (cA1, cB1, cC1))),
+                ((c_pos_base_2, (cA2, cB2, cC2))),
+                ((c_pos_base_3, (cA3, cB3, cC3)))
+            )
 
             # ============================================================
             # Phase 1b: 基于 Cup TCP 计算倒水口 → Handle P3
@@ -504,10 +517,11 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
 
             # ---- 发送 Handle 三个位姿 ----
             try:
-                p1_str = f"({pos_base_1[0]:.3f},{pos_base_1[1]:.3f},{pos_base_1[2]:.3f},{A1:.2f},{B1:.2f},{C1:.2f})"
-                p2_str = f"[{pos_base_2[0]:.3f},{pos_base_2[1]:.3f},{pos_base_2[2]:.3f},{A2:.2f},{B2:.2f},{C2:.2f}]"
-                p3_str = f"{pos_base_3[0]:.3f},{pos_base_3[1]:.3f},{pos_base_3[2]:.3f},{A3:.2f},{B3:.2f},{C3:.2f}"
-                msg = p1_str + p2_str + "{" + p3_str + "}"
+                msg = pack_three(
+                    ((pos_base_1, (A1, B1, C1))),
+                    ((pos_base_2, (A2, B2, C2))),
+                    ((pos_base_3, (A3, B3, C3)))
+                )
                 conn.sendall(msg.encode("utf-8"))
                 print(f"[SEND] Handle 合并位姿: {msg}", flush=True)
                 target_sent = True
@@ -580,11 +594,16 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
 
 
 def handle_client(conn, addr, detector, T_cam2ee, cup_detector):
-    """TCP 客户端处理入口 (wrapper)"""
+    """TCP 客户端处理入口 (wrapper) — 断开时清零位姿, 触发主循环重稳定"""
+    global _poses_cleared
     try:
         _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector)
     finally:
         PoseStabilizer.on_disconnect()
+        # 断开时清零位姿缓存, 通知主循环重新检测
+        detector.last_known_pose = None
+        cup_detector.last_known_pose = None
+        _poses_cleared = True
 
 
 # =============================================================
@@ -592,7 +611,7 @@ def handle_client(conn, addr, detector, T_cam2ee, cup_detector):
 # =============================================================
 
 def main():
-    global _hand_available
+    global _hand_available, _waiting_for_stable
     print("=" * 60)
     print("  ESTUN RealSense Handle + Cup 6D 融合抓取系统")
     print("  模型: Handle=微调YOLOv8n+SAM | Cup=YOLOv8m COCO")
@@ -739,6 +758,14 @@ def main():
                 else:
                     cup_detector._pose_smoother.reset()
 
+                # ---- 重稳定完成通知: 双检测器均稳定后才提示 ----
+                if _waiting_for_stable:
+                    if detector.last_known_pose is not None and cup_detector.last_known_pose is not None:
+                        _waiting_for_stable = False
+                        print("\n" + "=" * 60)
+                        print("[INFO] Handle + Cup 位姿已稳定, 可以启动机械臂")
+                        print("=" * 60, flush=True)
+
                 cached_handle = (body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler)
                 cached_cup = (c_bbox, c_pos, c_rot, c_euler, c_point_cloud)
             else:
@@ -791,7 +818,20 @@ def main():
                 running = False
                 break
 
-            # ---- [Step 5] 非阻塞 accept -> 子线程 handle_client ----
+            # ---- [Step 5] 重稳定检测 + 非阻塞 accept -> 子线程 handle_client ----
+            # 机械臂断开后 _poses_cleared 被 daemon 线程置 True, 在此处处理
+            if _poses_cleared:
+                _poses_cleared = False
+                _waiting_for_stable = True
+                main_handle_stabilizer.reset()
+                main_cup_stabilizer.reset()
+                main_handle_stabilizer.capture_generation()
+                main_cup_stabilizer.capture_generation()
+                print("\n" + "=" * 60)
+                print("[INFO] 机械臂已断开, 位姿缓存已清除, 正在重新检测...")
+                print("[INFO] (可更换抓取物体位置, 位姿稳定后将自动提示)")
+                print("=" * 60, flush=True)
+
             try:
                 conn, addr = server.accept()
             except BlockingIOError:
@@ -799,8 +839,7 @@ def main():
 
             main_handle_stabilizer.capture_generation()
             main_cup_stabilizer.capture_generation()
-            detector.last_known_pose = None
-            cup_detector.last_known_pose = None  # type: ignore[assignment]
+            # 不再清零 last_known_pose — 位姿已在断开时通过重稳定流程准备就绪
 
             t = threading.Thread(
                 target=handle_client,

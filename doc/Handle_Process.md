@@ -1,6 +1,6 @@
 # 把手抓取项目进展记录
 
-## 上次更新: 2026-06-09
+## 上次更新: 2026-06-25 (通信超时根因分析)
 
 ---
 
@@ -30,9 +30,16 @@
 ## 4. 机械臂端通信
 
 - **问题**: 连接后多次出现通信超时
-- **原因**: ESTUN `SocketReadStr` 的通信超时默认值为 2s
-- **处理**: 建议将超时改为 5s (已记录, 未实际测试验证)
-- 通信协议已改为合并一次发送 P1/P2/P3 三个位姿, 协议格式验证通过
+- **根因分析** (2026-06-25):
+
+  - `SocketSendStr` 在 while 循环内每轮发送位姿, 但 PC 端连接时清零 `last_known_pose`, 需要 `skip_frames(90) × STABLE_WINDOW(3)` ≈ 9s 重新稳定
+  - 机械臂 2s 超时比 9s 短 → 每次超时重发位姿污染 TCP buffer
+
+- **修复方案** (已在 handle-cup 版实现, 待同步到 handle-only):
+
+  - 机械臂端: `SocketSendStr` 移到 while 外只发一次, `SocketReadStr` 独立 while 循环只读不写
+  - PC 端: 清零时机从"连接时"改为"断开时", 让位姿提前准备好
+  - 详见 `doc/estun_handle_cup_code.txt` v2
 
 ## 5. 后续开发计划
 

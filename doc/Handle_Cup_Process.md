@@ -1,6 +1,6 @@
 # 水杯抓取与把手抓取融合 (Handle + Cup)
 
-## 上次更新: 2026-06-18 (v4: 倒水口链路重构, 基于 Cup TCP)
+## 上次更新: 2026-06-25 (v5: 通信协议重构 + P4 预倒水点)
 
 ---
 
@@ -174,7 +174,7 @@ R_target_ee = R_grasp_ee_cup @ euler_to_rotation_matrix(*CUP_TARGET_R_OFFSET, or
 
 ## 5. TCP 通信协议
 
-基于 `estun_handle_run` 的 Phase C 指令循环扩展:
+基于 `estun_handle_run` 的 Phase C 指令循环扩展.
 
 ### 协议格式 (与 estun_handle_run 兼容)
 
@@ -189,6 +189,28 @@ R_target_ee = R_grasp_ee_cup @ euler_to_rotation_matrix(*CUP_TARGET_R_OFFSET, or
 ```
 
 CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, 直接 `sendall` 三个位姿, 格式与 Phase B 一致.
+
+### 机械臂端流程 (v2, 2026-06-25)
+
+详见 `doc/estun_handle_cup_code.txt`. 重构为线性五阶段流程:
+
+```
+[1] SocketSendStr(当前位姿) 一次, 在 while 循环外
+[2] while SocketReadStr → 等待 Handle P1/P2/P3 (独立循环, 超时重试, 只读不写)
+[3] Handle 运动: P2 → P1 → P4 → P3 → P4 → P1 → P2
+[4] SocketSendStr('CUP') → while SocketReadStr → 等待 Cup P1/P2/P3
+[5] Cup 运动: C_P2 → C_P1 → C_P3 → C_P1 → C_P2 → Home
+```
+
+**关键改进**:
+
+- `SocketSendStr` 不再在 while 循环内反复发送 (避免 TCP buffer 污染)
+- 两个 `SocketReadStr` 各自独立循环, 超时只重试不发送多余数据
+- P4 预倒水点由机械臂端 `CposOffset` 计算, PC 端无需额外发送
+
+### PC 端位姿组装 (v2)
+
+抽取 `fmt_pose()` / `pack_three()` 函数, 统一为 `(P1)[P2]{P3}` 格式. 修正了旧代码 Cup P1 括号使用 `[...]` 而非 `(...)` 的 bug.
 
 ---
 
@@ -299,7 +321,8 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 
 - `test_cup_6D.py`: 已验证通过, 使用新版 5 元组输出, rim/pour 检测已移除
 - `Estun/estun_handle_cup_demo.py`: 已完成 v4 重构 + B/C 角防跳变修正, back 模式已验证通过
-- `Estun/estun_handle_cup_run.py`: 已完成 v4 重构 + B/C 角防跳变修正, 同步 demo 改动
+- `Estun/estun_handle_cup_run.py`: v4 重构 + B/C 角防跳变修正 + 通信协议重构 (v2, 2026-06-25): `fmt_pose()`/`pack_three()` 抽函数, 清零时机改为断开时, 自动重稳定流程
+- `doc/estun_handle_cup_code.txt`: v2 线性五阶段流程 + P4 预倒水点 + 独立 while 循环
 
 ---
 
@@ -340,13 +363,14 @@ if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
 
 **实现**: 由机械臂端 CposOffset 实现, Python 侧不额外发送位姿. 适用于 P3_TEACH_ENABLE=true (示教模式) 和视觉模式.
 
-**当前状态**: 待机械臂端实现.
+**当前状态**: 已完成. 机械臂端代码见 `doc/estun_handle_cup_code.txt` (v2), 待在实际示教器上测试.
 
 ---
 
 ## 10. 待办事项
 
-- [ ] P4 预倒水点: 机械臂端 CposOffset 实现
+- [x] P4 预倒水点: 机械臂端代码已实现 (`doc/estun_handle_cup_code.txt` v2), 待示教器测试
+- [x] PC 端通信协议重构: `fmt_pose()`/`pack_three()` + 断开时清零 + 自动重稳定 (2026-06-25)
 - [ ] left 模式示教 + t_cup_offset_left 微调
 - [ ] free 模式完整姿态测试 (当前仅 vertical 模式做 B/C 修正)
 - [ ] Orbbec / RealSense 新版集成
