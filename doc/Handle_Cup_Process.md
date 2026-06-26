@@ -20,7 +20,7 @@
 ## 2. 坐标系与符号约定
 
 | 符号 | 含义 |
-|------|------|
+| ------ | ------ |
 | P_obj_cam | 物体在相机坐标系下的 6D 位姿 (检测器输出) |
 | T_cam_ee | 相机到末端法兰的 4x4 齐次变换矩阵 (手眼标定) |
 | P_ee_base | 当前末端法兰在基坐标系下的位姿 [x,y,z,A,B,C] |
@@ -37,7 +37,7 @@
 
 ### 3.1 流程
 
-```
+```text
 MoveP2(handle) → PREGRIP → MoveP1(handle) → GRIPDONE → MoveP3(handle_pour) → wait 1s(倒水)
 → MoveP1(handle) → PREGRIP → MoveP2(handle) → RESET → MoveHome
 ```
@@ -45,6 +45,7 @@ MoveP2(handle) → PREGRIP → MoveP1(handle) → GRIPDONE → MoveP3(handle_pou
 ### 3.2 Handle P1 (抓取点)
 
 与 `estun_handle_run` 完全一致:
+
 1. 检测水壶 Handle 6D → cam2ee → 稳定化 → 得到 `pos_ee, euler_ee`
 2. 位置补偿: `pos_ee_compensated = pos_ee - t_handle_effective`
 3. 方向对齐: `R_grasp_ee = compute_grasp_rotation(R_obj_ee, mode, r_handle_offset, R_ee_base)`
@@ -54,6 +55,7 @@ MoveP2(handle) → PREGRIP → MoveP1(handle) → GRIPDONE → MoveP3(handle_pou
 ### 3.3 Handle P2 (预抓取点)
 
 与 `estun_handle_run` 完全一致:
+
 - 位置: `pos_ee_pre = pos_ee_compensated + R_grasp_ee_corrected @ HANDLE_PRE_T_OFFSET`
 - 姿态: 继承 P1 修正后的 `(A1, B1, C1)`
 
@@ -65,7 +67,7 @@ P3 计算不再依赖 cup 检测器输出的 `pour_target` (PCA rim 中心), 而
 
 由于 P3 需要 Cup TCP 位置, 计算顺序调整为:
 
-```
+```text
 Phase 1a: Handle P1/P2 (不依赖倒水口)
 Phase 2:  Cup P1/P2/P3 (得到 c_pos_base_1 = Cup TCP 基系位置)
 Phase 1b: 基于 c_pos_base_1 计算倒水口 → Handle P3
@@ -95,11 +97,13 @@ pour_target = T_cam2ee[:3, :3].T @ (pour_target_ee_calc - T_cam2ee[:3, 3])
 #### Handle P3 计算
 
 **1. 倒水位置 → 末端系:**
-```
+
+```text
 pos_pour_ee = T_cam2ee[:3,:3] @ pour_target + T_cam2ee[:3,3]
 ```
 
 **2. 反算抓取点末端位姿 (fixed 模式):**
+
 ```python
 pos_ee_p3 = pos_pour_ee - R_grasp_ee @ SPOUT_T_OFFSET - t_handle_effective
 pos_base_3 = transform_pose_to_base(pos_ee_p3, robot_xyz, robot_ABC) + POUR_T_OFFSET_BASE
@@ -107,6 +111,7 @@ rot_base_3 = R_ee_base @ R_target_ee
 ```
 
 **3. 反算抓取点末端位姿 (vertical/free 模式):**
+
 ```python
 spout_rotated = R_pour_ee @ SPOUT_T_OFFSET  # R_pour_ee = R_grasp_ee @ POUR_R_OFFSET
 pos_ee_p3 = pos_pour_ee - spout_rotated - t_handle_effective
@@ -115,6 +120,7 @@ rot_base_3 = R_ee_base @ R_pour_ee
 ```
 
 **关键修复 (对比旧代码):**
+
 - P3 位置加入了 `t_handle_effective` 补偿 (旧代码遗漏)
 - vertical/free 模式使用 `_R_pour_ee @ SPOUT_T_OFFSET` 而非 `_R_grasp_ee_corrected @ SPOUT_T_OFFSET` (包含倒水旋转)
 
@@ -124,7 +130,7 @@ rot_base_3 = R_ee_base @ R_pour_ee
 
 ### 4.1 流程
 
-```
+```text
 (发送 'CUP' 标记)
 MoveP2(cup) → RELEASE(PAPER) → MoveP1(cup) → GRIP → MoveP3(cup) → wait 1s(等人取)
 → MoveP1(cup) → RELEASE(PAPER) → MoveP2(cup) → RESET → MoveHome
@@ -133,17 +139,22 @@ MoveP2(cup) → RELEASE(PAPER) → MoveP1(cup) → GRIP → MoveP3(cup) → wait
 ### 4.2 Cup P1 (抓取点)
 
 1. `RealSenseCup6DDetector.compute_cup_6d_pose()` 输出 (新版 5 元组):
-   ```
+
+   ```text
    (bbox, position, rotation, euler, point_cloud)
    ```
+
    - 已移除 `rim_pos`, `pour_target`, `rim_r` 输出 (倒水口改用几何计算)
 2. `position` 是水杯在相机系下的 3D 位置 (YOLO bbox 重心深度 + PCA 均值)
 3. cam2ee 转换:
-   ```
+
+   ```text
    pos_cup_ee = T_cam2ee[:3,:3] @ position + T_cam2ee[:3,3]
    rot_cup_ee = T_cam2ee[:3,:3] @ rotation
    ```
+
 4. 位置补偿 (使用 `cup_grasp.gripper_offset`, 根据 `handle_side` 选择偏移):
+
    ```python
    if CUP_HANDLE_SIDE == "left":
        t_cup_effective = R_z(r_cup_offset.C) @ t_cup_offset_left
@@ -151,6 +162,7 @@ MoveP2(cup) → RELEASE(PAPER) → MoveP1(cup) → GRIP → MoveP3(cup) → wait
        t_cup_effective = R_z(r_cup_offset.C) @ t_cup_offset
    pos_ee_compensated = pos_cup_ee - t_cup_effective
    ```
+
 5. 方向对齐 + 基系转换
 6. **角度约束** (根据 handle_side):
    - `back` 模式: B 角 clamp 到 [70, 90], C 角 clamp 到 [-120, -100]
@@ -158,14 +170,14 @@ MoveP2(cup) → RELEASE(PAPER) → MoveP1(cup) → GRIP → MoveP3(cup) → wait
 
 ### 4.3 Cup P2 (预抓取点)
 
-```
+```text
 pos_ee_pre = pos_ee_compensated + R_grasp_ee_cup @ CUP_PRE_T_OFFSET
 姿态同 P1
 ```
 
 ### 4.4 Cup P3 (递杯点)
 
-```
+```text
 pos_ee_target = pos_ee_compensated + R_grasp_ee_cup @ CUP_TARGET_T_OFFSET
 R_target_ee = R_grasp_ee_cup @ euler_to_rotation_matrix(*CUP_TARGET_R_OFFSET, order="zyx")
 ```
@@ -178,7 +190,7 @@ R_target_ee = R_grasp_ee_cup @ euler_to_rotation_matrix(*CUP_TARGET_R_OFFSET, or
 
 ### 协议格式 (与 estun_handle_run 兼容)
 
-```
+```text
 [Phase B] 发送 handle P1/P2/P3:  (...) [...] {...}
 [Phase C] 指令循环:
     PREGRIP → 灵巧手 PREGRIP
@@ -194,7 +206,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 
 详见 `doc/estun_handle_cup_code.txt`. 重构为线性五阶段流程:
 
-```
+```text
 [1] SocketSendStr(当前位姿) 一次, 在 while 循环外
 [2] while SocketReadStr → 等待 Handle P1/P2/P3 (独立循环, 超时重试, 只读不写)
 [3] Handle 运动: P2 → P1 → P4 → P3 → P4 → P1 → P2
@@ -229,7 +241,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 
 ### 6.3 主循环流程
 
-```
+```text
 每 SKIP_FRAMES 帧:
   1. 从 Handle 检测器获取帧 (color, depth, depth_colormap, depth_frame)
   2. Handle 检测: detect_handle_6d(color, depth_frame)
@@ -245,7 +257,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 ### 7.1 `Estun/estun_config.yaml` — cup_grasp 段
 
 | 参数 | 值 | 说明 |
-|------|-----|------|
+| ------ | ----- | ------ |
 | `enabled` | true | 总开关 |
 | `spout_offset.t_offset` | [-0.06, 0.17, 0.0] | 壶嘴在抓取末端系下的偏移 (m), 已实际测量 |
 | `gripper_offset.t_cup_offset` | [0.06, -0.04, 0.08] | 抓水杯的灵巧手平移偏移 (m), back 模式 |
@@ -260,7 +272,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 ### 7.2 `RealSense/config.yaml` — cup 段 (注意: v4 后统一使用 RealSense/ 新模块)
 
 | 参数 | 值 | 说明 |
-|------|-----|------|
+| ------ | ----- | ------ |
 | `height` | 0.100 | 杯高先验 (m), 实际测量 |
 | `rim_radius` | 0.035 | 杯口半径先验 (m), 实际测量 |
 | `rim_offset_ratio` | 0.6 | 倒水偏移比 (0~1), v4 后不再用于倒水口计算, 保留兼容 |
@@ -279,18 +291,22 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 **旧方案 (v3):** cup 检测器通过 PCA rim 检测输出 `pour_target` (相机系点云杯口中心), 直接用于 Handle P3. 透明杯子深度测量误差导致倒水口偏移, 该误差被 `t_cup_effective` 的 Z 分量掩盖.
 
 **新方案 (v4):** 倒水口基于 Cup TCP 基系位置 `c_pos_base_1` + 杯几何偏移:
-```
+
+```text
 pour_target_base = c_pos_base_1 + [rim_radius, 0, height/2]  (back 模式)
 ```
+
 - `c_pos_base_1` 已包含 cup gripper_offset 补偿, 位置准确
 - 偏移量由用户实测的先验参数 `rim_radius`, `height` 决定, 不受深度测量误差影响
 
 ### 8.2 Cup 6D 检测器简化
 
 v4 移除 `compute_cup_6d_pose()` 的 rim/pour 相关输出, 返回 5 元组:
+
 ```python
 (bbox, position, rotation, euler, point_cloud)
 ```
+
 - 移除 `estimate_rim_position()` 调用 (Phase 3)
 - 移除 pour_target 计算 (Phase 4)
 - `visualize_cup()` 签名同步简化
@@ -308,7 +324,7 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 2026-06-11 将 `HandController` 类重构为 `Estun/utils_shared.py` 的函数式接口, 统一三套抓取流程:
 
 | 函数 | 手势 | 适用场景 |
-|------|------|----------|
+| ------ | ------ | ---------- |
 | `init_hand(initial_gesture="PAPER")` | PAPER/RESET | 初始化, 水瓶默认 PAPER, 把手/融合默认 RESET. **含使能重试**: `enable()` 后 `query_enable()` 验证, 未确认自动重试 (10次/0.5s) |
 | `is_hand_available()` | — | 检查灵巧手是否可用 (`_hand is not None`), run 脚本用此替代 `_hand_available = True` |
 | `hand_pre_grip()` | PREGRIP | 把手半闭合接近阶段 |
@@ -333,7 +349,7 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 ### 9.1 模式定义
 
 | 模式 | B/C 角修正 | 适用场景 |
-|------|-----------|----------|
+| ------ | ----------- | ---------- |
 | `vertical` | B 角防跳变 + C 角区间 clamp | 侧面抓取竖直水瓶/水壶 (默认) |
 | `free` | 仅 post_correct_angles 可达性修复 | PCA 稳定, 姿态由检测决定 |
 | `fixed` | 使用配置 `fixed_abc` 固定 ABC | PCA 失效时的兜底姿态 |

@@ -7,6 +7,7 @@
 YOLO-World 的核心优势在于：无需训练即可通过文本描述（prompt）检测任意类别物体.
 
 **重要**: YOLO-World 不适合零样本把手（handle）检测——实测会将纸杯误检为 "cup handle"，且检测框无法分离把手与瓶身。因此本项目分两阶段处理:
+
 1. **YOLO-World 水壶本体检测** (本文件, `yolo_world_detect.py`)
 2. **SAM + 几何筛选把手分割** (后续 `test_SAM_handle.py`, 详见 `doc/Handle_Process.md`)
 
@@ -14,10 +15,10 @@ YOLO-World 的核心优势在于：无需训练即可通过文本描述（prompt
 
 ## 模型文件
 
-| 文件 | 路径 | 大小 | 说明 |
-|------|------|------|------|
+| 文件                 | 路径                       | 大小   | 说明                                  |
+| -------------------- | -------------------------- | ------ | ------------------------------------- |
 | `yolov8m-worldv2.pt` | `model/yolov8m-worldv2.pt` | ~100MB | YOLO-World 主模型权重（已在 repo 中） |
-| `yolov8s-worldv2.pt` | `model/yolov8s-worldv2.pt` | ~60MB | YOLO-World 轻量版（已在 repo 中） |
+| `yolov8s-worldv2.pt` | `model/yolov8s-worldv2.pt` | ~60MB  | YOLO-World 轻量版（已在 repo 中）     |
 
 ## CLIP 依赖说明
 
@@ -29,7 +30,7 @@ YOLO-World 的工作机制是将用户传入的文本描述（如 `"cup handle"`
 
 ### 文件位置
 
-```
+```text
 C:\Users\荒\.cache\clip\ViT-B-32.pt   (~338MB)
 ```
 
@@ -39,7 +40,7 @@ C:\Users\荒\.cache\clip\ViT-B-32.pt   (~338MB)
 
 若后续项目不再使用 YOLO-World（例如回退到普通 YOLOv8），建议手动删除以下文件以释放磁盘空间：
 
-```
+```text
 # CLIP 权重文件（~338MB）
 C:\Users\荒\.cache\clip\ViT-B-32.pt
 

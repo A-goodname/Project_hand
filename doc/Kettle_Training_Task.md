@@ -2,7 +2,7 @@
 
 ## 流程概览
 
-```
+```text
 [1] 数据采集 → [2] 数据标注 → [3] 组织数据集 → [4] 模型训练 → [5] 部署到项目
 ```
 
@@ -34,7 +34,7 @@
 ### 采集要求
 
 | 要求 | 说明 |
-|------|------|
+| ------ | ------ |
 | 图片数量 | 50 张 (由转台+多角度拍摄, 50 张已足够) |
 | 旋转角度 | 水壶在转台上 0-360 度旋转, 每 30-45 度拍一张 |
 | 俯仰变化 | 相机高度变化: 水平视角、俯视 45 度、俯视 60 度 |
@@ -68,7 +68,7 @@
 
 ## Step 3: 组织数据集目录结构
 
-```
+```text
 Project_hand/
 └── KettleTraining/
     ├── images/              # 原始图片 (JPG)
@@ -105,7 +105,7 @@ names: ["kettle"]           # 类别名称
 ### 训练参数
 
 | 参数 | 值 | 说明 |
-|------|-----|------|
+| ------ | ----- | ------ |
 | `model` | `yolov8n.pt` | 轻量级模型, MX450 上 9 分钟跑完 |
 | `epochs` | 50 | 小数据集 50 epoch 足够, 太多易过拟合 |
 | `imgsz` | 640 | 标准 YOLOv8 输入尺寸 |
@@ -123,7 +123,7 @@ D:\Environment\miniconda\envs\Proj\python.exe KettleTraining/train_kettle.py
 
 ### 训练输出
 
-```
+```text
 runs/train/kettle_finetune/weights/best.pt   ← 最佳模型 (推荐使用)
 runs/train/kettle_finetune/weights/last.pt   ← 最后 epoch 模型
 ```
@@ -131,7 +131,7 @@ runs/train/kettle_finetune/weights/last.pt   ← 最后 epoch 模型
 ### 预期指标
 
 | 指标 | 值 | 说明 |
-|------|-----|------|
+| ------ | ----- | ------ |
 | Precision | ≥ 0.99 | 几乎无假阳性 |
 | Recall | 1.0 | 所有水壶都检到 |
 | mAP50 | ≥ 0.99 | 近乎完美 |
@@ -173,7 +173,7 @@ D:\Environment\miniconda\envs\Proj\python.exe KettleTraining/test_finetuned.py
 ## 关键文件
 
 | 文件 | 说明 |
-|------|------|
+| ------ | ------ |
 | `KettleTraining/collect_kettle_data.py` | 数据采集脚本 |
 | `KettleTraining/label_tool.py` | OpenCV 标注工具 |
 | `KettleTraining/train_kettle.py` | 训练脚本 (YOLOv8n) |

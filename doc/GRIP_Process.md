@@ -5,7 +5,7 @@
 ## 0. 坐标系与符号约定
 
 | 符号 | 含义 |
-|------|------|
+| ------ | ------ |
 | P_obj_cam | 水瓶在相机坐标系下的6D位姿（YOLO 6D检测输出） |
 | T_cam_ee | 相机到末端法兰的4x4齐次变换矩阵（手眼标定结果） |
 | P_ee_base | 当前末端法兰在基坐标系下的6D位姿（机械臂反馈，记为 [x,y,z,A,B,C]） |
@@ -55,6 +55,7 @@ t_grasp_ee = t_obj_ee - t_tool'_ee
 **方向对齐**：根据抓取模式计算法兰的目标旋转矩阵 R_grasp_ee
 
 YOLO 6D输出的坐标约定：
+
 - R_obj(:,0) = X轴 (Y x Z)
 - R_obj(:,1) = Y轴（PCA主方向，瓶身轴线）
 - R_obj(:,2) = Z轴（指向相机）
@@ -62,6 +63,7 @@ YOLO 6D输出的坐标约定：
 **物体坐标系约定 (第2步)**: 在 compute_grasp_rotation 中, 通过基系 Z 分量判断 Y 轴符号, 统一指向竖直向下（或根据 grasp_direction 反向）, 消除 PCA 符号歧义. 此操作在 Estun/utils_shared.py 的 compute_grasp_rotation 第一步完成.
 
 `grasp_direction` 控制 Y 轴符号消除方向：
+
 - `"right"` (右手/掌心向左): Y 轴统一指向竖直向下 (基系 Z 负方向)
 - `"left"` (左手/掌心向右): Y 轴统一指向竖直向上 (基系 Z 正方向)
 
@@ -70,23 +72,26 @@ YOLO 6D输出的坐标约定：
 四种模式定义，均先统一水瓶 Y 轴指向：
 
 | 模式 | 计算方式 | 说明 |
-|------|---------|------|
+| ------ | --------- | ------ |
 | free | 统一 Y 向下后, R_grasp_ee = R_obj_ee @ Rz(+90) | 跟随水瓶朝向并叠加安装补偿，适用于非竖直/非水平放置。Rz(-90) 为安装偏移，取其逆 Rz(+90) 补偿。 |
 | vertical | 在基系下约束末端 Z 轴水平（XY 平面 ∥ 基系 Z 轴），构造 R_grasp_base 后反推回末端系 | 从侧面抓取竖直水瓶，抓取姿态不受物体朝向数值巧合影响 |
 | horizontal | 暂未实现 | — |
 | fixed | P1/P2 使用配置 `fixed_abc` 中固定 ABC 欧拉角, P3 在 P1 基础上叠加 `target_offset.r_offset` 旋转 | PCA 失效时使用固定姿态, 左右手独立配置 `Estun/estun_config.yaml` 中 `fixed_abc.right` / `fixed_abc.left` |
 
-#### fixed 模式详细算法：
+#### fixed 模式详细算法
+
 1. 从 `Estun/estun_config.yaml` 读取 `fixed_abc.right` 或 `fixed_abc.left` 作为抓取点的固定 ABC 欧拉角
 2. P1 (抓取点) 直接使用该固定姿态, 不依赖 PCA 输出
 3. P2 (预抓取点) 位置在 grasp ee frame 下施加 `pre_offset` 平移, 旋转同 P1
 4. P3 (目标点) 旋转在 P1 基础上叠加 `target_offset.r_offset`
 5. fixed_abc.left 暂未标定, 留空时回退到 free 模式
 
-#### vertical/free 模式 C 值约束 (把手抓取):
+#### vertical/free 模式 C 值约束 (把手抓取)
+
 P1 的 C 角固定到 `[-100, -80]` 区间, 使灵巧手手指垂直于把手方向. P2/P3 从 P1 修正姿态推导, 保持一致的 C 值约束.
 
 **vertical 模式详细算法**：
+
 1. 将水瓶朝向转到基系：R_obj_base = R_ee_base @ R
 2. 提取 y_obj_base（瓶身轴线，已统一向下）和 z_obj_base（指向相机）
 3. 末端 Z 轴 = z_obj_base 在基系 XY 平面的水平投影（强制 Z 分量为 0）
@@ -113,7 +118,7 @@ P_target = (x_grasp_base, y_grasp_base, z_grasp_base, A_grasp_base, B_grasp_base
 
 ## 完整转换链路
 
-```
+```text
 相机检测 ----> P_obj_cam
     | 手眼标定 T_cam_ee
     v

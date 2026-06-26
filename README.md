@@ -12,17 +12,17 @@
 
 依赖分三部分安装，请按顺序执行：
 
-**步骤 1: 安装 PyTorch (CUDA 12.6)**
+#### 步骤 1: 安装 PyTorch (CUDA 12.6)
 
 ```bash
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-**步骤 2: 安装 EpicEye SDK**
+#### 步骤 2: 安装 EpicEye SDK
 
 参考 `epiceyesdk_samples_project/python/README.md`，打包 whl 并安装。
 
-**步骤 3: 安装其余依赖**
+#### 步骤 3: 安装其余依赖
 
 ```bash
 pip install -r requirements.txt
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 ## 目录结构
 
 | 路径 | 说明 |
-|------|------|
+| ------ | ------ |
 | `Estun/estun_run.py` | **主入口 (RealSense实时版-瓶身)**，整合检测→位姿转换→TCP服务器→灵巧手控制 |
 | `Estun/estun_epiceye_run.py` | **主入口 (EpicEye单次触发版-瓶身)**，EpicEye相机单次拍照→6D抓取 |
 | `Estun/estun_handle_run.py` | **主入口 (RealSense Handle 6D版)**，微调YOLOv8n+SAM2+扫描线分离把手→3点位姿 |
@@ -117,7 +117,7 @@ pip install -r requirements.txt
 
 ### 瓶身抓取
 
-```
+```text
 相机检测 → 手眼标定转末端系 → 工具偏移补偿 → 转基坐标系 → TCP发送 → 灵巧手抓取
 ```
 
@@ -125,7 +125,7 @@ pip install -r requirements.txt
 
 ### 把手抓取
 
-```
+```text
 检测阶段:
   微调YOLOv8n → SAM2 (GPU/CPU) → 水平扫描线分离把手 → (可选)红色胶带替换位置
 

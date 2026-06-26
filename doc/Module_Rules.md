@@ -46,14 +46,16 @@
 - 配置入口: `RealSense/config.yaml`, 包含 `cup` 段 (水杯几何参数)
 - 日志输出至 `logs/RealSense/`
 - 两种模块差异小结:
+
   | 特性 | RealSense_R (旧) | RealSense (新) |
-  |------|-----------------|----------------|
+  | ------ | ---------------- | ---------------- |
   | 深度对齐 | `rs2_project_color_pixel_to_depth_pixel` 手动映射 | `rs.align` 自动对齐 |
   | 基类文件 | `RealSense_R/realsense_shared.py` | `RealSense/realsense_shared.py` |
   | 配置文件 | `RealSense_R/config.yaml` | `RealSense/config.yaml` |
   | 适用相机 | 内参受损的旧相机 | 内参完好的新相机 |
   | 检测脚本 | `test_6D.py` / `test_handle_6D.py` / `test_cup_6D.py` | 同名脚本, 使用 `rs.align` 简化版本 |
   | 融合入口 | `Estun/estun_handle_cup_run.py` 引用 `RealSense_R/` | 待迁移 |
+
 - YOLO 使用标准彩色模型 (非灰度模型)
 - **支持三种水壶检测模型**: 标准 YOLOv8 (瓶身), YOLO-World (零样本), 微调 YOLOv8n (高置信度水壶, 需预先训练)
 - **红色胶带辅助检测**: 通过 `red_tape` 配置段控制 (enabled/min_area), `detect_red_tape()` 使用 HSV 双阈值 + 中位数中心 + 最大连通分量; 替换把手 3D 位置, 旋转保持 PCA 不变
