@@ -74,7 +74,8 @@ from Estun.utils_shared import (
     euler_to_rotation_matrix, transform_pose_to_base,
     compute_gripper_offset_transform, compute_grasp_rotation,
     post_correct_angles,
-    init_hand, hand_pre_grip, hand_grip_done, hand_reset, disable_hand,
+    init_hand, is_hand_available,
+    hand_pre_grip, hand_grip_done, hand_reset, disable_hand,
     grip_object, release_object,
 )
 
@@ -626,8 +627,11 @@ def main():
     # ---- [Init 2] 初始化灵巧手 (使用 utils_shared 函数式接口) ----
     print(f"\n[INFO] 正在初始化灵巧手...")
     init_hand(hand_port=HAND_PORT, initial_gesture="RESET")
-    _hand_available = True
-    print("[INFO] 灵巧手已准备就绪")
+    _hand_available = is_hand_available()
+    if _hand_available:
+        print("[INFO] 灵巧手已准备就绪")
+    else:
+        print("[WARN] 灵巧手未就绪, 将模拟所有手势操作")
 
     # ---- [Init 3] 初始化 Handle 6D 检测器 (启动 pipeline) ----
     print(f"\n[INFO] 正在初始化 RealSense Handle 6D 检测器...")

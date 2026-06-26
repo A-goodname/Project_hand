@@ -96,6 +96,8 @@
 - 手势控制: `omnihand_gesture.py` 通过 `actlist.json` 解析动作列表
 - 速度控制: `omnihand_speed_control.py` 控制手指运动速度
 - 启用/关闭: `omnihand_enable.py` 控制手部使能
+- **使能可靠性**: `init_hand()` 在 `enable()` 后通过 `is_enabled()` (→ `query_enable()`) 验证硬件实际状态, 未确认则自动重试 (默认 10 次 / 0.5s 间隔). 全部失败自动 fallback 到模拟模式
+- **状态检查**: `is_hand_available()` 检查 `_hand is not None`, 供 run 脚本判断灵巧手是否真正可用. run 脚本应使用此函数而非乐观假设 `_hand_available = True`
 
 ## Estun 机器人模块
 

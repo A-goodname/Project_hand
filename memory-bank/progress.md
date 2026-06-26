@@ -64,6 +64,12 @@
 - [x] 机械臂端 `estun_handle_cup_code.txt` v2: 线性流程 + P4 预倒水点 + 独立 while 循环
 - [x] code-review minor issues 修复: Cup P1 括号 bug 修正, 过时注释更新, 重稳定通知改为双检测器均稳定后触发
 
+### 灵巧手可靠性
+
+- [x] **`init_hand()` 使能重试**: `enable()` 后 `is_enabled()` 验证硬件实际状态, 未确认自动重试 (10 次/0.5s)
+- [x] **`is_hand_available()`**: 新函数替代 run 脚本 `_hand_available = True` 乐观标志
+- [x] `estun_handle_cup_run.py` / `estun_handle_run.py` 导入并使用 `is_hand_available()`
+
 ### 工程 (Cline 配置)
 
 - [x] `.clinerules/project.md` — 项目级规则 (Memory Bank + Git + 代码风格 + 模块 + 环境)
@@ -75,11 +81,11 @@
 
 ## 待完成
 
-- [x] P4 预倒水点: 机械臂端 CposOffset 实现 (doc/estun_handle_cup_code.txt v2), 定义 `[P1.x, P1.y, P3.z, P1.a, P1.b, P1.c]`, 路径 `P2→P1→P4→P3→P4→P1→P2`
+- [x] P4 预倒水点: 机械臂端 CposOffset 实现 (doc/estun_handle_cup_code.txt v2)
+- [x] RealSense (新版, rs.align) 集成到 estun_handle_cup_* (已完成, 无需 Orbbec 集成)
+- [ ] P4 预倒水点: 待在实际示教器上测试
 - [ ] left 模式示教 (将 cup.handle_side 改为 "left" 后重新运行 teach_p3)
 - [ ] left 模式 t_cup_offset_left 微调
-- [ ] Orbbec 相机与主入口集成
-- [ ] RealSense (新版, rs.align) 模块与主入口集成
 - [ ] 双相机体系 (眼在手上 + 眼在手外) — 见 doc/Future_work.md
 - [ ] 全面自动化测试
 

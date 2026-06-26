@@ -237,14 +237,21 @@ except ImportError:
     OMNIHAND_AVAILABLE = False
 
 
-def init_hand(hand_port=None, initial_gesture="PAPER"):
+def init_hand(hand_port=None, initial_gesture="PAPER",
+              enable_retries=10, enable_retry_delay=0.5):
     """
     初始化并启用灵巧手
 
+    失能后重新使能有时需要多次尝试才能成功.
+    本函数在 enable() 后通过 query_enable() 验证实际状态,
+    若未使能则自动重试 (默认最多 10 次, 间隔 0.5s).
+
     参数:
-        hand_port        : str or None, 串口号
-        initial_gesture  : str, 初始化后执行的手势,
-                           "PAPER"(水瓶/水杯默认, 手掌张开) | "RESET"(把手, 全闭合)
+        hand_port          : str or None, 串口号
+        initial_gesture    : str, 初始化后执行的手势,
+                             "PAPER"(水瓶/水杯默认, 手掌张开) | "RESET"(把手, 全闭合)
+        enable_retries     : int, 使能最大重试次数 (默认 10)
+        enable_retry_delay : float, 重试间隔秒数 (默认 0.5)
     """
     global _hand
     if not OMNIHAND_AVAILABLE:
@@ -254,7 +261,33 @@ def init_hand(hand_port=None, initial_gesture="PAPER"):
     try:
         _hand = OmniHandGesture(port=hand_port or "")
         _hand.open()
-        _hand.enable()
+
+        # ---- 使能重试循环 ----
+        # enable() 返回 True 仅表示 ACK 收到, 不代表真正使能.
+        # 通过 is_enabled() -> query_enable() 读取硬件实际状态来确认.
+        enabled = False
+        for attempt in range(1, enable_retries + 1):
+            _hand.enable()
+            if _hand.is_enabled():
+                enabled = True
+                if attempt > 1:
+                    print(f"[INFO] 灵巧手使能成功 (第 {attempt} 次尝试)")
+                break
+            if attempt < enable_retries:
+                print(f"[WARN] 灵巧手使能未确认 (第 {attempt}/{enable_retries} 次), "
+                      f"重试中...")
+                time.sleep(enable_retry_delay)
+
+        if not enabled:
+            print(f"[WARN] 灵巧手使能失败 ({enable_retries} 次重试均未确认使能), "
+                  f"将模拟灵巧手操作")
+            try:
+                _hand.close()
+            except Exception:
+                pass
+            _hand = None
+            return
+
         gesture = Gesture.PAPER if initial_gesture == "PAPER" else Gesture.RESET
         _hand.do_gesture(gesture, delay=0.3)
         print(f"[INFO] 灵巧手已初始化并启用 ({initial_gesture})")
@@ -267,6 +300,11 @@ def init_hand(hand_port=None, initial_gesture="PAPER"):
             except Exception:
                 pass
         _hand = None
+
+
+def is_hand_available():
+    """检查灵巧手是否已初始化并可用 (供 run 脚本判断)"""
+    return _hand is not None
 
 
 def grip_object():

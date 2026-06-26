@@ -1,6 +1,6 @@
 # 水杯抓取与把手抓取融合 (Handle + Cup)
 
-## 上次更新: 2026-06-25 (v5: 通信协议重构 + P4 预倒水点)
+## 上次更新: 2026-06-26 (v5: 灵巧手使能可靠性修复)
 
 ---
 
@@ -309,7 +309,8 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 
 | 函数 | 手势 | 适用场景 |
 |------|------|----------|
-| `init_hand(initial_gesture="PAPER")` | PAPER/RESET | 初始化, 水瓶默认 PAPER, 把手/融合默认 RESET |
+| `init_hand(initial_gesture="PAPER")` | PAPER/RESET | 初始化, 水瓶默认 PAPER, 把手/融合默认 RESET. **含使能重试**: `enable()` 后 `query_enable()` 验证, 未确认自动重试 (10次/0.5s) |
+| `is_hand_available()` | — | 检查灵巧手是否可用 (`_hand is not None`), run 脚本用此替代 `_hand_available = True` |
 | `hand_pre_grip()` | PREGRIP | 把手半闭合接近阶段 |
 | `hand_grip_done()` | GRIPDONE | 把手完全夹紧 |
 | `hand_reset()` | RESET | 复位灵巧手 (不关闭串口) |
@@ -321,7 +322,8 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 
 - `test_cup_6D.py`: 已验证通过, 使用新版 5 元组输出, rim/pour 检测已移除
 - `Estun/estun_handle_cup_demo.py`: 已完成 v4 重构 + B/C 角防跳变修正, back 模式已验证通过
-- `Estun/estun_handle_cup_run.py`: v4 重构 + B/C 角防跳变修正 + 通信协议重构 (v2, 2026-06-25): `fmt_pose()`/`pack_three()` 抽函数, 清零时机改为断开时, 自动重稳定流程
+- `Estun/estun_handle_cup_run.py`: v4 重构 + B/C 角防跳变修正 + 通信协议重构 (v2, 2026-06-25) + **灵巧手使能重试** (2026-06-26): `init_hand()` 失能后再使能自动重试验证
+- `Estun/estun_handle_run.py`: **灵巧手使能重试** (2026-06-26): 同步更新 `is_hand_available()` 替代乐观标志
 - `doc/estun_handle_cup_code.txt`: v2 线性五阶段流程 + P4 预倒水点 + 独立 while 循环
 
 ---
@@ -371,6 +373,6 @@ if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
 
 - [x] P4 预倒水点: 机械臂端代码已实现 (`doc/estun_handle_cup_code.txt` v2), 待示教器测试
 - [x] PC 端通信协议重构: `fmt_pose()`/`pack_three()` + 断开时清零 + 自动重稳定 (2026-06-25)
+- [x] **灵巧手使能可靠性**: `init_hand()` 使能重试 + `is_hand_available()` (2026-06-26)
 - [ ] left 模式示教 + t_cup_offset_left 微调
 - [ ] free 模式完整姿态测试 (当前仅 vertical 模式做 B/C 修正)
-- [ ] Orbbec / RealSense 新版集成
