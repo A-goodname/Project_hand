@@ -22,6 +22,7 @@ logs/
 
 # 文档 PDF
 doc/*.pdf
+doc/*.crp
 
 # 编译器文件
 .vscode/

@@ -1,51 +1,58 @@
-ESTUN 把手+水杯融合抓取示教器代码 (v2 — 线性流程 + P4 预倒水点)
+ESTUN 把手+水杯融合抓取示教器代码 (v3 — 线性流程 + P4 预倒水点 + flag条件循环)
 ============================================================
 与 estun_handle_cup_run.py 配合使用. 本机分两阶段发送共 6 个位姿:
-  Phase 1 — Handle P1/P2/P3 (PC 一次性发送, 括号标记)
-  Phase 2 — Cup P1/P2/P3   (收到 CUP 指令后 PC 回复)
+  Phase 1 — Handle H_P1/H_P2/H_P3 (PC 一次性发送)
+  Phase 2 — Cup   C_P1/C_P2/C_P3 (收到 CUP 指令后 PC 回复)
 
 输入:
-  位姿 H P1 (抓取点)      : 起始标记 (, 结束标记 )
-  位姿 H P2 (预抓取点)     : 起始标记 [, 结束标记 ]
-  位姿 H P3 (倒水点)       : 起始标记 {, 结束标记 }
-  位姿 C P1 (抓取点)       : 起始标记 (, 结束标记 )
-  位姿 C P2 (预抓取点)     : 起始标记 [, 结束标记 ]
-  位姿 C P3 (递杯点)       : 起始标记 {, 结束标记 }
+  位姿 H_P1 (抓取点)      : 起始标记 (, 结束标记 )
+  位姿 H_P2 (预抓取点)     : 起始标记 [, 结束标记 ]
+  位姿 H_P3 (倒水点)       : 起始标记 {, 结束标记 }
+  位姿 C_P1 (抓取点)       : 起始标记 (, 结束标记 )
+  位姿 C_P2 (预抓取点)     : 起始标记 [, 结束标记 ]
+  位姿 C_P3 (递杯点)       : 起始标记 {, 结束标记 }
 
 单位: 位置 m, 角度 deg
 
 P4 预倒水点:
-  定义: CposOffset(H_P1, [0, 0, H_P3.z - H_P1.z, 0, 0, 0])
+  定义: DCp1.dz = H_P3.z - H_P1.z
+        H_P4 = CposOffset(H_P1, DCp1)
   即:   [H_P1.x, H_P1.y, H_P3.z, H_P1.a, H_P1.b, H_P1.c]
   作用: 在 P1 XY 位置上升到 P3 Z 高度, 避免斜穿碰撞
 
-路径 (Handle):  P2 → P1 → P4 → P3 → P4 → P1 → P2
+路径 (Handle):  P2 → P1 → P4 → P3 → P4 → P1 → P2 → Home
 路径 (Cup):     C_P2 → C_P1 → C_P3 → C_P1 → C_P2 → Home
+
+信号变量:
+  str1 = "PREGRIP"    — 预抓取
+  str2 = "GRIPDONE"   — 抓取完成
+  str3 = "RESET"      — 复位
+  str4 = "CUP"        — 请求 Cup 位姿
+  str5 = "RELEASE"    — 张开/释放
+  str6 = "GRIP"       — 夹紧
 
 
 SocketCreat(socketflag)
 if socketflag != 0
     return
 
-// ===== [1] 发送当前末端位姿 (仅一次, 不在任何循环内) =====
+// ===== [1] 发送当前末端位姿 (仅一次) =====
 GetCurCpos P0
 socketstr1 = CposTostr(P0)
 SocketSendStr(socketstr1)
-if socketflag != 0
-    SocketClose
-    return
 
-// ===== [2] 独立 while 循环: 等待 Handle P1/P2/P3 =====
-// 只读不写, 超时就重试, 不向 PC 发送任何多余数据
-while true
-    SocketReadStr(sock, str1, 2, socketflag, "", "")
+// ===== [2] 位姿读取 while 循环: 等待 Handle H_P1/H_P2/H_P3 =====
+// 无 break 控件可用, 用 strflag 条件循环替代:
+//   strflag 前置 1 → while strflag == 1 → TranStrToCpos 成功写 0 → 退出
+strflag = 1
+while strflag == 1
+    SocketReadStr(sock, socketstr2, 2000, socketflag, "", "")
     if socketflag == 0
-        H_P1 = TranStrToCpos(str1, ",", H_P1, flag, "(", ")", "deg", "m")
-        H_P2 = TranStrToCpos(str1, ",", H_P2, flag, "[", "]", "deg", "m")
-        H_P3 = TranStrToCpos(str1, ",", H_P3, flag, "{", "}", "deg", "m")
-        if flag == 0
-            break      // 三个位姿都解析成功, 退出循环
-    Wait 1s
+        H_P1 = TranStrToCpos(socketstr2, ",", H_P1, strflag, "(", ")", "deg", "m")
+        H_P2 = TranStrToCpos(socketstr2, ",", H_P2, strflag, "[", "]", "deg", "m")
+        H_P3 = TranStrToCpos(socketstr2, ",", H_P3, strflag, "{", "}", "deg", "m")
+        // 三个位姿都解析成功 → 最后一个 TranStrToCpos 写 0 到 strflag → while 退出
+    Wait 500ms
 
 // ===== [3] Handle 运动 (含 P4 预倒水点) =====
 MovL H_P2                       // 到预抓取点
@@ -54,45 +61,48 @@ Wait 1s
 MovL H_P1                       // 到抓取点
 SocketSendStr('GRIPDONE')       // → 本机: 灵巧手 GRIPDONE
 Wait 1s
-// --- P4: 上升到倒水高度 (P1的XY + P3的Z + P1的姿态) ---
-H_P4 = CposOffset(H_P1, [0, 0, H_P3.z - H_P1.z, 0, 0, 0])
+// --- 计算 P4: 上升到倒水高度 (P1的XY + P3的Z + P1的姿态) ---
+DCp1.dz = H_P3.z - H_P1.z
+H_P4 = CposOffset(H_P1, DCp1)
 MovL H_P4                       // → 预倒水点 (安全上升)
-// --- P3: 水平移动到倒水点 ---
+Wait 1s
+// --- P3: 移动到倒水点 ---
 MovL H_P3                       // 到倒水位置
 Wait 2s                         // 倒水延时
 // --- P4: 先升回安全高度再回 P1 ---
 MovL H_P4                       // → 预倒水点 (安全上升)
+Wait 1s
 MovL H_P1                       // 回到抓取点
 SocketSendStr('PREGRIP')        // → 本机: 灵巧手 PREGRIP
 Wait 1s
 MovL H_P2                       // 回到预抓取点
 SocketSendStr('RESET')          // → 本机: 灵巧手 RESET
 Wait 1s
+// --- Home: Handle 与 Cup 之间的安全过渡点, 避免 H_P2 → C_P2 路径碰撞 ---
+MovL Home
 
-// ===== [4] 独立 while 循环: 请求并等待 Cup P1/P2/P3 =====
+// ===== [4] 请求并等待 Cup C_P1/C_P2/C_P3 =====
 SocketSendStr('CUP')            // → 本机: 请求 Cup 位姿
-Wait 1s
-while true
-    SocketReadStr(sock, str2, 2, socketflag, "", "")
+strflag = 1
+while strflag == 1
+    SocketReadStr(sock, socketstr3, 2000, socketflag, "", "")
     if socketflag == 0
-        C_P1 = TranStrToCpos(str2, ",", C_P1, flag, "(", ")", "deg", "m")
-        C_P2 = TranStrToCpos(str2, ",", C_P2, flag, "[", "]", "deg", "m")
-        C_P3 = TranStrToCpos(str2, ",", C_P3, flag, "{", "}", "deg", "m")
-        if flag == 0
-            break      // 三个位姿都解析成功, 退出循环
-    Wait 1s
+        C_P1 = TranStrToCpos(socketstr3, ",", C_P1, strflag, "(", ")", "deg", "m")
+        C_P2 = TranStrToCpos(socketstr3, ",", C_P2, strflag, "[", "]", "deg", "m")
+        C_P3 = TranStrToCpos(socketstr3, ",", C_P3, strflag, "{", "}", "deg", "m")
+    Wait 500ms
 
 // ===== [5] Cup 运动 =====
 MovL C_P2                       // 到预抓取点
-SocketSendStr('RELEASE')        // → 本机: 灵巧手 PAPER(张开)
+SocketSendStr('RELEASE')        // → 本机: 灵巧手 RELEASE (张开)
 Wait 1s
 MovL C_P1                       // 到抓取点
-SocketSendStr('GRIP')           // → 本机: 灵巧手 GRIP(夹紧)
+SocketSendStr('GRIP')           // → 本机: 灵巧手 GRIP (夹紧)
 Wait 1s
 MovL C_P3                       // 到递杯位置
 Wait 2s                         // 等人取杯
 MovL C_P1                       // 回到抓取点
-SocketSendStr('RELEASE')        // → 本机: 灵巧手 PAPER(释放)
+SocketSendStr('RELEASE')        // → 本机: 灵巧手 RELEASE (释放)
 Wait 1s
 MovL C_P2                       // 回到预抓取点
 SocketSendStr('RESET')          // → 本机: 灵巧手 RESET
@@ -100,4 +110,3 @@ Wait 1s
 MovL Home                       // 回原点
 
 SocketClose
-Return

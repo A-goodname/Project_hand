@@ -45,7 +45,7 @@ ESTUN RealSense Handle + Cup 6D 融合抓取系统
               Phase 2:  Cup P1/P2/P3 (得到 Cup TCP 基系位置)
               Phase 1b: 基于 Cup TCP 计算倒水口 → Handle P3
               发送 Handle 三个位姿
-    [Phase C] 指令循环: PREGRIP / GRIPDONE / RESET / CUP
+    [Phase C] 指令循环: PREGRIP / GRIPDONE / RESET / CUP / RELEASE / GRIP
               CUP 时回复 Cup P1/P2/P3, 继续指令循环
 """
 
@@ -536,7 +536,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
         print("[WARN] 超时: 未获得稳定目标位姿, 断开连接", flush=True)
         return
 
-    # ---- [Phase C] 指令循环: PREGRIP / GRIPDONE / RESET / CUP ----
+    # ---- [Phase C] 指令循环: PREGRIP / GRIPDONE / RESET / RELEASE / GRIP / CUP ----
     conn.settimeout(2.0)
     try:
         while not stop_event.is_set():
@@ -566,6 +566,16 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
                 if _hand_available:
                     hand_reset()
                 print("[INFO] 灵巧手: RESET", flush=True)
+
+            elif cmd == "RELEASE":
+                if _hand_available:
+                    release_object()
+                print("[INFO] 灵巧手: RELEASE (PAPER)", flush=True)
+
+            elif cmd == "GRIP":
+                if _hand_available:
+                    grip_object()
+                print("[INFO] 灵巧手: GRIP", flush=True)
 
             elif cmd == "CUP":
                 # 回复 cup 三个位姿, 格式与 Phase B 一致

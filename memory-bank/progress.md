@@ -61,8 +61,11 @@
 ### 通信协议
 
 - [x] PC端 `estun_handle_cup_run.py` 重构: `fmt_pose()`/`pack_three()` 抽函数, 清零时机改为断开时, 自动重稳定流程 (经 code-review 审阅)
-- [x] 机械臂端 `estun_handle_cup_code.txt` v2: 线性流程 + P4 预倒水点 + 独立 while 循环
+- [x] 机械臂端 `estun_handle_cup_code.txt` v3: flag条件循环 + P4预倒水点 + Cup完整流程(RELEASE/GRIP/RESET) + MovL Home双位置
+- [x] 机械臂端 `.crp` (handlepluscup-Down-826.crp): 47控件, H_P3单位修正, Cup TranStrToCpos+运动序列+信号补全
+- [x] PC端 Phase C: RELEASE/GRIP 指令处理 (`release_object()`/`grip_object()`)
 - [x] code-review minor issues 修复: Cup P1 括号 bug 修正, 过时注释更新, 重稳定通知改为双检测器均稳定后触发
+- [x] Git 署名清理: `~/.claude/settings.json` attribution 置空, 历史提交 Co-Authored-By 移除
 
 ### 灵巧手可靠性
 
