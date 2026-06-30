@@ -1,0 +1,39 @@
+# EyeToHand 眼在手外模块配置
+# 外置相机 (固定安装) 用于人体位置检测
+
+model:
+  name: "./model/yolov8m"        # YOLO 模型路径 (相对项目根目录, 不含 .pt 后缀)
+  conf_threshold: 0.5            # 检测置信度阈值
+  target_class_id: 0             # COCO 目标类别 (0=person)
+  device: gpu                    # 运行设备: gpu优先 | cpu强制
+
+depth:
+  min: 0.15                      # 最小有效深度 (米)
+  max: 1.5                       # 最大有效深度 (米)
+
+resolution:
+  width: 640                     # 图像宽度
+  height: 480                    # 图像高度
+  fps: 30                        # 帧率
+
+smoothing:
+  alpha: 0.4                     # 位置 EMA 时域平滑系数
+
+# ---- 人体位置稳定器 (参考 PoseStabilizer) ----
+stabilizer:
+  window: 10                     # 缓冲区帧数 (~0.3s@30fps)
+  pos_thresh: 0.03               # 位置波动阈值 (米), 3cm内认为稳定
+
+# ---- 预示教递送位置 (基坐标系, 单位: 米/度) ----
+delivery:
+  Y_TEACH: 0.0                   # [用户必填] 递送 Y 位置 (桌面边缘上方)
+  Z_TEACH: 0.0                   # [用户必填] 递送 Z 位置 (递送高度)
+  A_TEACH: 0.0                   # 递送姿态 A (roll, 度)
+  B_TEACH: 0.0                   # 递送姿态 B (pitch, 度)
+  C_TEACH: 0.0                   # 递送姿态 C (yaw, 度)
+  wait_seconds: 2.0              # 递送等待时间 (秒), 到达后松手
+
+# ---- 标定参数 (由 calibration/calibrate.py 生成) ----
+calibration:
+  scale: 1.0                     # 相机深度 → 基系 X 缩放系数
+  bias: 0.0                      # 相机深度 → 基系 X 偏置 (米)

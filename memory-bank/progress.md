@@ -73,6 +73,16 @@
 - [x] **`is_hand_available()`**: 新函数替代 run 脚本 `_hand_available = True` 乐观标志
 - [x] `estun_handle_cup_run.py` / `estun_handle_run.py` 导入并使用 `is_hand_available()`
 
+### 双相机体系
+
+- [x] Step 1: Serial 绑定 (RealSense + RealSense_R 各自 `config.enable_device()`)
+- [x] `EyeToHand/` 眼在手外模块:
+  - `person_detector.py`: `PersonDetector` + `PersonStabilizer` 稳定检测
+  - `config.yaml`: 外置相机 + 预示教递送 + 稳定器参数
+  - `detector.py`: `load_calibration()` / `camera_x_to_base_x()` 工具函数
+  - `calibration/calibrate.py`: 1D最小二乘线性回归 (交互式, N≥2点)
+  - person_detector 已测试通过; calibrate.py 未实操 (机械臂被占用)
+
 ### 工程 (Cline 配置)
 
 - [x] `.clinerules/project.md` — 项目级规则 (Memory Bank + Git + 代码风格 + 模块 + 环境)
@@ -87,12 +97,12 @@
 - [x] P4 预倒水点: 机械臂端 CposOffset 实现 (doc/estun_handle_cup_code.txt v2)
 - [x] RealSense (新版, rs.align) 集成到 estun_handle_cup_* (已完成, 无需 Orbbec 集成)
 - [x] `doc/estun_handle_cup_code.txt` 通信超时 2s → 5s (2026-06-30)
-- [x] `doc/Future_work.md` v2: 双相机体系架构设计 (2026-06-30)
+- [x] `doc/Future_work.md` v3: 双相机体系架构设计 (简化递送策略 + 2点标定 + 砍手势识别) (2026-06-30)
 - [ ] P4 预倒水点: 待在实际示教器上测试 (P0, 硬件被占用)
 - [ ] left 模式示教 + t_cup_offset_left 微调 (P0, 硬件被占用; left 全零时用 back 值兜底)
-- [x] **双相机体系 Step 1**: 两个 `_init_realsense()` 加 `config.enable_device(serial)` + `load_camera_serial()` (2026-06-30)
-- [ ] **双相机体系 Step 2-4**: `hand_to_eye/` 模块搭建 + 手势识别 + 外置相机标定
-- [ ] **双相机体系 Step 5-7**: `orchestrator/` 状态机 + 总入口 + 防碰撞
+- [x] **双相机体系 Step 2-4**: `EyeToHand/` 模块搭建 + 人体检测 + 1D最小二乘标定 (2026-06-30). person_detector 已测试通过; calibrate.py 代码完成, 未实操 (机械臂被占用)
+- [ ] **标定验证**: `EyeToHand/calibration/calibrate.py` 实操 (P0, 机械臂被占用)
+- [ ] **双相机体系 Step 5-7**: `Orchestrator/` 状态机 + 总入口 + 递送位置计算
 - [ ] **双相机体系 Step 8-10**: 联调 + 异常处理 + 全面测试
 - [ ] `estun_handle_run.py` 通信协议同步 (暂缓, 待现有协议验证后再做)
 - [ ] 全面自动化测试
@@ -103,4 +113,6 @@
 - 部分脚本仍有类式灵巧手接口遗留 (已逐步迁移到函数式)
 - 水杯 handle_side=left 模式的偏移量需实际标定 (P0 阻塞)
 - `estun_handle_run.py` 通信协议未同步 handle-cup 版的 v2 改进 (暂缓)
+- `EyeToHand/calibration/calibrate.py` 标定工具未实操验证 (机械臂被占用)
+- `EyeToHand/calibration/result.yaml` scale/bias 为默认占位值 1.0/0.0, 需标定后更新
 - **free 模式不应限制角度**: 当前 B/C 角约束已加 `if ORIENTATION_MODE == "vertical"` 守卫, free 模式仅做 post_correct_angles 可达性修复, 不修正角度

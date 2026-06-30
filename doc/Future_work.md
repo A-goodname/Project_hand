@@ -102,18 +102,21 @@ config.enable_device("819612071851")   # 绑定指定 serial 的相机
 
 ```text
 Project_hand/
-├── hand_to_eye/                    # [新建] 眼在手外模块
+├── hand_to_eye/ → EyeToHand/          # [新建] 眼在手外模块
 │   ├── __init__.py
-│   ├── config.yaml                 # 外置相机配置 + 标定参数 + 预示教递送位置
-│   ├── detector.py                 # 检测器基类 (继承 RealSense_R 基类)
-│   ├── person_detector.py          # 人体位置检测 (YOLOv8 COCO person class)
-│   └── calibration/                # 外置相机→基坐标系的标定
-│       └── calibrate.py
+│   ├── config.yaml                    # 外置相机配置 + 预示教递送位置 + 稳定器参数
+│   ├── D435i_info.yaml                # 相机内参 (serial: 342222071364)
+│   ├── detector.py                    # 工具函数: load_calibration / camera_x_to_base_x
+│   ├── person_detector.py             # 人体检测 (YOLO COCO person + PersonStabilizer)
+│   └── calibration/
+│       ├── __init__.py
+│       ├── calibrate.py               # 1D最小二乘线性回归 (交互式, N≥2点)
+│       └── result.yaml                # 标定结果 (scale, bias)
 │
-├── orchestrator/                   # [新建] 双相机流程编排
+├── orchestrator/ → Orchestrator/       # [后续] 双相机流程编排
 │   ├── __init__.py
-│   ├── state_machine.py            # 状态机管理
-│   └── main.py                     # 系统总入口
+│   ├── state_machine.py               # 状态机管理
+│   └── main.py                        # 系统总入口
 │
 └── ... (其余现有文件不变)
 ```
@@ -190,40 +193,32 @@ Project_hand/
                                           递送目标 = (X_person, Y_TEACH, Z_TEACH)
 ```
 
-### 4.7 外置相机标定方法
+### 4.7 外置相机标定方法 (1D 最小二乘线性回归)
 
-**不需要标定板**。灵巧手背面的矩形胶带作为参考标记, 复用现有的 HSV 检测 + 深度映射函数。
+递送仅需基系 X 坐标, ±2cm 容错. 不需要 SVD, 不需要解胶带位置.
 
-采集流程:
+**流程:**
 
 ```text
-┌─ 第 i 次采集 ───────────────────────────────────────────┐
-│                                                          │
-│  1. 手动控制机械臂移动到位置 i (覆盖工作区域 X 范围)        │
-│  2. 记录 P_ee_base(i) = [x,y,z,A,B,C] (机器人反馈位姿)    │
-│  3. 外置相机拍照 → HSV检测胶带中心 → 深度 → p_cam(i)       │
-│                                                          │
-│  p_base(i) = R_ee_base(i) @ p_ref_ee + t_ee_base(i)      │
-│  (胶带中心在基系下的位置, 从机器人侧推算)                   │
-│                                                          │
-│  约束: p_base(i) = R_cam_base @ p_cam(i) + t_cam_base     │
-│  未知: R_cam_base (3x3), t_cam_base (3x1)                │
-└──────────────────────────────────────────────────────────┘
+采集:
+  1. 机械臂移到 X_base = x1 处 (如 0.3m) → 外置相机检测胶带中心 X_cam_1
+  2. 机械臂移到 X_base = x2 处 (如 0.6m) → 外置相机检测胶带中心 X_cam_2
 
-采集 4-5 组 (p_cam, p_base) → SVD 求解 T_cam_base
-每对提供 3 个方程, 4 组即 12 方程 vs 12 未知 (R:9 + t:3), 充分.
+拟合:
+  scale = (x2 - x1) / (X_cam_2 - X_cam_1)      # 相机深度单位 → 基系米
+  bias  = x1 - scale * X_cam_1
+
+运行时:
+  X_person = scale * X_cam_person + bias
 ```
 
-与眼在手上的区别:
-
-| | 眼在手上 (已有) | 眼在手外 (本模块) |
+| 项目 | SVD 方案 | 2 点方案 |
 | ------ | ------ | ------ |
-| 谁动 | 机械臂带着相机动 | **相机固定, 机械臂动** |
-| 标记物 | 棋盘格 (固定桌面) | **灵巧手背胶带 (跟着机械臂走)** |
-| 求解 | AX=XB (5 种算法 + 评优) | **SVD 直接求解** |
-| 数据量 | 10-20 组 | **4-5 组** |
-| 精度要求 | 高 (±1mm, 影响抓取) | **中等 (±2cm 可接受, 递送容错高)** |
-| 新增代码 | 无 (已有 calib_data/) | **极小 (HSV检测 + SVD, ~50行)** |
+| 采集点数 | 5 组 | **2 组** |
+| 求解 | SVD 解 15 元方程组 | **两行表达式** |
+| 前提 | 需解 p_tape_ee 未知 | **scale+bias 隐式消去** |
+| 耗时 | ~5 分钟 | **~2 分钟** |
+| 精度 | 高 | 够用 (±2cm, 递送仅 X 方向) |
 
 ---
 
@@ -277,12 +272,12 @@ Project_hand/
 
 ## 6. 开发计划
 
-### Phase 1: 基础设施 (当前阶段)
+### Phase 1: 基础设施
 
 - [x] **Step 1: Serial 绑定** — 两个 `_init_realsense()` 加入 `config.enable_device(serial)`, 确保双相机同时插入时各自连接正确的设备. 新增 `load_camera_serial()` 工具函数. ✅ 已测试通过 (2026-06-30)
-- [ ] **Step 2: hand_to_eye/ 模块搭建** — `detector.py` 继承 `RealSense_R/BaseRealSenseDetector`, `person_detector.py` 实现人体位置检测 (YOLOv8 COCO person class).
-- [ ] **Step 3: 眼在手外标定工具** — 灵巧手背胶带作参考标记, 采集 4-5 组 (P_ee_base, 胶带中心相机系 3D), SVD 求解 T_cam_base, 输出到 `hand_to_eye/calibration/result.yaml`; 预示教递送位置 YZ 写入 `hand_to_eye/config.yaml`.
-- [ ] **Step 4: person_detector 3D 定位** — bbox 中心深度 → 相机系 3D → T_cam_base → 基系 X 坐标.
+- [x] **Step 2: EyeToHand/ 模块搭建** — `person_detector.py` 直接继承 `RealSense_R/BaseRealSenseDetector` (对齐 test_3D.py 模式), 实现人体位置检测 (YOLOv8 COCO person class_id=0). `detector.py` 提供 `load_calibration()` / `camera_x_to_base_x()` 工具函数. `PersonStabilizer` 窗口稳定器 (参考 PoseStabilizer, window=10/pos_thresh=0.03m). ✅ person_detector 已测试通过 (2026-06-30)
+- [x] **Step 3: 眼在手外标定工具** — `EyeToHand/calibration/calibrate.py`: 1D 最小二乘线性回归 (N≥2 点). 机械臂末端贴红色胶带, YZ/ABC 保持示教值不变, 仅沿 X 移动, 终端输入示教器 X_base 值采集. scale+bias 输出到 `EyeToHand/calibration/result.yaml`. 代码完成, 未实操验证 (机械臂被占用) (2026-06-30)
+- [x] **Step 4: person_detector 3D 定位** — `detector.py` `camera_x_to_base_x()`: bbox 中心深度 → 相机系 3D → 取 X_cam → scale*X_cam + bias → 基系 X 坐标. 代码完成, 未端到端验证 (依赖 Step 3 标定) (2026-06-30)
 
 ### Phase 2: 流程编排
 
@@ -342,15 +337,16 @@ Project_hand/
 ├── Estun/                            # 眼在手上入口
 │   ├── estun_handle_cup_run.py       # 现有 Handle+Cup 融合
 │   └── ...
-├── hand_to_eye/                      # [新建] 眼在手外检测
+├── EyeToHand/                        # [新建] 眼在手外检测
 │   ├── __init__.py
-│   ├── config.yaml                   # 外置相机配置 + Y_TEACH/Z_TEACH 预示教值
-│   ├── detector.py                   # 继承 RealSense_R 基类
-│   ├── person_detector.py            # 人体检测 (YOLOv8 COCO person)
+│   ├── config.yaml                   # 外置相机配置 + Y_TEACH/Z_TEACH + 稳定器参数
+│   ├── D435i_info.yaml               # serial: 342222071364
+│   ├── detector.py                   # 工具函数 (load_calibration, camera_x_to_base_x)
+│   ├── person_detector.py            # 人体检测 (PersonDetector + PersonStabilizer)
 │   └── calibration/
-│       ├── calibrate.py
+│       ├── calibrate.py              # 1D最小二乘线性回归 (交互式, N≥2点)
 │       └── result.yaml               # T_cam_base 标定结果
-├── orchestrator/                     # [新建] 流程编排
+├── Orchestrator/                     # [后续] 流程编排
 │   ├── __init__.py
 │   ├── state_machine.py
 │   └── main.py

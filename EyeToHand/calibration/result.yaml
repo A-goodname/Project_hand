@@ -1,0 +1,7 @@
+# EyeToHand 外置相机标定结果 (2点1D线性映射)
+# 公式: X_base = scale * X_cam + bias
+# 由 calibration/calibrate.py 生成
+
+calibration:
+  scale: 1.0
+  bias: 0.0
