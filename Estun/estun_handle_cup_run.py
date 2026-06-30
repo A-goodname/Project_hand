@@ -133,7 +133,8 @@ P3_TEACH_ENABLE = _cfg_estun["handle_grasp"]["p3_teach_offset"]["enable"]
 P3_POUR_ANGLE = _cfg_estun["handle_grasp"]["p3_teach_offset"].get("pour_angle", 30)
 P3_TEACH_SIDE = "back" if CUP_HANDLE_SIDE == "back" else "left"
 _angle_key = str(P3_POUR_ANGLE)
-_side_cfg = _cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]
+_side_cfg_raw = _cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]
+_side_cfg = {str(k): v for k, v in _side_cfg_raw.items()}  # YAML 整数键→字符串
 if _angle_key not in _side_cfg:
     _angle_key = list(_side_cfg.keys())[0]  # 回退到第一个可用角度
 P3_TEACH_T_OFFSET = np.array(_side_cfg[_angle_key]["t_offset"], dtype=float)

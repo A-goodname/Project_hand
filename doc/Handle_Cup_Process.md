@@ -1,6 +1,6 @@
 # 水杯抓取与把手抓取融合 (Handle + Cup)
 
-## 上次更新: 2026-06-26 (v5: 灵巧手使能可靠性修复)
+## 上次更新: 2026-06-30 (v6: left 模式全流程通过 + P3 四角度实测)
 
 ---
 
@@ -260,8 +260,8 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 | ------ | ----- | ------ |
 | `enabled` | true | 总开关 |
 | `spout_offset.t_offset` | [-0.06, 0.17, 0.0] | 壶嘴在抓取末端系下的偏移 (m), 已实际测量 |
-| `gripper_offset.t_cup_offset` | [0.06, -0.04, 0.08] | 抓水杯的灵巧手平移偏移 (m), back 模式 |
-| `gripper_offset.t_cup_offset_left` | [0.06, 0.04, 0.08] | 抓水杯的灵巧手平移偏移 (m), left 模式 |
+| `gripper_offset.t_cup_offset` | [0.057, -0.010, 0.139] | 抓水杯的灵巧手平移偏移 (m), back 模式, 已微调 |
+| `gripper_offset.t_cup_offset_left` | [0.049, -0.070, 0.100] | 抓水杯的灵巧手平移偏移 (m), left 模式, 已微调 |
 | `gripper_offset.r_cup_offset` | [0, 0, -90] | 灵巧手安装角度 (度) |
 | `pre_offset.t_offset` | [-0.0, 0.0, -0.05] | 预抓取平移偏移 (m) |
 | `target_offset.t_offset` | [-0.2, 0, 0] | 递杯平移偏移 (m) |
@@ -276,7 +276,7 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 | `height` | 0.100 | 杯高先验 (m), 实际测量 |
 | `rim_radius` | 0.035 | 杯口半径先验 (m), 实际测量 |
 | `rim_offset_ratio` | 0.6 | 倒水偏移比 (0~1), v4 后不再用于倒水口计算, 保留兼容 |
-| `handle_side` | "back" | 杯把手方向: back(默认) / left |
+| `handle_side` | "left" | 杯把手方向: back / left (当前测试: left) |
 
 ### 7.3 杯口方向确定
 
@@ -337,8 +337,8 @@ Handle 和 Cup 检测使用同一帧数据 (在 Handle 检测帧时同步执行 
 ### 8.6 当前状态
 
 - `test_cup_6D.py`: 已验证通过, 使用新版 5 元组输出, rim/pour 检测已移除
-- `Estun/estun_handle_cup_demo.py`: 已完成 v4 重构 + B/C 角防跳变修正, back 模式已验证通过
-- `Estun/estun_handle_cup_run.py`: v4 重构 + B/C 角防跳变修正 + 通信协议重构 (v2, 2026-06-25) + **灵巧手使能重试** (2026-06-26): `init_hand()` 失能后再使能自动重试验证
+- `Estun/estun_handle_cup_demo.py`: 已完成 v4 重构 + B/C 角防跳变修正 + **YAML 整数键修复**, back/left 模式均已验证通过
+- `Estun/estun_handle_cup_run.py`: v4 重构 + B/C 角防跳变修正 + 通信协议重构 (v2, 2026-06-25) + 灵巧手使能重试 (2026-06-26) + **YAML 整数键修复 (2026-06-30)**, back/left 模式均已验证通过
 - `Estun/estun_handle_run.py`: **灵巧手使能重试** (2026-06-26): 同步更新 `is_hand_available()` 替代乐观标志
 - `doc/estun_handle_cup_code.txt`: v2 线性五阶段流程 + P4 预倒水点 + 独立 while 循环
 
@@ -390,5 +390,5 @@ if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
 - [x] P4 预倒水点: 机械臂端代码已实现 (`doc/estun_handle_cup_code.txt` v2), 待示教器测试
 - [x] PC 端通信协议重构: `fmt_pose()`/`pack_three()` + 断开时清零 + 自动重稳定 (2026-06-25)
 - [x] **灵巧手使能可靠性**: `init_hand()` 使能重试 + `is_hand_available()` (2026-06-26)
-- [ ] left 模式示教 + t_cup_offset_left 微调
+- [x] **left 模式示教 + 全流程实测通过** (2026-06-30): P3 四角度(10°/15°/20°/30°)全部实测校正, run 测试通过
 - [ ] free 模式完整姿态测试 (当前仅 vertical 模式做 B/C 修正)
