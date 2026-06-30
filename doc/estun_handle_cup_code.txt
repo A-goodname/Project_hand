@@ -46,7 +46,7 @@ SocketSendStr(socketstr1)
 //   strflag 前置 1 → while strflag == 1 → TranStrToCpos 成功写 0 → 退出
 strflag = 1
 while strflag == 1
-    SocketReadStr(sock, socketstr2, 2000, socketflag, "", "")
+    SocketReadStr(sock, socketstr2, 5000, socketflag, "", "")
     if socketflag == 0
         H_P1 = TranStrToCpos(socketstr2, ",", H_P1, strflag, "(", ")", "deg", "m")
         H_P2 = TranStrToCpos(socketstr2, ",", H_P2, strflag, "[", "]", "deg", "m")
@@ -85,7 +85,7 @@ MovL Home
 SocketSendStr('CUP')            // → 本机: 请求 Cup 位姿
 strflag = 1
 while strflag == 1
-    SocketReadStr(sock, socketstr3, 2000, socketflag, "", "")
+    SocketReadStr(sock, socketstr3, 5000, socketflag, "", "")
     if socketflag == 0
         C_P1 = TranStrToCpos(socketstr3, ",", C_P1, strflag, "(", ")", "deg", "m")
         C_P2 = TranStrToCpos(socketstr3, ",", C_P2, strflag, "[", "]", "deg", "m")

@@ -86,15 +86,21 @@
 
 - [x] P4 预倒水点: 机械臂端 CposOffset 实现 (doc/estun_handle_cup_code.txt v2)
 - [x] RealSense (新版, rs.align) 集成到 estun_handle_cup_* (已完成, 无需 Orbbec 集成)
-- [ ] P4 预倒水点: 待在实际示教器上测试
-- [ ] left 模式示教 (将 cup.handle_side 改为 "left" 后重新运行 teach_p3)
-- [ ] left 模式 t_cup_offset_left 微调
-- [ ] 双相机体系 (眼在手上 + 眼在手外) — 见 doc/Future_work.md
+- [x] `doc/estun_handle_cup_code.txt` 通信超时 2s → 5s (2026-06-30)
+- [x] `doc/Future_work.md` v2: 双相机体系架构设计 (2026-06-30)
+- [ ] P4 预倒水点: 待在实际示教器上测试 (P0, 硬件被占用)
+- [ ] left 模式示教 + t_cup_offset_left 微调 (P0, 硬件被占用; left 全零时用 back 值兜底)
+- [x] **双相机体系 Step 1**: 两个 `_init_realsense()` 加 `config.enable_device(serial)` + `load_camera_serial()` (2026-06-30)
+- [ ] **双相机体系 Step 2-4**: `hand_to_eye/` 模块搭建 + 手势识别 + 外置相机标定
+- [ ] **双相机体系 Step 5-7**: `orchestrator/` 状态机 + 总入口 + 防碰撞
+- [ ] **双相机体系 Step 8-10**: 联调 + 异常处理 + 全面测试
+- [ ] `estun_handle_run.py` 通信协议同步 (暂缓, 待现有协议验证后再做)
 - [ ] 全面自动化测试
 
 ## 已知问题
 
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
 - 部分脚本仍有类式灵巧手接口遗留 (已逐步迁移到函数式)
-- 水杯 handle_side=left 模式的偏移量需实际标定
-- **free 模式不应限制角度**: 当前 B/C 角约束已加 `if ORIENTATION_MODE == "vertical"` 守卫, free 模式仅做 post_correct_angles 可达性修复, 不修正角度  
+- 水杯 handle_side=left 模式的偏移量需实际标定 (P0 阻塞)
+- `estun_handle_run.py` 通信协议未同步 handle-cup 版的 v2 改进 (暂缓)
+- **free 模式不应限制角度**: 当前 B/C 角约束已加 `if ORIENTATION_MODE == "vertical"` 守卫, free 模式仅做 post_correct_angles 可达性修复, 不修正角度

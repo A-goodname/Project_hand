@@ -78,6 +78,22 @@ def load_camera_params(yaml_path):
     }
 
 
+# ------------------------------------------------------------
+def load_camera_serial(yaml_path):
+    """
+    从 D435i_info.yaml 加载相机 serial.
+
+    参数:
+        yaml_path : str, YAML 配置文件路径
+
+    返回:
+        str, 相机序列号
+    """
+    with open(yaml_path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f)
+    return str(data['camera']['serial'])
+
+
 # ============================================================
 #  2. 深度映射工具
 # ============================================================
@@ -722,6 +738,10 @@ class BaseRealSenseDetector:
         """初始化 RealSense 相机管道与参数."""
         self.pipeline = rs.pipeline()
         config = rs.config()
+        # 通过 serial 绑定指定设备 (双相机同时插入时区分)
+        _serial = load_camera_serial(os.path.join(os.path.dirname(__file__), 'D435i_info.yaml'))
+        config.enable_device(_serial)
+        print("[INFO] 绑定相机 serial: %s" % _serial)
         config.enable_stream(rs.stream.color, self.FRAME_W, self.FRAME_H, rs.format.bgr8, self.FRAME_FPS)
         config.enable_stream(rs.stream.depth, self.FRAME_W, self.FRAME_H, rs.format.z16, self.FRAME_FPS)
 

@@ -2,37 +2,39 @@
 
 ## 当前焦点
 
-`.crp` / `estun_handle_cup_run.py` / `estun_handle_cup_code.txt` 全面审查修复:
-Cup 阶段 RELEASE/GRIP 补全, H_P3 单位修正, flag条件循环, MovL Home 双位置.
+**P2 双相机体系 Step 1 完成**: 两台 D435i (眼在手上 `819612071851` + 眼在手外 `342222071364`)
+通过 `config.enable_device(serial)` 绑定区分. Step 2 待开始: `hand_to_eye/` 模块搭建.
 
 ## 最近变更
 
-1. **机械臂端 .crp / 参考代码 / PC端 全面审查与修复** (2026-06-29):
-   - **`.crp` (handlepluscup-Down-826.crp)**:
-     - 修复 H_P3 TranStrToCpos 单位 `mm` → `m`
-     - 补全 Cup 阶段: 3 个 TranStrToCpos (C_P1/C_P2/C_P3) + 14 个 Cup 运动控件 (RELEASE/GRIP/RESET 序列)
-     - While 循环改用 `strflag` 条件循环替代 `break` (无 break 控件)
-     - 两个 While 尾部均补 Wait(500ms)
-     - MovL Home 双位置: Handle 末尾 (安全过渡 H_P2→C_P2) + Cup 末尾 (回原点)
-   - **`estun_handle_cup_run.py`**: Phase C 新增 RELEASE/GRIP 指令处理 (`release_object()`/`grip_object()`)
-   - **`estun_handle_cup_code.txt`**: v3 同步 .crp, flag条件循环/Home双位置/Cup完整流程/移除末尾Return
-   - **全局设置**: `~/.claude/settings.json` attribution.commit/pr 置空, 移除所有历史提交 Co-Authored-By
+1. **P2 双相机体系架构设计** (2026-06-30):
+   - `doc/Future_work.md` v2: 全面重写, 含硬件布局、serial 绑定方案、`hand_to_eye/` + `orchestrator/` 模块设计、6 状态状态机、开发计划 (Phase 1-3, 10 Step)
+   - T4: `doc/estun_handle_cup_code.txt` 通信超时 2s → 5s (两处 `SocketReadStr`)
+   - 明确 T7 (左把手抓取) vs T2+T3 (left 模式示教) 的区别
 
-2. **灵巧手使能可靠性修复** (2026-06-26):
+2. **机械臂端 .crp / 参考代码 / PC端 全面审查与修复** (2026-06-29):
+   - 修复 H_P3 TranStrToCpos 单位 `mm` → `m`
+   - 补全 Cup 阶段: 3 个 TranStrToCpos + 14 个 Cup 运动控件
+   - While 循环改用 `strflag` 条件循环, 尾部补 Wait(500ms)
+   - MovL Home 双位置 + Phase C RELEASE/GRIP 指令处理
+
+3. **灵巧手使能可靠性修复** (2026-06-26):
    - **问题**: `OmniHandGesture.enable()` 返回 True 仅表示 ACK 收到, 不代表硬件真正使能.
    - **`Estun/utils_shared.py` — `init_hand()`**: `enable()` 后 `is_enabled()` 验证 + 自动重试 (10 次/0.5s)
    - **`is_hand_available()`**: 新函数替代 `_hand_available = True`
 
-3. **通信协议与流程重构** (2026-06-25):
+4. **通信协议与流程重构** (2026-06-25):
    - PC端: `fmt_pose()`/`pack_three()` 抽函数, 清零时机改为断开时, 自动重稳定流程
    - 机械臂端: `estun_handle_cup_code.txt` v2 — 线性流程 + P4 预倒水点
 
-4. **back 模式 P3 示教验证通过**
-5. **B/C 角防跳变修正** (2026-06-23)
+5. **back 模式 P3 示教验证通过**
+6. **B/C 角防跳变修正** (2026-06-23)
 
 ## 下一步
 
-- P4 预倒水点: 机械臂端代码已写好, 待在实际示教器上测试
-- left 模式示教 + t_cup_offset_left 微调 (待完成)
-- 双相机体系 (眼在手上 + 眼在手外) — 见 doc/Future_work.md
+- P4 预倒水点: 待在实际示教器上测试 (P0, 硬件被占用暂不可行)
+- left 模式示教 + t_cup_offset_left 微调 (P0, 同上; left 为空时先用 back 值兜底)
+- **双相机体系 Step 1**: 两个 `_init_realsense()` 加 `config.enable_device(serial)` ← 当前
+- 后续 Step 2-4: `hand_to_eye/` 模块搭建 + 手势识别 + 外置相机标定
 - 全面自动化测试
+- `estun_handle_run.py` 通信协议同步 (暂缓, 待现有协议修改验证后再做)
