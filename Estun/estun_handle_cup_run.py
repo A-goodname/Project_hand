@@ -128,13 +128,18 @@ else:
     print(f"[INFO] 使用 back 模式偏移 t_cup_offset")
 CUP_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["r_cup_offset"], dtype=float)
 CUP_PRE_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["t_offset"], dtype=float)
-# ---- P3 示教偏移 (根据 cup handle_side 选择 back/left) ----
+# ---- P3 示教偏移 (根据 cup handle_side + pour_angle 选择) ----
 P3_TEACH_ENABLE = _cfg_estun["handle_grasp"]["p3_teach_offset"]["enable"]
+P3_POUR_ANGLE = _cfg_estun["handle_grasp"]["p3_teach_offset"].get("pour_angle", 30)
 P3_TEACH_SIDE = "back" if CUP_HANDLE_SIDE == "back" else "left"
-P3_TEACH_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]["t_offset"], dtype=float)
-P3_TEACH_R_ABC = np.array(_cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]["r_abc"], dtype=float)
+_angle_key = str(P3_POUR_ANGLE)
+_side_cfg = _cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]
+if _angle_key not in _side_cfg:
+    _angle_key = list(_side_cfg.keys())[0]  # 回退到第一个可用角度
+P3_TEACH_T_OFFSET = np.array(_side_cfg[_angle_key]["t_offset"], dtype=float)
+P3_TEACH_R_ABC = np.array(_side_cfg[_angle_key]["r_abc"], dtype=float)
 if P3_TEACH_ENABLE:
-    print(f"[INFO] P3 示教偏移: side={P3_TEACH_SIDE}, "
+    print(f"[INFO] P3 示教偏移: side={P3_TEACH_SIDE}, pour_angle={_angle_key}°, "
           f"t_offset=({P3_TEACH_T_OFFSET[0]:.4f},{P3_TEACH_T_OFFSET[1]:.4f},{P3_TEACH_T_OFFSET[2]:.4f}) "
           f"r_abc=({P3_TEACH_R_ABC[0]:.1f},{P3_TEACH_R_ABC[1]:.1f},{P3_TEACH_R_ABC[2]:.1f})")
 CUP_PRE_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["r_offset"], dtype=float)
@@ -188,8 +193,8 @@ def fmt_pose(xyz, abc):
 
 
 def pack_three(p1, p2, p3):
-    """打包三个位姿: (P1)[P2]{P3} — 与 ESTUN TranStrToCpos 括号标记约定匹配"""
-    return f"({fmt_pose(p1[0], p1[1])})[{fmt_pose(p2[0], p2[1])}]{{{fmt_pose(p3[0], p3[1])}}}"
+    """打包三个位姿: <P1>[P2]{P3} — 与 ESTUN TranStrToCpos 括号标记约定匹配"""
+    return f"<{fmt_pose(p1[0], p1[1])}>[{fmt_pose(p2[0], p2[1])}]{{{fmt_pose(p3[0], p3[1])}}}"
 
 
 def load_cam2ee(yaml_path):
@@ -313,7 +318,7 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
     # ---- 预计算工具偏移 ----
     _, t_handle_effective = compute_gripper_offset_transform(HANDLE_T_OFFSET, HANDLE_R_OFFSET)
     _, t_cup_effective = compute_gripper_offset_transform(CUP_T_OFFSET, CUP_R_OFFSET)
-    cup_pose_data = None  # pack_three 格式 (P1)[P2]{P3}, 在 Phase B 中获取, Phase C 使用
+    cup_pose_data = None  # pack_three 格式 <P1>[P2]{P3}, 在 Phase B 中获取, Phase C 使用
 
     # ---- [Phase A] 接收机器人初始末端位姿 (5s 超时) ----
     robot_xyz = None
@@ -394,13 +399,10 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
                     if not (-100 <= C1 <= -80):
                         print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
                         C1 = -90.0
-                    # B 角防跳变: <90->89, >90->91, ==90 不修正
-                    if B1 < 90:
-                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical, <90)")
-                        B1 = 89.0
-                    elif B1 > 90:
-                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical, >90)")
-                        B1 = 91.0
+                    # B 角 clamp 到 [84, 86], 超出则赋中值 85 (右手抓取)
+                    if not (84 <= B1 <= 86):
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
+                        B1 = 85.0
 
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                 R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
@@ -622,7 +624,7 @@ def handle_client(conn, addr, detector, T_cam2ee, cup_detector):
 # =============================================================
 
 def main():
-    global _hand_available, _waiting_for_stable
+    global _hand_available, _poses_cleared, _waiting_for_stable
     print("=" * 60)
     print("  ESTUN RealSense Handle + Cup 6D 融合抓取系统")
     print("  模型: Handle=微调YOLOv8n+SAM | Cup=YOLOv8m COCO")
@@ -745,6 +747,8 @@ def main():
                                 rot_ee = T_cam2ee[:3, :3] @ mean_rot_cam
                                 A_ee, B_ee, C_ee = rotation_matrix_to_euler_angles(rot_ee)
                                 detector.last_known_pose = (pos_ee, (A_ee, B_ee, C_ee))
+                                print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f}) "
+                                      f"euler=({A_ee:.1f},{B_ee:.1f},{C_ee:.1f})", flush=True)
                 else:
                     detector._pose_smoother.reset()
 
@@ -769,6 +773,8 @@ def main():
                             mean_cpos_cam, mean_ceuler_cam = main_cup_stabilizer.get_mean()
                             if mean_cpos_cam is not None and mean_ceuler_cam is not None:
                                 cup_detector.last_known_pose = (mean_cpos_cam, mean_ceuler_cam)  # type: ignore[assignment]
+                                print(f"\n[Cup STABLE]    pos=({mean_cpos_cam[0]:.3f},{mean_cpos_cam[1]:.3f},{mean_cpos_cam[2]:.3f}) "
+                                      f"euler=({mean_ceuler_cam[0]:.1f},{mean_ceuler_cam[1]:.1f},{mean_ceuler_cam[2]:.1f})", flush=True)
                 else:
                     cup_detector._pose_smoother.reset()
 

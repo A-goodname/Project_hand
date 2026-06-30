@@ -19,7 +19,7 @@
 - [x] PoseStabilizer 多帧稳定
 - [x] 代际计数器防污染
 - [x] 把手位姿转换 Demo (estun_handle_demo.py)
-- [x] Handle P1 B/C 角 vertical 模式守卫 + B 角防跳变 (<90->89, >90->91)
+- [x] Handle P1 B/C 角 vertical 模式守卫 + B 角 clamp [84,86]→85
 
 ### 水杯抓取
 
@@ -36,6 +36,7 @@
 - [x] `cup_grasp.pour_offset.r_offset` 从 -45° 更新为 -55°
 - [x] 示教模式 P3 公式修正: 移除多余的 `+ POUR_T_OFFSET_BASE`
 - [x] **back 示教点实际倒水精度验证通过**
+- [x] P3 多倒水角度支持: `estun_config.yaml` 按角度索引 (10°/15°/20°/30°), `pour_angle` 配置项切换
 
 ### 抓取微调
 
@@ -64,7 +65,9 @@
 - [x] 机械臂端 `estun_handle_cup_code.txt` v3: flag条件循环 + P4预倒水点 + Cup完整流程(RELEASE/GRIP/RESET) + MovL Home双位置
 - [x] 机械臂端 `.crp` (handlepluscup-Down-826.crp): 47控件, H_P3单位修正, Cup TranStrToCpos+运动序列+信号补全
 - [x] PC端 Phase C: RELEASE/GRIP 指令处理 (`release_object()`/`grip_object()`)
-- [x] code-review minor issues 修复: Cup P1 括号 bug 修正, 过时注释更新, 重稳定通知改为双检测器均稳定后触发
+- [x] `()` → `<>`: `pack_three` P1 分隔符改为 `<>` (机器人 `TranStrToCpos` 不支持 `()`)
+- [x] `_poses_cleared` UnboundLocalError 修复: `main()` global 声明补全
+- [x] 主循环去掉逐帧打印, 改为 `[Handle STABLE]` / `[Cup STABLE]` 稳定位姿输出
 - [x] Git 署名清理: `~/.claude/settings.json` attribution 置空, 历史提交 Co-Authored-By 移除
 
 ### 灵巧手可靠性
@@ -99,7 +102,7 @@
 - [x] `doc/estun_handle_cup_code.txt` 通信超时 2s → 5s (2026-06-30)
 - [x] `doc/Future_work.md` v3: 双相机体系架构设计 (简化递送策略 + 2点标定 + 砍手势识别) (2026-06-30)
 - [ ] P4 预倒水点: 待在实际示教器上测试 (P0, 硬件被占用)
-- [ ] left 模式示教 + t_cup_offset_left 微调 (P0, 硬件被占用; left 全零时用 back 值兜底)
+- [ ] **left 模式示教** + t_cup_offset_left 微调 + P3 多角度配置 (当前焦点)
 - [x] **双相机体系 Step 2-4**: `EyeToHand/` 模块搭建 + 人体检测 + 1D最小二乘标定 (2026-06-30). person_detector 已测试通过; calibrate.py 代码完成, 未实操 (机械臂被占用)
 - [ ] **标定验证**: `EyeToHand/calibration/calibrate.py` 实操 (P0, 机械臂被占用)
 - [ ] **双相机体系 Step 5-7**: `Orchestrator/` 状态机 + 总入口 + 递送位置计算

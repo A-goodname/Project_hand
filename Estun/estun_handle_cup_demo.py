@@ -99,13 +99,18 @@ else:
     print(f"[INFO] 使用 back 模式偏移 t_cup_offset")
 CUP_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["r_cup_offset"], dtype=float)
 CUP_PRE_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["t_offset"], dtype=float)
-# ---- P3 示教偏移 (根据 cup handle_side 选择 back/left) ----
+# ---- P3 示教偏移 (根据 cup handle_side + pour_angle 选择) ----
 P3_TEACH_ENABLE = _cfg_estun["handle_grasp"]["p3_teach_offset"]["enable"]
+P3_POUR_ANGLE = _cfg_estun["handle_grasp"]["p3_teach_offset"].get("pour_angle", 30)
 P3_TEACH_SIDE = "back" if CUP_HANDLE_SIDE == "back" else "left"
-P3_TEACH_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]["t_offset"], dtype=float)
-P3_TEACH_R_ABC = np.array(_cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]["r_abc"], dtype=float)
+_angle_key = str(P3_POUR_ANGLE)
+_side_cfg = _cfg_estun["handle_grasp"]["p3_teach_offset"][P3_TEACH_SIDE]
+if _angle_key not in _side_cfg:
+    _angle_key = list(_side_cfg.keys())[0]  # 回退到第一个可用角度
+P3_TEACH_T_OFFSET = np.array(_side_cfg[_angle_key]["t_offset"], dtype=float)
+P3_TEACH_R_ABC = np.array(_side_cfg[_angle_key]["r_abc"], dtype=float)
 if P3_TEACH_ENABLE:
-    print(f"[INFO] P3 示教偏移: side={P3_TEACH_SIDE}, "
+    print(f"[INFO] P3 示教偏移: side={P3_TEACH_SIDE}, pour_angle={_angle_key}°, "
           f"t_offset=({P3_TEACH_T_OFFSET[0]:.4f},{P3_TEACH_T_OFFSET[1]:.4f},{P3_TEACH_T_OFFSET[2]:.4f}) "
           f"r_abc=({P3_TEACH_R_ABC[0]:.1f},{P3_TEACH_R_ABC[1]:.1f},{P3_TEACH_R_ABC[2]:.1f})")
 CUP_PRE_R_OFFSET = np.array(_cfg_estun["cup_grasp"]["pre_offset"]["r_offset"], dtype=float)
@@ -521,13 +526,10 @@ def main():
             if not (-100 <= C1 <= -80):
                 print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
                 C1 = -90.0
-            # B 角防跳变: <90->89, >90->91, ==90 不修正
-            if B1 < 90:
-                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical, <90)")
-                B1 = 89.0
-            elif B1 > 90:
-                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical, >90)")
-                B1 = 91.0
+            # B 角 clamp 到 [84, 86], 超出则赋中值 85 (右手抓取)
+            if not (84 <= B1 <= 86):
+                print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
+                B1 = 85.0
 
         rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
         R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected

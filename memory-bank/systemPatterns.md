@@ -46,6 +46,17 @@
 - Cup 检测器以 `start_pipeline=False` 初始化, 通过 `inject_frames()` 复用 Handle 检测器的帧
 - 避免重复打开相机硬件
 
+### 通信协议: `pack_three` 三括号标记
+
+- 格式: `<P1>[P2]{P3}`, P1 用 `<>` (原为 `()` 但机器人 `TranStrToCpos` 不支持), P2 用 `[]`, P3 用 `{}`
+- 机械臂端 `TranStrToCpos` 按括号类型分别解析, 与 PC 端 `pack_three` 一一对应
+
+### P3 多倒水角度示教
+
+- `estun_config.yaml` 的 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30) 索引
+- `pour_angle` 顶层 key 控制当前使用哪个角度
+- 加载时按 `str(pour_angle)` 查找, 不存在则回退到第一个可用角度
+
 ## 模块关系
 
 ```text

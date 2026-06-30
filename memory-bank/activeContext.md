@@ -2,49 +2,28 @@
 
 ## 当前焦点
 
-**P2 双相机体系 Step 2-4 完成**: `EyeToHand/` 模块搭建完成 — 人体检测 (PersonDetector + PersonStabilizer) + 标定工具 (2点1D最小二乘) + 3D定位换算.
-person_detector 已测试通过. calibrate.py 代码完成, 未实操验证 (机械臂被占用).
+**back 模式全流程跑通**: Handle+Cup 抓取+倒水全部通过实测。准备 left 模式示教与实际测试。
 
 ## 最近变更
 
-1. **EyeToHand/ 眼在手外模块搭建** (2026-06-30):
-   - 命名对齐项目 PascalCase 风格 (草案 `hand_to_eye/` → `EyeToHand/`)
-   - `person_detector.py`: `PersonDetector` 直接继承 `BaseRealSenseDetector` (对齐 test_3D.py 模式), YOLOv8 COCO person class_id=0, 输出 bbox 中心 3D 相机坐标
-   - `PersonStabilizer`: 窗口稳定器 (参考 PoseStabilizer), window=10/pos_thresh=0.03m (config.yaml 可配)
-   - `detector.py`: 工具函数 `load_calibration()` / `camera_x_to_base_x()` (scale+bias 1D 映射)
-   - `calibration/calibrate.py`: 2点1D标定 (最小二乘线性回归), 末端 YZ/ABC 保持示教值仅沿 X 移动, 终端交互输入 X_base
-   - `calibration/result.yaml`: 标定输出模板
-   - person_detector 已测试通过; calibrate.py 代码完成未实操 (机械臂被占用)
+1. **back 模式全流程验证通过** (2026-06-30):
+   - RealSense 断连后重连 → `estun_handle_cup_run.py` 崩溃 (`_poses_cleared` UnboundLocalError) → 修复 `main()` global 声明
+   - B 角策略回退: `f2e3579` 防跳变 89/91 → `867552d` clamp [80,90]→85 → 最终收紧为 [84,86]→85, 保留 `ORIENTATION_MODE == "vertical"` 守卫
+   - `pack_three` + 机械臂脚本: `()` → `<>` (机器人 `TranStrToCpos` 不支持 `()`)
+   - 移除逐帧 `\r` 打印, 新增 `[Handle STABLE]` / `[Cup STABLE]` 稳定位姿打印
+   - P3 多倒水角度支持: `estun_config.yaml` 按角度索引 (10°/15°/20°/30°), `pour_angle` 配置项切换
 
-2. **P2 双相机体系架构设计** (2026-06-30):
-   - `doc/Future_work.md` v2: 全面重写, 含硬件布局、serial 绑定方案、`hand_to_eye/` + `orchestrator/` 模块设计、6 状态状态机、开发计划 (Phase 1-3, 10 Step)
-   - T4: `doc/estun_handle_cup_code.txt` 通信超时 2s → 5s (两处 `SocketReadStr`)
-   - 明确 T7 (左把手抓取) vs T2+T3 (left 模式示教) 的区别
+2. **P2 双相机体系 Step 2-4 完成** (2026-06-30): EyeToHand 模块搭建
 
-3. **机械臂端 .crp / 参考代码 / PC端 全面审查与修复** (2026-06-29):
-   - 修复 H_P3 TranStrToCpos 单位 `mm` → `m`
-   - 补全 Cup 阶段: 3 个 TranStrToCpos + 14 个 Cup 运动控件
-   - While 循环改用 `strflag` 条件循环, 尾部补 Wait(500ms)
-   - MovL Home 双位置 + Phase C RELEASE/GRIP 指令处理
+3. **灵巧手使能可靠性修复** (2026-06-26)
 
-4. **灵巧手使能可靠性修复** (2026-06-26):
-   - **问题**: `OmniHandGesture.enable()` 返回 True 仅表示 ACK 收到, 不代表硬件真正使能.
-   - **`Estun/utils_shared.py` — `init_hand()`**: `enable()` 后 `is_enabled()` 验证 + 自动重试 (10 次/0.5s)
-   - **`is_hand_available()`**: 新函数替代 `_hand_available = True`
-
-5. **通信协议与流程重构** (2026-06-25):
-   - PC端: `fmt_pose()`/`pack_three()` 抽函数, 清零时机改为断开时, 自动重稳定流程
-   - 机械臂端: `estun_handle_cup_code.txt` v2 — 线性流程 + P4 预倒水点
-
-6. **back 模式 P3 示教验证通过**
-7. **B/C 角防跳变修正** (2026-06-23)
+4. **通信协议与流程重构** (2026-06-25)
 
 ## 下一步
 
-- P4 预倒水点: 待在实际示教器上测试 (P0, 硬件被占用暂不可行)
-- left 模式示教 + t_cup_offset_left 微调 (P0, 同上; left 为空时先用 back 值兜底)
-- **标定验证**: calibrate.py 待机械臂可用后实操 (2点采集 + 拟合 + 保存)
-- **Step 5-7**: `Orchestrator/` 状态机 + 总入口 + 递送位置计算
-- 全面自动化测试
-- `estun_handle_run.py` 通信协议同步 (暂缓, 待现有协议修改验证后再做)
-- `estun_handle_run.py` 通信协议同步 (暂缓, 待现有协议修改验证后再做)
+- **left 模式示教**: `t_cup_offset_left` 实际标定 + P3 倒水点示教
+- left 模式 P3 多角度配置 (10°/15°/20°/30°) 填入 YAML
+- left 模式全流程实测
+- Git 提交当前 back 模式成果
+- P4 预倒水点: 待在实际示教器上测试 (硬件被占用)
+- 双相机体系 Step 5-7: Orchestrator 状态机

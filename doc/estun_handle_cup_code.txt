@@ -5,10 +5,10 @@ ESTUN 把手+水杯融合抓取示教器代码 (v3 — 线性流程 + P4 预倒�
   Phase 2 — Cup   C_P1/C_P2/C_P3 (收到 CUP 指令后 PC 回复)
 
 输入:
-  位姿 H_P1 (抓取点)      : 起始标记 (, 结束标记 )
+  位姿 H_P1 (抓取点)      : 起始标记 <, 结束标记 >
   位姿 H_P2 (预抓取点)     : 起始标记 [, 结束标记 ]
   位姿 H_P3 (倒水点)       : 起始标记 {, 结束标记 }
-  位姿 C_P1 (抓取点)       : 起始标记 (, 结束标记 )
+  位姿 C_P1 (抓取点)       : 起始标记 <, 结束标记 >
   位姿 C_P2 (预抓取点)     : 起始标记 [, 结束标记 ]
   位姿 C_P3 (递杯点)       : 起始标记 {, 结束标记 }
 
@@ -48,7 +48,7 @@ strflag = 1
 while strflag == 1
     SocketReadStr(sock, socketstr2, 5000, socketflag, "", "")
     if socketflag == 0
-        H_P1 = TranStrToCpos(socketstr2, ",", H_P1, strflag, "(", ")", "deg", "m")
+        H_P1 = TranStrToCpos(socketstr2, ",", H_P1, strflag, "<", ">", "deg", "m")
         H_P2 = TranStrToCpos(socketstr2, ",", H_P2, strflag, "[", "]", "deg", "m")
         H_P3 = TranStrToCpos(socketstr2, ",", H_P3, strflag, "{", "}", "deg", "m")
         // 三个位姿都解析成功 → 最后一个 TranStrToCpos 写 0 到 strflag → while 退出
@@ -87,7 +87,7 @@ strflag = 1
 while strflag == 1
     SocketReadStr(sock, socketstr3, 5000, socketflag, "", "")
     if socketflag == 0
-        C_P1 = TranStrToCpos(socketstr3, ",", C_P1, strflag, "(", ")", "deg", "m")
+        C_P1 = TranStrToCpos(socketstr3, ",", C_P1, strflag, "<", ">", "deg", "m")
         C_P2 = TranStrToCpos(socketstr3, ",", C_P2, strflag, "[", "]", "deg", "m")
         C_P3 = TranStrToCpos(socketstr3, ",", C_P3, strflag, "{", "}", "deg", "m")
     Wait 500ms
