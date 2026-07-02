@@ -130,8 +130,8 @@ class PersonDetector(BaseRealSenseDetector):
     LOG_NAME = "person_detect.log"
     TARGET_CLASS_ID = 0             # COCO person
 
-    def __init__(self, config_dict=None):
-        super().__init__(config_dict=config_dict)
+    def __init__(self, config_dict=None, serial_number=None):
+        super().__init__(config_dict=config_dict, serial_number=serial_number)
 
         # EMA 平滑器 (实时显示用, 使用基类 _apply_config 已设置的 SMOOTH_ALPHA)
         self._smoother = PositionSmoother(alpha=self.SMOOTH_ALPHA)

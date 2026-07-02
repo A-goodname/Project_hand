@@ -281,9 +281,9 @@ Project_hand/
 
 ### Phase 2: 流程编排
 
-- [ ] **Step 5: orchestrator/state_machine.py** — 实现 5 状态状态机 (IDLE → HANDLE_GRASP_AND_POUR → LOCATE_PERSON → APPROACH_PERSON → WAIT_AND_RELEASE → RETREAT).
-- [ ] **Step 6: orchestrator/main.py** — 系统总入口, 单进程管理双检测器.
-- [ ] **Step 7: 递送位置计算** — YZ 预示教固定 + X 从人体检测动态获取.
+- [x] **Step 5: Orchestrator/state_machine.py** — 实现 6 状态状态机 (IDLE → HANDLE_GRASP_AND_POUR → LOCATE_PERSON → APPROACH_PERSON → WAIT_AND_RELEASE → RETREAT). ✅ 代码完成 (2026-07-02)
+- [x] **Step 6: Orchestrator/main.py** — 系统总入口, 单进程管理双检测器. ✅ 代码完成 (2026-07-02)
+- [x] **Step 7: 递送位置计算** — YZ 预示教固定 + X 从人体检测动态获取. ✅ 代码完成 (2026-07-02)
 
 ### Phase 3: 集成与验证
 
@@ -322,6 +322,12 @@ Project_hand/
 
 ---
 
+## 9. ### 已补充的验证
+
+- [x] P4 预倒水点: 已在示教器测试通过 ✅ (2026-07-02)
+
+---
+
 ## 9. 文件结构总览 (完成态)
 
 ```text
@@ -346,10 +352,10 @@ Project_hand/
 │   └── calibration/
 │       ├── calibrate.py              # 1D最小二乘线性回归 (交互式, N≥2点)
 │       └── result.yaml               # T_cam_base 标定结果
-├── Orchestrator/                     # [后续] 流程编排
+├── Orchestrator/                     # [已实现] 流程编排
 │   ├── __init__.py
-│   ├── state_machine.py
-│   └── main.py
+│   ├── state_machine.py              # 6 状态状态机 + HandleCupRunner
+│   └── main.py                       # 双相机主循环 + 可视化
 ├── calib_data/                       # 手眼标定 (眼在手上, 已有)
 ├── memory-bank/                      # 上下文持久化
 └── doc/

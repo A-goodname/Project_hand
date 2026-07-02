@@ -25,6 +25,7 @@
 - 彩色->深度像素映射通过 `rs2_project_color_pixel_to_depth_pixel` 手动计算
 - **不依赖 `rs.align`** (相机硬件参数损坏, 结果不可靠)
 - 与 `RealSense/` (新版) 的基类 `BaseRealSenseDetector` 及共享工具函数完全独立, 互不依赖
+- `BaseRealSenseDetector.__init__` 支持 `serial_number=None` 参数: `None` 时从 `RealSense_R/D435i_info.yaml` 读取 serial, 非 `None` 时使用传入值 (用于 Orchestrator 双相机场景)
 
 ## RealSense 模块
 
@@ -56,6 +57,7 @@
   | 检测脚本 | `test_6D.py` / `test_handle_6D.py` / `test_cup_6D.py` | 同名脚本, 使用 `rs.align` 简化版本 |
   | 融合入口 | `Estun/estun_handle_cup_run.py` 引用 `RealSense_R/` | 待迁移 |
 
+- `BaseRealSenseDetector.__init__` 支持 `serial_number=None` 参数: `None` 时从 `RealSense/D435i_info.yaml` 读取 serial, 非 `None` 时使用传入值 (与 `RealSense_R/` 同步, 用于双相机场景)
 - YOLO 使用标准彩色模型 (非灰度模型)
 - **支持三种水壶检测模型**: 标准 YOLOv8 (瓶身), YOLO-World (零样本), 微调 YOLOv8n (高置信度水壶, 需预先训练)
 - **红色胶带辅助检测**: 通过 `red_tape` 配置段控制 (enabled/min_area), `detect_red_tape()` 使用 HSV 双阈值 + 中位数中心 + 最大连通分量; 替换把手 3D 位置, 旋转保持 PCA 不变
@@ -166,3 +168,36 @@
 - 训练时间: YOLOv8n 在 MX450 上约 9 分钟完成 50 epochs
 - 模型输出路径: `runs/train/kettle_finetune/weights/best.pt`, 复制至 `model/kettle_yolov8n_finetune.pt`
 - `labels.cache` 为 Ultralytics 自动生成的标签验证缓存, 已在 `.gitignore` 中忽略
+
+## EyeToHand 眼在手外模块
+
+存放路径: `EyeToHand/`
+
+- 外置固定相机 (RealSense D435i, serial 342222071364), 使用 `RealSense_R/` 基类 (手动像素映射, 内参损坏)
+- 人体检测使用标准 YOLOv8 COCO person (class_id=0), 无需额外模型
+- 位姿稳定: `PersonStabilizer` 窗口稳定器 (window=10, pos_thresh=0.03m), 参考 `PoseStabilizer`
+- 坐标转换: `detector.py` 提供 `load_calibration()` / `camera_x_to_base_x()` 工具函数
+- 标定工具: `calibration/calibrate.py` — 1D 最小二乘线性回归 (N≥2 点, 建议 3-5 点, 范围尽量大), 红色胶带辅助检测
+  - 前置: 机械臂末端 YZ/ABC = 预示教递送值, 仅沿 X 移动
+  - 操作: 'c' 采集 → 'f' 拟合 → 's' 保存
+- 递送策略: YZ/ABC 预示教固定 + X 动态从人体检测获取 + 固定 2s 定时松手 (不依赖手势识别)
+- 配置入口: `EyeToHand/config.yaml`, `stabilizer` 段控制稳定参数, `delivery` 段控制递送位置
+- `CalibrationDetector` 直接继承 `BaseRealSenseDetector`, 与 `person_detector.py` 共享同一相机绑定模式
+- 导入约定: 与 `RealSense_R/` 模块约定一致 (BaseRealSenseDetector + 手动像素映射)
+
+## Orchestrator 双相机流程编排
+
+存放路径: `Orchestrator/`
+
+- **模块角色**: 串联眼在手上 (Handle+Cup 抓取倒水) + 眼在手外 (人体检测递送) 的全流程状态机
+- **状态流转**: IDLE → HANDLE_GRASP_AND_POUR → LOCATE_PERSON → APPROACH_PERSON → WAIT_AND_RELEASE → RETREAT → IDLE
+- 核心文件:
+  - `state_machine.py`: `StateMachine` 引擎 + 6 个 `StateHandler` 实现 + `HandleCupRunner` (封装 Handle+Cup 全流程) + 共享工具 (PoseStabilizer/fmt_pose/pack_three)
+  - `main.py`: 双相机主循环, 每 tick 获取 Camera B 帧 → 驱动状态机 → 可视化
+- **关键设计**:
+  - Handle+Cup 逻辑从 `estun_handle_cup_run.py` 复制适配 (不改原文件), 仅增加 completion event 通知
+  - Camera B (eye-to-hand) 全程运行; Camera A (eye-in-hand) 由状态机管理生命周期
+  - 递送阶段使用独立 TCP 单 pose 协议: `<x,y,z,A,B,C>` + READY 确认 + RELEASE 指令
+  - 异常回退: 任何状态异常 → on_error → IDLE
+- **serial 绑定**: `BaseRealSenseDetector.__init__` 新增 `serial_number=None` 参数, Orchestrator 传入眼在手外 serial
+- 配置入口: `Estun/estun_config.yaml` (Handle+Cup + TCP), `EyeToHand/config.yaml` (人体检测 + 递送), `RealSense_R/config.yaml` (Handle+Cup 检测)

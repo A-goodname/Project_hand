@@ -473,13 +473,16 @@ class BaseRealSenseDetector:
     YW_DEVICE = 'cpu'
     SAM_DEVICE = 'cpu'
 
-    def __init__(self, config_dict=None, start_pipeline=True):
+    def __init__(self, config_dict=None, start_pipeline=True, serial_number=None):
         # 先执行 sys.path 插入 (确保能导入 pyrealsense2)
         self._ensure_sys_path()
 
         # 如果外部传入配置字典, 覆盖类属性默认值
         if config_dict is not None:
             self._apply_config(config_dict)
+
+        # serial 覆盖 (由 Orchestrator 双相机场景传入)
+        self._serial_override = serial_number
 
         # 注入帧缓存 (用于复用 pipeline 时外部注入帧数据)
         self._injected_frames = None
@@ -638,7 +641,10 @@ class BaseRealSenseDetector:
         self.pipeline = rs.pipeline()
         config = rs.config()
         # 通过 serial 绑定指定设备 (双相机同时插入时区分)
-        _serial = load_camera_serial(os.path.join(os.path.dirname(__file__), 'D435i_info.yaml'))
+        if self._serial_override is not None:
+            _serial = self._serial_override
+        else:
+            _serial = load_camera_serial(os.path.join(os.path.dirname(__file__), 'D435i_info.yaml'))
         config.enable_device(_serial)
         print("[INFO] 绑定相机 serial: %s" % _serial)
         config.enable_stream(rs.stream.color, self.FRAME_W, self.FRAME_H, rs.format.bgr8, self.FRAME_FPS)

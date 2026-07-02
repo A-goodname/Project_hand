@@ -97,12 +97,20 @@
 
 ## 待完成
 
-- [ ] P4 预倒水点: 待在实际示教器上测试 (P0, 硬件被占用)
-- [ ] **标定验证**: `EyeToHand/calibration/calibrate.py` 实操 (P0, 机械臂被占用)
-- [ ] **双相机体系 Step 5-7**: `Orchestrator/` 状态机 + 总入口 + 递送位置计算
+### 倒水流程
+
+- [x] P4 预倒水点: 已在示教器测试通过 ✅ (2026-07-02)
+
+### 双相机体系 — Orchestrator 状态机
+
+- [x] **Step 5-7: `Orchestrator/` 状态机 + 总入口 + 递送位置计算** ✅ (2026-07-02)
+  - `state_machine.py`: `OrchestratorState` 枚举 + `StateMachine` 引擎 + 6 个 handler
+  - `main.py`: 双相机主循环 + 可视化 + 异常清理
+  - `HandleCupRunner`: 封装 Handle+Cup 全流程 (复现 estun_handle_cup_run.py 核心逻辑)
+  - 递送协议: 单 pose `<x,y,z,A,B,C>` + READY 确认 + RELEASE + 自主退回
+- [ ] **`EyeToHand/calibration/calibrate.py` 实操标定** (P0, 当前唯一阻塞项, 需机械臂)
+- [ ] **填入递送参数**: `EyeToHand/config.yaml` 的 `delivery.Y_TEACH/Z_TEACH/ABC` 预示教值
 - [ ] **双相机体系 Step 8-10**: 联调 + 异常处理 + 全面测试
-- [ ] `estun_handle_run.py` 通信协议同步 (暂缓)
-- [ ] 全面自动化测试
 
 ## 已知问题
 

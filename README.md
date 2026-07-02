@@ -44,9 +44,12 @@ pip install -r requirements.txt
 | `Estun/estun_handle_demo.py` | 演示脚本：RealSense Handle版位姿转换链路验证 (把手, 无硬件依赖) |
 | `Estun/estun_cup_demo.py` | **演示脚本：水杯单检测位姿转换验证**，独立 pipeline，支持 back/left handle_side 多模式角度约束 |
 | `Estun/estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
-| `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令 |
+| `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令，支持 back/left 双模式 |
+| `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
+| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、1D 标定工具、相机→基系 X 坐标转换 |
+| `Orchestrator/` | **双相机流程编排**：6 状态状态机 (IDLE → HANDLE_GRASP_AND_POUR → LOCATE_PERSON → APPROACH_PERSON → WAIT_AND_RELEASE → RETREAT)、双相机主循环 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
 | `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
@@ -91,6 +94,23 @@ pip install -r requirements.txt
 6. 机器人作为TCP客户端连接本服务器，接收 P1(抓取点)/P2(预抓取点)/P3(目标点) 三组位姿
 7. 机器人依次发送 PREGRIP/GRIPDONE/RESET 指令控制灵巧手
 
+### RealSense Handle + Cup 融合版 (把手抓取+倒水+水杯抓取)
+
+1. 连接 RealSense 相机和灵巧手（USB串口）
+2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
+3. 确认 `RealSense_R/config.yaml` 中 `cup.handle_side` 为 `back` 或 `left`
+4. 配置 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.{side}` 和 `pour_angle`
+5. 运行 `python Estun/estun_handle_cup_run.py`
+6. 机器人作为TCP客户端连接本服务器，接收 Handle P1/P2/P3 三组位姿
+7. 倒水完成后机械臂发 `CUP` 指令获取 Cup P1/P2/P3 位姿
+8. 支持 back/left 双模式，P3 支撑多倒水角度 (10°/15°/20°/30°)
+
+### P3 倒水位置示教
+
+1. 运行 `python Estun/estun_teach_p3.py`，按提示沿 X/Y/Z 方向微调末端位置
+2. 设置 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` 切换倒水角度
+3. 示教数据按角度索引 (10/15/20/30) + back/left 分模式存储
+
 ## 配置说明
 
 所有配置通过YAML文件管理，无需改代码：
@@ -112,6 +132,10 @@ pip install -r requirements.txt
 - **红色胶带辅助检测** → 修改对应模块 `config.yaml` 中的 `red_tape.enabled` / `red_tape.min_area`
 - **SAM 模型选择** → 修改对应模块 `config.yaml` 中的 `sam.model` (当前为 sam2_b.pt)
 - **调整水杯偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `cup_grasp.gripper_offset.t_cup_offset` (back 模式) 或 `t_cup_offset_left` (left 模式)
+- **P3 倒水角度切换** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` (10/15/20/30)
+- **P3 示教偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.back` / `.left` 各角度 `t_offset` 和 `r_abc`
+- **眼在手外人体检测** → 修改 `EyeToHand/config.yaml` 中的 `model`、`stabilizer`、`delivery.*` 参数
+- **眼在手外标定** → 运行 `EyeToHand/calibration/calibrate.py` 采集 N 点拟合 `scale`/`bias`
 
 ## 核心流程
 
@@ -138,6 +162,36 @@ pip install -r requirements.txt
 
 详细把手检测流程见 `doc/Handle_Process.md`。
 
+### 把手+水杯融合 (Handle + Cup)
+
+```text
+Phase A: 机器人发送末端初始位姿 (5s 超时)
+Phase B: 双检测器 (共享 pipeline) 同步检测 →
+          Handle 稳定 → cam2ee → P1(抓取)/P2(预抓取)
+          Cup 稳定 → cam2ee → P1/P2/P3
+          P3_pour = Cup P1 基系 + P3_TEACH_OFFSET (按角度/模式索引)
+          → 发送 Handle 三个位姿 <P1>[P2]{P3}
+Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GRIP
+```
+
+流程文档见 `doc/Handle_Cup_Process.md`。
+
+### 双相机全流程 (Orchestrator)
+
+```text
+IDLE ─→ HANDLE_GRASP_AND_POUR ─→ LOCATE_PERSON ─→ APPROACH_PERSON
+                                                    ↓
+                                            WAIT_AND_RELEASE
+                                                    ↓
+                                                RETREAT → IDLE
+```
+
+- Camera A (眼在手上): Handle+Cup 检测, 复用现有流程
+- Camera B (眼在手外): 人体检测 + X 坐标 → 递送位姿计算
+- 递送: YZ/ABC 预示教固定 + X 动态从人体检测获取
+- 松手: 固定 2s 定时松手 (代替手势识别)
+- 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py`
+
 ## 关键概念
 
 - **物体坐标系约定**：PCA 输出的 Z 轴指向相机 (test_6D 内部处理)，Y 轴统一向下 (utils_shared.compute_grasp_rotation 处理，由 `grasp_direction` 控制方向)，两次修正消除 PCA 符号歧义
@@ -148,4 +202,7 @@ pip install -r requirements.txt
 - **红色胶带辅助**：HSV 双阈值红色检测，替换把手 3D 位置，旋转保持 PCA 不变
 - **偏移参考系**：P2/P3 的 pre_offset / target_offset 定义在抓取点末端系 (grasp ee frame) 下，非当前末端系
 - **扫描线分离**：按 `handle_side` 取最外段（right=最右段/left=最左段），底部+顶部双向剔除 x 中心偏离行
-- **Cup handle_side 模式**：`RealSense/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + estun_cup_demo.py 的角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left
+- **Cup handle_side 模式**：`RealSense_R/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + 角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left
+- **P3 多角度示教**：`estun_config.yaml` 中 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30)，`pour_angle` 切换当前使用角度，加载自动转字符串键防整数键 bug
+- **双相机体系**：两台 RealSense D435i，Camera A (眼在手上, serial 819612071851, rs.align) + Camera B (眼在手外, serial 342222071364, 手动像素映射); 通过 `config.enable_device(serial)` 绑定
+- **Orchestrator 状态机**：6 状态线性推进，异常回退 IDLE; Handle+Cup 流程封装在 `HandleCupRunner`; 递送阶段使用独立 TCP 单 pose 协议 (`<x,y,z,A,B,C>` + READY + RELEASE)
