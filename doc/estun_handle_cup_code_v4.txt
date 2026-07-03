@@ -1,0 +1,252 @@
+ESTUN 把手+水杯融合抓取示教器代码 (v4 — Orchestrator 双相机协议 + HandInCup 判定)
+============================================================
+与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
+
+=== v4 相比 v3 的关键变化 ===
+1. Cup P3 X 坐标由 Camera B (眼在手外) 人体检测动态生成, YZ/ABC 为预示教固定值
+2. Phase D 新增 READY 指令: 机械臂到 P3 后通知 PC 启动 HandInCup 检测
+3. 松手判定: PC 通过 YOLOv8m+YOLOv8n-Pose 判定人手是否在杯把手附近
+4. 双分支:
+   - CONTINUE (TRUE, 有人接杯) → 松手 → P4 安全退避 → RESET → Home
+   - ABORT   (FALSE,无人接杯) → (不松) → 回 P1 放回 → RELEASE → P2 → RESET → Home
+5. Cup P4 安全退避点: 同 Handle P4 算法 (P1.XY + P3.Z + P1.ABC)
+
+=== 协议总览 ===
+Phase A: Robot → PC  [x,y,z,A,B,C]       初始末端位姿
+Phase B: PC → Robot  <H_P1>[H_P2]{H_P3}   Handle 三组位姿
+Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP
+         PC → Robot  <C_P1>[C_P2]{P3}    Cup 位姿 (P3=递送)
+Phase D: READY → (HandInCup 检测 2s) → RELEASE
+         PC → Robot  CONTINUE / ABORT
+         TRUE:  (松手) P4 退避 → RESET → Home → SocketClose
+         FALSE: (不松) P1 放回 → RELEASE → P2 退避 → RESET → Home → SocketClose
+
+=== 信号变量 ===
+  str1 = "PREGRIP"    — 预抓取 (Handle 用)
+  str2 = "GRIPDONE"   — 抓取完成 (Handle 用)
+  str3 = "RESET"      — 手复位
+  str4 = "CUP"        — 请求 Cup 位姿
+  str5 = "RELEASE"    — 张开/释放
+  str6 = "GRIP"       — 夹紧
+  str7 = "READY"      — [v4] 到达 P3, 启动 HandInCup 检测
+
+响应字符串:
+  "CONTINUE"          — [v4] PC→Robot, HandInCup=TRUE,  松手退避
+  "ABORT"             — [v4] PC→Robot, HandInCup=FALSE, 放回杯子
+
+=== 位姿标记 ===
+  Handle: H_P1 <...>, H_P2 [...], H_P3 {...}, H_P4 (计算)
+  Cup:    C_P1 <...>, C_P2 [...], C_P3 {...}, C_P4 (计算)
+
+=== 路径 ===
+  Handle: H_P2 → H_P1 → H_P4 → H_P3 → H_P4 → H_P1 → H_P2 → Home
+  Cup(TRUE):   C_P2 → C_P1 → C_P3 → (READY+RELEASE+CONTINUE) → C_P4 → Home
+  Cup(FALSE):  C_P2 → C_P1 → C_P3 → (READY+RELEASE+ABORT) → C_P1 → C_P2 → Home
+
+
+// ================================================================
+// [0] 建立 Socket 连接
+// ================================================================
+SocketCreat(socketflag)
+if socketflag != 0
+    return
+
+// ================================================================
+// [1] Phase A: 发送当前末端位姿 (仅一次)
+// ================================================================
+GetCurCpos P0
+socketstr1 = CposTostr(P0)
+SocketSendStr(socketstr1)
+
+// ================================================================
+// [2] Phase B: 等待 Handle H_P1/H_P2/H_P3
+// ================================================================
+strflag = 1
+while strflag == 1
+    SocketReadStr(sock, socketstr2, 5000, socketflag, "", "")
+    if socketflag == 0
+        H_P1 = TranStrToCpos(socketstr2, ",", H_P1, strflag, "<", ">", "deg", "m")
+        H_P2 = TranStrToCpos(socketstr2, ",", H_P2, strflag, "[", "]", "deg", "m")
+        H_P3 = TranStrToCpos(socketstr2, ",", H_P3, strflag, "{", "}", "deg", "m")
+        // 三个位姿都解析成功 → 最后一个写 0 到 strflag → while 退出
+    Wait 500ms
+
+// ================================================================
+// [3] Handle 运动 (含 P4 预倒水点)
+// ================================================================
+MovL H_P2                       // 到预抓取点
+SocketSendStr('PREGRIP')        // → PC: 灵巧手 PREGRIP
+Wait 1s
+MovL H_P1                       // 到抓取点
+SocketSendStr('GRIPDONE')       // → PC: 灵巧手 GRIPDONE
+Wait 1s
+// --- 计算 P4: 上升到倒水高度 (P1的XY + P3的Z + P1的姿态) ---
+DCp1.dz = H_P3.z - H_P1.z
+H_P4 = CposOffset(H_P1, DCp1)
+MovL H_P4                       // → 预倒水点 (安全上升)
+Wait 1s
+// --- P3: 移动到倒水点 ---
+MovL H_P3                       // 到倒水位置
+Wait 2s                         // 倒水延时
+// --- P4: 先升回安全高度再回 P1 ---
+MovL H_P4                       // → 预倒水点 (安全上升)
+Wait 1s
+MovL H_P1                       // 回到抓取点
+SocketSendStr('PREGRIP')        // → PC: 灵巧手 PREGRIP
+Wait 1s
+MovL H_P2                       // 回到预抓取点
+SocketSendStr('RESET')          // → PC: 灵巧手 RESET
+Wait 1s
+// --- Home: Handle 与 Cup 之间的安全过渡点 ---
+MovL Home
+
+// ================================================================
+// [4] Phase C: 请求并等待 Cup C_P1/C_P2/C_P3
+// ================================================================
+SocketSendStr('CUP')            // → PC: 请求 Cup 位姿
+strflag = 1
+while strflag == 1
+    SocketReadStr(sock, socketstr3, 5000, socketflag, "", "")
+    if socketflag == 0
+        C_P1 = TranStrToCpos(socketstr3, ",", C_P1, strflag, "<", ">", "deg", "m")
+        C_P2 = TranStrToCpos(socketstr3, ",", C_P2, strflag, "[", "]", "deg", "m")
+        C_P3 = TranStrToCpos(socketstr3, ",", C_P3, strflag, "{", "}", "deg", "m")
+    Wait 500ms
+
+// ================================================================
+// [5] Cup 运动 — 抓杯 → 递送
+// ================================================================
+MovL C_P2                       // 到预抓取点
+SocketSendStr('RELEASE')        // → PC: 灵巧手 RELEASE (张开)
+Wait 1s
+MovL C_P1                       // 到抓取点
+SocketSendStr('GRIP')           // → PC: 灵巧手 GRIP (夹紧)
+Wait 1s
+MovL C_P3                       // 到递杯位置
+Wait 1s
+
+// ================================================================
+// [6] Phase D: HandInCup 判定 (v4 新增)
+//    机械臂到达 P3 → READY → wait 2s (同时 PC 运行 HandInCup 检测)
+//    → RELEASE → PC 判定 → CONTINUE / ABORT
+// ================================================================
+
+// --- [6a] 发送 READY → PC 启动 HandInCup 检测 ---
+SocketSendStr('READY')          // → PC: 到达递送点, 启动 HandInCup
+Wait 2s                         // 留给 PC 运行 HandInCup 检测的时间
+
+// --- [6b] 发送 RELEASE → PC 判定 ---
+SocketSendStr('RELEASE')        // → PC: 请求判定 HandInCup
+
+// --- [6c] 等待 PC 返回 CONTINUE 或 ABORT ---
+// PC 端响应格式:
+//   CONTINUE → "<0,0,0,0,0,0>"  (用 < > 标记, TranStrToCpos 成功 → flag_cont=0)
+//   ABORT    → "[0,0,0,0,0,0]"  (用 [ ] 标记, TranStrToCpos 成功 → flag_abort=0)
+// 注意: 两个 TranStrToCpos 都从同一个 socketstr5 解析, 只有一个会成功.
+strflag_cont = 1   // 初始=1 (失败)
+strflag_abort = 1  // 初始=1 (失败)
+strflag = 1
+while strflag == 1
+    SocketReadStr(sock, socketstr5, 5000, socketflag, "", "")
+    if socketflag == 0
+        // 尝试解析 <...> 格式 (CONTINUE 标记)
+        DummyCpos = TranStrToCpos(socketstr5, ",", DummyCpos, strflag_cont, "<", ">", "deg", "m")
+        // 尝试解析 [...] 格式 (ABORT 标记)
+        DummyCpos = TranStrToCpos(socketstr5, ",", DummyCpos, strflag_abort, "[", "]", "deg", "m")
+        strflag = 0
+    Wait 500ms
+
+// ================================================================
+// [7] 分支处理: CONTINUE vs ABORT
+// ================================================================
+
+// --- 计算 Cup P4 安全退避点 (C_P1.XY + C_P3.Z + C_P1.ABC) ---
+DCp2.dz = C_P3.z - C_P1.z
+C_P4 = CposOffset(C_P1, DCp2)   // P4 = P1 位姿 + Z偏移到递送高度
+
+// --- [7a] CONTINUE 分支: 有人接杯 → 松手已由 PC 执行 → 退避 ---
+// 注: 当 PC 发送 CONTINUE 时, PC 已调用 release_object() 松手
+// 机械臂只需安全退避即可
+if strflag_cont == 0
+    MovL C_P4                   // → 安全退避点 (上升到递送高度)
+    Wait 1s
+    SocketSendStr('RESET')      // → PC: 灵巧手 RESET
+    Wait 1s
+    MovL Home                   // → 回原点
+    SocketClose
+endif
+
+// --- [7b] ABORT 分支: 无人接杯 → 保持夹紧 → 放回原位 ---
+// 注: 当 PC 发送 ABORT 时, PC 未调用 release_object()
+// 机械臂带着杯子放回原位再松手
+if strflag_abort == 0
+    // 注意: 此时灵巧手仍然夹着杯子 (PC 端未松手)
+    MovL C_P1                   // → 回到抓取点 (放回水杯)
+    Wait 1s
+    SocketSendStr('RELEASE')    // → PC: 灵巧手 RELEASE (松杯) — 第二次 RELEASE
+    Wait 1s
+    MovL C_P2                   // → 回到预抓取点 (安全退避)
+    Wait 1s
+    SocketSendStr('RESET')      // → PC: 灵巧手 RESET
+    Wait 1s
+    MovL Home                   // → 回原点
+    SocketClose
+endif
+
+// ================================================================
+// [8] 关连接 (CONTINUE/ABORT 各自分支内已有 SocketClose, 此处备用)
+// ================================================================
+// SocketClose
+
+// ================================================================
+// 附注: ESTUN 示教器实现注意事项
+// ================================================================
+//
+// 1. CONTINUE/ABORT 响应解析:
+//    PC 端发送格式化的位姿字符串:
+//      CONTINUE → "<0,0,0,0,0,0>"  (用 < > 标记)
+//      ABORT    → "[0,0,0,0,0,0]"  (用 [ ] 标记)
+//    机器人端使用两个 TranStrToCpos 调用:
+//      TranStrToCpos(socketstr5, ",", DummyCpos, strflag_cont, "<", ">", "deg", "m")
+//      TranStrToCpos(socketstr5, ",", DummyCpos, strflag_abort, "[", "]", "deg", "m")
+//    两个调用都从同一个 socketstr5 解析, 只有一个标记匹配成功.
+//    成功 → flag=0, 失败 → flag≠0. 根据 flag 值进入对应分支.
+//    注意: 因为 < 和 > 在 Handle/Cup 位姿解析中已使用,
+//    CONTINUE 响应发送时 Handle/Cup 解析已完成, socketstr5 是独立变量, 无冲突.
+//
+// 2. P4 安全退避点:
+//    Cup P4 = CposOffset(C_P1, DCp2)
+//    其中 DCp2.dz = C_P3.z - C_P1.z
+//    P4 位于 P1 的 XY 平面上方, Z 高度等于 P3 (递送高度),
+//    姿态保持 P1 的姿态. 这样退避时先上升到安全高度再回 Home,
+//    避免与桌面/人体碰撞.
+//
+// 3. 超时保护:
+//    所有 SocketReadStr 已有 5000ms 超时.
+//    如果 PC 端检测器异常 (30s 无稳定位姿),
+//    PC 端 handler 会断开连接, 机械臂端 SocketReadStr 返回失败.
+//
+// 4. 与 v3 的向后兼容:
+//    如果 PC 端仍运行旧版 estun_handle_cup_run.py (v3),
+//    则 Phase D 不会发送 READY 和 CONTINUE/ABORT 格式响应.
+//    建议直接升级 PC 端到 Orchestrator/state_machine.py.
+//
+// 5. 位姿变量声明:
+//    H_P1, H_P2, H_P3, H_P4: CPOS (Handle 位姿)
+//    C_P1, C_P2, C_P3, C_P4: CPOS (Cup 位姿)
+//    DCp1, DCp2:             DCPOS (偏移量)
+//    DummyCpos:              CPOS (临时变量, 用于解析 CONTINUE/ABORT 响应)
+//    P0:                     CPOS (当前位姿)
+//    Home:                   CPOS (预定义原点)
+//
+// 6. 灵巧手控制:
+//    所有灵巧手指令 (PREGRIP/GRIPDONE/RESET/RELEASE/GRIP/READY)
+//    通过 SocketSendStr 发送给 PC 端, PC 端通过 Estun/utils_shared.py
+//    中的函数控制 Omnihand 灵巧手.
+//    机械臂示教器不直接连接灵巧手.
+//
+// 7. CRP 文件:
+//    对应的示教器项目文件: doc/handlepluscup-v4.crp
+//    由 update_crp_v4.py 从 handlepluscup-Down-41.crp (v3) 自动生成.
+//    新增变量: str7, socketstr4, socketstr5, strflag2, strflag_cont, strflag_abort
+//    新增位姿点: DCp2, C_P4, DummyCpos

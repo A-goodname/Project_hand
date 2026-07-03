@@ -2,11 +2,15 @@
 """
 EyeToHand 人手-杯把手重合检测 (Hand-in-cup)
 =============================================
-双模型 2D 判定: YOLOv8m (cup bbox) + YOLOv8n-Pose (wrist keypoints).
-手腕关键点落入杯 bbox 扩展区域内且连续 N 帧 → 判定手在杯上.
+双模型判定: YOLOv8m (cup bbox) + YOLOv8n-Pose (wrist keypoints).
+
+判定策略:
+  - 手腕到杯 bbox 中心的 2D 像素距离 < 阈值 (bbox 尺寸 × 系数) → 邻近
+  - 可选: 手腕深度与杯中心深度差值 < 阈值 → 确认在同一平面
+  - 连续 N 帧满足 → hand_on_cup = True
 
 使用方法:
-  1. 下载模型: 首次运行 ultralytics 自动下载 yolov8n-pose.pt
+  1. 下载模型: yolov8n-pose.pt 放到 model/
   2. 测试:   python EyeToHand/hand_in_cup.py
   3. 接入:   from EyeToHand.hand_in_cup import HandInCupDetector
 
@@ -17,8 +21,9 @@ EyeToHand 人手-杯把手重合检测 (Hand-in-cup)
 接口:
   - update(color_image, depth_frame=None) : 每帧调用
   - is_hand_on_cup : bool, 人手是否在杯把手上
+  - stable_count   : int, 当前连续确认帧数
   - reset()        : 重置内部状态
-  - run()          : 交互式测试主循环
+  - run()          : 交互式测试主循环 (连接 Camera B)
 """
 
 import os
@@ -33,7 +38,6 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# ---- PersonDetector 复用 Camera B pipeline ----
 from RealSense_R.realsense_shared import BaseRealSenseDetector
 
 
@@ -44,16 +48,13 @@ from RealSense_R.realsense_shared import BaseRealSenseDetector
 class HandInCupDetector:
     """人手-杯把手重合检测器.
 
-    每帧调用 update(), 内部累积连续帧判定结果.
-    连续 N 帧手腕在杯 bbox 内 → is_hand_on_cup = True.
+    使用邻近判定而非包含判定: 手侧握把手时, 手腕在杯 bbox 外部,
+    但到 bbox 中心的距离足够近.
     """
 
     # COCO keypoint indices
     LEFT_WRIST = 9
     RIGHT_WRIST = 10
-
-    # Cup bbox 扩展系数 (容差)
-    BBOX_EXPAND = 0.20
 
     # ------------------------------------------------------------
     @staticmethod
@@ -77,18 +78,21 @@ class HandInCupDetector:
                  pose_model_path: str = "",
                  device: str = "cuda",
                  conf_threshold: float = 0.5,
-                 required_stable: int = 5):
+                 required_stable: int = 5,
+                 dist_factor: float = 0.8,
+                 depth_tolerance: float = 0.05):
         """
         Args:
-            cup_model_path:  YOLO 杯检测模型路径, 默认从 config 读取或 model/yolov8m.pt
-            pose_model_path: YOLO-Pose 模型路径, 默认从 config 读取或 model/yolov8n-pose.pt
-            device:          "cuda" | "cpu"
-            conf_threshold:  检测置信度阈值
-            required_stable: 连续确认帧数 (默认 5, ~0.17s@30fps)
+            cup_model_path:  YOLO 杯检测模型路径.
+            pose_model_path: YOLO-Pose 模型路径.
+            device:          "cuda" | "cpu".
+            conf_threshold:  检测置信度阈值.
+            required_stable: 连续确认帧数 (默认 5, ~0.17s@30fps).
+            dist_factor:     距离阈值 = bbox 对角线 × dist_factor
+                             默认 0.8, 覆盖杯身半径 + 把手延伸.
+            depth_tolerance: 手腕-杯心深度差阈值 (米), 0.05=5cm.
         """
-        # 从模块配置读取默认模型路径
         _default_cup, _default_pose = self._load_default_models()
-
         if not cup_model_path:
             cup_model_path = _default_cup
         if not pose_model_path:
@@ -96,6 +100,8 @@ class HandInCupDetector:
 
         self._conf_threshold = conf_threshold
         self._required_stable = required_stable
+        self._dist_factor = dist_factor
+        self._depth_tolerance = depth_tolerance
         self._stable_count = 0
         self._on_cup = False
 
@@ -108,36 +114,82 @@ class HandInCupDetector:
         self._pose_model = YOLO(pose_model_path)
         self._pose_model.to(device)
 
-        # 可视化用 (run() 中设置)
+        # 可视化用
         self._last_cup_bbox = None
+        self._last_cup_center = None
         self._last_wrists = []
+        self._last_distances = []       # 各手腕到杯心的像素距离
+        self._last_depth_ok = False     # 深度是否匹配
 
     # ------------------------------------------------------------
     #  核心逻辑
     # ------------------------------------------------------------
 
     def update(self, color_image: np.ndarray, depth_frame=None):
-        """每帧调用. depth_frame 保留为接口兼容, 当前不使用.
+        """每帧调用.
 
         Args:
-            color_image: BGR 图像 (H, W, 3)
-            depth_frame: 保留参数 (未使用)
+            color_image: BGR 图像 (H, W, 3).
+            depth_frame: rs.depth_frame, 用于深度辅助判定 (可选).
         """
         # 1. 检测杯 bbox
         cup_bbox = self._detect_cup(color_image)
         self._last_cup_bbox = cup_bbox
 
-        # 2. 检测手腕关键点
+        # 2. 检测手腕
         wrists = self._detect_wrists(color_image)
         self._last_wrists = wrists
 
-        # 3. 判定重合
-        if cup_bbox is not None and len(wrists) > 0:
-            exp_bbox = self._expand_bbox(cup_bbox, color_image.shape)
-            hit = any(self._point_in_bbox(w, exp_bbox) for w in wrists)
-        else:
-            hit = False
+        # 3. 邻近判定
+        hit = False
+        cup_center = None
+        distances = []
+        depth_ok = False
 
+        if cup_bbox is not None and len(wrists) > 0:
+            # 杯心
+            cx = (cup_bbox[0] + cup_bbox[2]) // 2
+            cy = (cup_bbox[1] + cup_bbox[3]) // 2
+            cup_center = (cx, cy)
+
+            # 阈值 = bbox 对角线 × dist_factor
+            w = cup_bbox[2] - cup_bbox[0]
+            h = cup_bbox[3] - cup_bbox[1]
+            dist_thresh = ((w ** 2 + h ** 2) ** 0.5) * self._dist_factor
+
+            for wx, wy in wrists:
+                d = ((wx - cx) ** 2 + (wy - cy) ** 2) ** 0.5
+                distances.append(d)
+                if d < dist_thresh:
+                    hit = True
+
+            # 深度辅助 (可选): 手腕与杯心深度差 < tolerance
+            if hit and depth_frame is not None:
+                # 取杯心深度 (中值 5x5)
+                cup_depths = []
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        py, px = cy + dy, cx + dx
+                        if 0 <= py < color_image.shape[0] and 0 <= px < color_image.shape[1]:
+                            d = depth_frame.get_distance(px, py)
+                            if 0 < d < 2.0:
+                                cup_depths.append(d)
+                if cup_depths:
+                    cup_z = np.median(cup_depths)
+                    # 检查每个手腕的深度
+                    for wx, wy in wrists:
+                        wz = depth_frame.get_distance(wx, wy)
+                        if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance:
+                            depth_ok = True
+                            break
+                    if not depth_ok:  # 深度差异大 → 手在杯前/后, 非抓取
+                        hit = False
+
+        self._last_cup_center = cup_center
+        self._last_distances = distances
+        self._last_depth_ok = depth_ok
+
+        # 4. 累积
         if hit:
             self._stable_count += 1
         else:
@@ -150,7 +202,6 @@ class HandInCupDetector:
         results = self._cup_model(color_image, classes=[41], verbose=False)
         if not results or len(results[0].boxes) == 0:
             return None
-        # 取最高置信度
         boxes = results[0].boxes
         confs = boxes.conf.cpu().numpy()
         best_idx = confs.argmax()
@@ -169,42 +220,24 @@ class HandInCupDetector:
         if kpts.xy is None or kpts.conf is None:
             return []
 
+        n_people = kpts.conf.shape[0]
+        n_kpts = kpts.conf.shape[1]
+        if n_people == 0 or n_kpts == 0:
+            return []
+
         wrist_indices = [self.LEFT_WRIST, self.RIGHT_WRIST]
         wrists = []
         for idx in wrist_indices:
-            if idx < kpts.conf.shape[1]:
-                # 取所有检测到的人中该关键点置信度最高的
-                confs = kpts.conf[:, idx].cpu().numpy()
-                best_person = confs.argmax()
-                if confs[best_person] >= self._conf_threshold:
-                    xy = kpts.xy[best_person, idx].cpu().numpy()
-                    wrists.append((int(xy[0]), int(xy[1])))
+            if idx >= n_kpts:
+                continue
+            confs = kpts.conf[:, idx].cpu().numpy()
+            if len(confs) == 0:
+                continue
+            best_person = confs.argmax()
+            if confs[best_person] >= self._conf_threshold:
+                xy = kpts.xy[best_person, idx].cpu().numpy()
+                wrists.append((int(xy[0]), int(xy[1])))
         return wrists
-
-    # ------------------------------------------------------------
-    #  几何工具
-    # ------------------------------------------------------------
-
-    @staticmethod
-    def _expand_bbox(bbox, shape):
-        """扩展 bbox 以增加容差."""
-        x1, y1, x2, y2 = bbox
-        h, w = shape[:2]
-        dw = int((x2 - x1) * HandInCupDetector.BBOX_EXPAND)
-        dh = int((y2 - y1) * HandInCupDetector.BBOX_EXPAND)
-        return [
-            max(0, x1 - dw),
-            max(0, y1 - dh),
-            min(w, x2 + dw),
-            min(h, y2 + dh),
-        ]
-
-    @staticmethod
-    def _point_in_bbox(point, bbox):
-        """点是否在 bbox 内."""
-        px, py = point
-        x1, y1, x2, y2 = bbox
-        return x1 <= px <= x2 and y1 <= py <= y2
 
     # ------------------------------------------------------------
     #  公开属性
@@ -222,7 +255,10 @@ class HandInCupDetector:
         self._stable_count = 0
         self._on_cup = False
         self._last_cup_bbox = None
+        self._last_cup_center = None
         self._last_wrists = []
+        self._last_distances = []
+        self._last_depth_ok = False
 
     # ------------------------------------------------------------
     #  交互式测试
@@ -230,7 +266,6 @@ class HandInCupDetector:
 
     def run(self):
         """交互式测试主循环. 需要连接 Camera B (RealSense D435i)."""
-        # 模块级配置
         _cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
         with open(_cfg_path, "r", encoding="utf-8") as f:
             _cfg = yaml.safe_load(f)
@@ -245,6 +280,7 @@ class HandInCupDetector:
         print("=" * 55)
         print("  Hand-in-cup 检测测试")
         print("  YOLOv8m (cup) + YOLOv8n-Pose (wrist)")
+        print("  邻近判定 + 深度辅助")
         print("  按 'q' 退出")
         print("=" * 55)
 
@@ -254,32 +290,53 @@ class HandInCupDetector:
                 if color is None:
                     continue
 
-                self.update(color)
+                self.update(color, depth_frame)
                 display = color.copy()
 
-                # 状态
-                status = "ON CUP" if self._on_cup else f"waiting... ({self._stable_count}/{self._required_stable})"
+                # ---- 状态行 ----
+                status = "ON CUP" if self._on_cup else f"wait... ({self._stable_count}/{self._required_stable})"
                 status_color = (0, 255, 0) if self._on_cup else (0, 165, 255)
                 cv2.putText(display, f"HandInCup: {status}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
 
-                # 杯 bbox
-                if self._last_cup_bbox is not None:
-                    x1, y1, x2, y2 = self._last_cup_bbox
-                    exp = self._expand_bbox(self._last_cup_bbox, color.shape)
+                # ---- 杯 bbox (紫) ----
+                bbox = self._last_cup_bbox
+                if bbox is not None:
+                    x1, y1, x2, y2 = bbox
+                    w, h = x2 - x1, y2 - y1
                     cv2.rectangle(display, (x1, y1), (x2, y2), (255, 0, 255), 2)
-                    cv2.rectangle(display, (exp[0], exp[1]), (exp[2], exp[3]), (255, 128, 255), 1)
                     cv2.putText(display, "cup", (x1, y1 - 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
 
-                # 手腕
-                for wx, wy in self._last_wrists:
-                    cv2.drawMarker(display, (wx, wy), (0, 255, 255),
-                                   cv2.MARKER_CROSS, 15, 2)
+                    # 杯心 + 距离圆
+                    cx, cy = self._last_cup_center or ((x1 + x2) // 2, (y1 + y2) // 2)
+                    dist_thresh = ((w ** 2 + h ** 2) ** 0.5) * self._dist_factor
+                    cv2.circle(display, (cx, cy), int(dist_thresh), (255, 128, 255), 1, cv2.LINE_AA)
+                    cv2.drawMarker(display, (cx, cy), (255, 0, 255), cv2.MARKER_CROSS, 10, 1)
+
+                # ---- 手腕 + 连线 (黄) ----
+                for i, (wx, wy) in enumerate(self._last_wrists):
+                    cv2.drawMarker(display, (wx, wy), (0, 255, 255), cv2.MARKER_CROSS, 15, 2)
                     cv2.putText(display, "wrist", (wx + 5, wy - 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
-                # 并排
+                    # 到杯心的连线 + 距离值
+                    if self._last_cup_center and i < len(self._last_distances):
+                        cx, cy = self._last_cup_center
+                        d = self._last_distances[i]
+                        cv2.line(display, (wx, wy), (cx, cy), (0, 255, 255), 1, cv2.LINE_AA)
+                        mid_x, mid_y = (wx + cx) // 2, (wy + cy) // 2
+                        cv2.putText(display, f"{d:.0f}px", (mid_x, mid_y - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+
+                # ---- 深度状态 ----
+                dep_str = f"depth:{'OK' if self._last_depth_ok else '--'}" if self._last_cup_bbox else ""
+                if dep_str:
+                    cv2.putText(display, dep_str, (10, 55),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                (0, 255, 0) if self._last_depth_ok else (128, 128, 128), 1)
+
+                # ---- 并排显示 ----
                 if depth_cmap is not None and display.shape == depth_cmap.shape:
                     panel = np.hstack((display, depth_cmap))
                 else:
@@ -294,6 +351,8 @@ class HandInCupDetector:
             print("\n[INFO] 键盘中断")
         except Exception as e:
             print(f"[ERROR] {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             runner.stop()
             cv2.destroyAllWindows()

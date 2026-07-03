@@ -70,6 +70,7 @@
 - [x] `memory-bank/` — 上下文持久化
 - [x] Conda 环境配置 / YAML 配置管理
 - [x] 模型微调 (KettleTraining/)
+- [x] **机器人端代码 v4** — 伪代码 + CRP 示教器文件 + PC 响应格式同步 ✅
 
 ## 待完成
 
@@ -79,8 +80,8 @@
 |------|------|------|
 | 🔴 实操标定 | `EyeToHand/calibration/calibrate.py` | 需机械臂, 红色胶带, 末端沿 X 移动 3-5 点 |
 | 🔴 填入递送参数 | `EyeToHand/config.yaml` → `delivery.*` | Y_TEACH/Z_TEACH/ABC 示教值 |
+| 🔴 机器人端 v4 程序录入示教器 | `doc/estun_handle_cup_code_v4.txt` 或 `doc/handlepluscup-v4.crp` | 将 v4 CRP 导入 ESTUN 示教器, 并示教 C_P4/DCp2/DummyCpos |
 | 🟡 HandInCup 独立测试 | `EyeToHand/hand_in_cup.py` | 需 Camera B, 模型文件, 人手在杯旁 |
-| 🟡 机器人 .crp 适配 | 示教器 | 新指令: READY/CONTINUE/ABORT |
 | 🟢 Orchestrator 联调 | `Orchestrator/main.py` | 双相机 + 机器人 + 灵巧手全流程 |
 
 ### 📋 待完成 (非硬件)

@@ -2,12 +2,21 @@
 
 ## 当前焦点
 
-**Orchestrator 状态机重构完成** — 2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR)，单 TCP Session 全流程。
+**机器人端代码 v4 建立完成** — 伪代码 + CRP 示教器文件 + PC 端响应格式同步更新。
 **HandInCup 检测器完成** — YOLOv8m + YOLOv8n-Pose 双模型，可独立测试。
 
 ## 最近变更
 
-1. **Orchestrator 状态机重构** (2026-07-03):
+1. **机器人端代码 v4** (2026-07-03):
+   - `doc/estun_handle_cup_code_v4.txt`: 完整伪代码，含 READY/CONTINUE/ABORT 协议 + 双分支
+   - `doc/handlepluscup-v4.crp`: 示教器项目文件 (由 `update_crp_v4.py` 从 v3 CRP 自动生成)
+   - `doc/update_crp_v4.py`: CRP 自动修改脚本 (可复现)
+   - `Orchestrator/state_machine.py`: PC 端 CONTINUE/ABORT 响应格式改为 `<0,0,0,0,0,0>` / `[0,0,0,0,0,0]` (与机器人端 TranStrToCpos 标记配对)
+   - 新增变量: str7="READY", socketstr5, strflag_cont, strflag_abort
+   - 新增位姿点: DCp2 (DCPOS), C_P4 (CPOS), DummyCpos (CPOS)
+   - Cup P4 安全退避算法: CposOffset(C_P1, DCp2), DCp2.dz = C_P3.z - C_P1.z
+
+2. **Orchestrator 状态机重构** (2026-07-03):
    - `Orchestrator/state_machine.py`: 6 状态 → 2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR)
    - 单 TCP Session 完整协议:
      - Phase A: Robot → PC 初始位姿

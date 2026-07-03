@@ -1061,8 +1061,9 @@ class HandleGraspAndPourHandler(StateHandler):
                                 release_object()
                             print("[INFO] RELEASE (松杯)")
                             try:
-                                conn.sendall(b"CONTINUE\n")
-                                print("[SEND] CONTINUE")
+                                # 发送格式与机器人端 TranStrToCpos("<",">") 配对
+                                conn.sendall(b"<0,0,0,0,0,0>\n")
+                                print("[SEND] CONTINUE (<0,0,0,0,0,0>)")
                             except Exception as e:
                                 print(f"[WARN] 发送 CONTINUE 失败: {e}")
                                 break
@@ -1073,8 +1074,9 @@ class HandleGraspAndPourHandler(StateHandler):
                             print("[INFO] 无人接杯 → ABORT")
                             abort_mode = True
                             try:
-                                conn.sendall(b"ABORT\n")
-                                print("[SEND] ABORT")
+                                # 发送格式与机器人端 TranStrToCpos("[","]") 配对
+                                conn.sendall(b"[0,0,0,0,0,0]\n")
+                                print("[SEND] ABORT ([0,0,0,0,0,0])")
                             except Exception as e:
                                 print(f"[WARN] 发送 ABORT 失败: {e}")
                                 break
