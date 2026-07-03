@@ -1,6 +1,6 @@
 # 未来工作规划 — 双相机体系
 
-## 上次更新: 2026-06-30 (v3: 简化递送策略 — 定时松手 + YZ固定X动态)
+## 上次更新: 2026-07-03 (v4: Orchestrator 重构完成 + HandInCup 实现; 待实操测试)
 
 ---
 
@@ -38,9 +38,9 @@
 │       ▼                                                          │
 │  ┌──────┐  检测人位置    ┌──────────┐  递送水杯   ┌──────────┐   │
 │  │ 眼在  │ ────────────→ │ 机械臂   │ ────────→ │ 等待手   │   │
-│  │ 手外  │   ←────────── │ (防碰撞) │ ←──────── │ 势判断   │   │
-│  │(待实  │  检测手势     └──────────┘   松手/    └──────────┘   │
-│  │ 现)   │   判断是否松手              继续握持                  │
+│  │ 手外  │   ←────────── │ (防碰撞) │ ←──────── │ HandInCup│   │
+│  │(已实  │  HandInCup    └──────────┘  CONTINUE/ └──────────┘   │
+│  │ 现)   │  手-杯判定                  ABORT                     │
 │  └──────┘                                                        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -56,16 +56,16 @@
 - 入口: `Estun/estun_handle_cup_run.py`
 - 状态: ✅ 把手抓取 + 倒水 + 水杯抓取流程已完成 (back/left 双模式均已验证通过, 2026-06-30)
 
-### 2.2 眼在手外 (Eye-to-Hand) — 待实现
+### 2.2 眼在手外 (Eye-to-Hand) — 大部分已完成, 待实测
 
 - 相机: RealSense D435i (固定安装), Serial `342222071364`
 - 模块: `RealSense_R/` (手动像素映射版本, 内参损坏)
 - 功能:
-  - 检测人的位置 (人体检测)
-  - 识别人的手势, 判断是否松手 (open palm = 松手)
-  - 控制机械臂将水杯递送到人手中
-  - 作为整个系统的启动触发器 (检测到人 → 开启全流程)
-- 状态: ❌ 未开始
+  - ✅ 检测人的位置 (PersonDetector + PersonStabilizer)
+  - ✅ 人手-杯把手重合检测 (HandInCupDetector, YOLOv8m+YOLOv8n-Pose)
+  - ⚡ 控制机械臂将水杯递送到人手中 (需联调)
+  - ✅ 作为整个系统的启动触发器 (检测到人 → 开启全流程)
+- 状态: ⚡ 代码完成, 待实测验证 (标定阻塞)
 
 ---
 
@@ -108,6 +108,7 @@ Project_hand/
 │   ├── D435i_info.yaml                # 相机内参 (serial: 342222071364)
 │   ├── detector.py                    # 工具函数: load_calibration / camera_x_to_base_x
 │   ├── person_detector.py             # 人体检测 (YOLO COCO person + PersonStabilizer)
+│   ├── hand_in_cup.py                 # [新增] HandInCup (YOLOv8m+YOLOv8n-Pose)
 │   └── calibration/
 │       ├── __init__.py
 │       ├── calibrate.py               # 1D最小二乘线性回归 (交互式, N≥2点)
@@ -127,21 +128,26 @@ Project_hand/
 | ------ | ------ | ------ |
 | 人体位置 | YOLOv8 COCO person class (class_id=0) | bbox 中心深度 → 相机系 3D → T_cam_base → 基系 3D |
 
-### 4.3 递送策略
+### 4.3 递送策略 — v4 升级为 HandInCup 检测
 
-**手势识别不适用于递杯场景**。人手接水杯时手指被杯身遮挡, MediaPipe Hands 21 landmarks 无法完整识别, open/close 分类不可靠.
+**原方案** (v3): 固定 2s 定时松手 — 简单但无法判断是否真有人接杯.
 
-替代方案: **固定 2s 定时松手**:
+**新方案** (v4): **YOLOv8m + YOLOv8n-Pose HandInCup 检测**:
 
 ```text
-机械臂到达递送位置 → 等待 2s (给用户足够的接杯时间) → RELEASE → 退回安全位置
+机械臂到达 P3 → READY → wait 2s (同时 HandInCup 检测运行)
+→ RELEASE 时 PC 判定:
+    hand_on_cup=TRUE  → CONTINUE → release_object() → P4 退避 → Home
+    hand_on_cup=FALSE → ABORT   → (不松手) → 返回 P1 放回 → P2 退避 → Home
 ```
 
-优势:
+HandInCup 判定逻辑:
+- YOLOv8m 检测杯 bbox (COCO class 41)
+- YOLOv8n-Pose 检测手腕关键点 (kpt 9=left_wrist, 10=right_wrist)
+- 连续 5 帧手腕在杯 bbox 扩展区内 → True
+- 2D 判定, 无需 3D 深度反投影, 避免深度噪声
 
-- 无额外检测依赖, 不需要 MediaPipe
-- 不受手部遮挡影响
-- 2s 足够用户握住水杯
+独立模块: `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试.
 
 ### 4.4 递送位置计算
 
@@ -222,43 +228,32 @@ Project_hand/
 
 ---
 
-## 5. 状态机设计
+## 5. 状态机设计 (v4 已实现: 2 状态简化版)
+
+实际实现简化为 2 状态 (单 TCP Session 消除多状态同步复杂性):
 
 ```text
-                    ┌──────────┐
-                    │  IDLE    │ 等待启动信号
-                    └────┬─────┘
-                         │ eye-to-hand 检测到人进入工作区域
-                         ▼
-            ┌────────────────────────────┐
-            │  HANDLE_GRASP_AND_POUR     │ eye-in-hand: 抓把手+倒水 (现有流程)
-            └───────────┬────────────────┘
-                        │ 倒水完成, 已抓取水杯
-                        ▼
-            ┌────────────────────────────┐
-            │  LOCATE_PERSON             │ eye-to-hand: 检测人体 X 坐标
-            └───────────┬────────────────┘
-                        │ 计算递送位置: (X_person, Y_TEACH, Z_TEACH)
-                        ▼
-            ┌────────────────────────────┐
-            │  APPROACH_PERSON           │ 机械臂移动到递送位置
-            └───────────┬────────────────┘
-                        │ 到达递送位置
-                        ▼
-            ┌────────────────────────────┐
-            │  WAIT_AND_RELEASE          │ 等待 2s → RELEASE (松手)
-            └───────────┬────────────────┘
-                        │ 释放完成
-                        ▼
-            ┌────────────────────────────┐
-            │  RETREAT                   │ 机械臂退回安全位置
-            └───────────┬────────────────┘
-                        │
-                        ▼
-                    ┌──────────┐
-                    │  IDLE    │
-                    └──────────┘
+       ┌─────────────────────────────────────────────┐
+       │                                             │
+       ▼                                             │
+     IDLE ──(Camera B 检测到人)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
+       ▲                                                                   │
+       └───────────────────────────────────────────────────────────────────┘
+
+HANDLE_GRASP_AND_POUR 内部单 TCP Session:
+  Phase A: 收初始位姿 → B: 发 Handle <P1>[P2]{P3}
+  → C: PREGRIP/GRIPDONE/RESET/CUP → 发 Cup <P1>[P2]{P3} (P3=delivery)
+  → D: READY/RELEASE → HandInCup → CONTINUE or ABORT
+  → Robot 断开 → 回 IDLE
 ```
+
+| 对比 | v3 设计 (6 状态) | v4 实现 (2 状态) |
+|------|:---:|:---:|
+| 状态数 | 6 | 2 |
+| TCP Session | 2 | 1 |
+| 递送位置 | 独立 Session 2 | Cup P3 = delivery |
+| 松手判断 | 固定 2s | HandInCup 判定 |
+| 复杂度 | 状态同步困难 | 协议内自包含 |
 
 ### 5.1 异常处理
 
@@ -279,17 +274,20 @@ Project_hand/
 - [x] **Step 3: 眼在手外标定工具** — `EyeToHand/calibration/calibrate.py`: 1D 最小二乘线性回归 (N≥2 点). 机械臂末端贴红色胶带, YZ/ABC 保持示教值不变, 仅沿 X 移动, 终端输入示教器 X_base 值采集. scale+bias 输出到 `EyeToHand/calibration/result.yaml`. 代码完成, 未实操验证 (机械臂被占用) (2026-06-30)
 - [x] **Step 4: person_detector 3D 定位** — `detector.py` `camera_x_to_base_x()`: bbox 中心深度 → 相机系 3D → 取 X_cam → scale*X_cam + bias → 基系 X 坐标. 代码完成, 未端到端验证 (依赖 Step 3 标定) (2026-06-30)
 
-### Phase 2: 流程编排
+### Phase 2: 流程编排 ✅ (2026-07-03)
 
-- [x] **Step 5: Orchestrator/state_machine.py** — 实现 6 状态状态机 (IDLE → HANDLE_GRASP_AND_POUR → LOCATE_PERSON → APPROACH_PERSON → WAIT_AND_RELEASE → RETREAT). ✅ 代码完成 (2026-07-02)
-- [x] **Step 6: Orchestrator/main.py** — 系统总入口, 单进程管理双检测器. ✅ 代码完成 (2026-07-02)
-- [x] **Step 7: 递送位置计算** — YZ 预示教固定 + X 从人体检测动态获取. ✅ 代码完成 (2026-07-02)
+- [x] **Step 5: Orchestrator/state_machine.py** — 2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR), 单 TCP Session 全流程 Handler ✅
+- [x] **Step 6: Orchestrator/main.py** — 双相机主循环 + Person/HandInCup 检测切换 ✅
+- [x] **Step 7: 递送位置计算** — X 动态 + YZ/ABC 预示教, Cup P3 = delivery ✅
+- [x] **Step 7.5: HandInCup 检测器** — `EyeToHand/hand_in_cup.py` (YOLOv8m+YOLOv8n-Pose) ✅
 
-### Phase 3: 集成与验证
+### Phase 3: 集成与验证 ⚡
 
-- [ ] **Step 8: 双相机联调** — 眼在手上 + 眼在手外全流程测试.
-- [ ] **Step 9: 异常处理完善** — 人体检测失败/递送位置不可达等场景下的恢复策略.
-- [ ] **Step 10: 全面测试** — 多场景、多人位置、不同光照条件下的可靠性验证.
+- [ ] **Step 8: 实操标定** — `EyeToHand/calibration/calibrate.py` (需机械臂) ⚡ P0 阻塞
+- [ ] **Step 9: 填入递送参数** — `delivery.Y_TEACH/Z_TEACH/ABC` (需机械臂) ⚡
+- [ ] **Step 10: HandInCup 实测** — `python EyeToHand/hand_in_cup.py` (需 Camera B + 模型) ⚡
+- [ ] **Step 11: 机器人 .crp 适配** — 新指令 READY/CONTINUE/ABORT ⚡
+- [ ] **Step 12: 全流程联调** — 双相机 + 机器人 + 灵巧手 ⚡
 
 ---
 
@@ -318,7 +316,7 @@ Project_hand/
 | 递送位置 | YZ 固定 + X 动态 | 降低检测精度要求, 仅需人体 X 坐标 |
 | 双相机通信 | 单进程多线程 | Handle+Cup 共享 pipeline 已有先例 |
 | Serial 区分 | `config.enable_device(serial)` | librealsense2 原生支持, 无侵入 |
-| 状态机实现 | 纯 Python 类 (非外部框架) | 5 状态足够简单, 不引入额外依赖 |
+| 状态机实现 | 纯 Python 类, 2 状态简化版 | 单 TCP Session, 消除多状态同步 |
 
 ---
 
@@ -343,19 +341,20 @@ Project_hand/
 ├── Estun/                            # 眼在手上入口
 │   ├── estun_handle_cup_run.py       # 现有 Handle+Cup 融合
 │   └── ...
-├── EyeToHand/                        # [新建] 眼在手外检测
+├── EyeToHand/                        # 眼在手外检测 (已实现)
 │   ├── __init__.py
-│   ├── config.yaml                   # 外置相机配置 + Y_TEACH/Z_TEACH + 稳定器参数
+│   ├── config.yaml                   # Person + delivery + HandInCup 配置
 │   ├── D435i_info.yaml               # serial: 342222071364
 │   ├── detector.py                   # 工具函数 (load_calibration, camera_x_to_base_x)
 │   ├── person_detector.py            # 人体检测 (PersonDetector + PersonStabilizer)
+│   ├── hand_in_cup.py               # [新增] HandInCup (YOLOv8m+YOLOv8n-Pose, 可独立测试)
 │   └── calibration/
 │       ├── calibrate.py              # 1D最小二乘线性回归 (交互式, N≥2点)
-│       └── result.yaml               # T_cam_base 标定结果
-├── Orchestrator/                     # [已实现] 流程编排
+│       └── result.yaml               # scale/bias (占位值, 待标定)
+├── Orchestrator/                     # 流程编排 (已实现)
 │   ├── __init__.py
-│   ├── state_machine.py              # 6 状态状态机 + HandleCupRunner
-│   └── main.py                       # 双相机主循环 + 可视化
+│   ├── state_machine.py              # 2 状态状态机 + 单 Session TCP handler
+│   └── main.py                       # 双相机主循环 + Person/HandInCup 切换
 ├── calib_data/                       # 手眼标定 (眼在手上, 已有)
 ├── memory-bank/                      # 上下文持久化
 └── doc/

@@ -24,12 +24,12 @@ estun:
 
   grasp_direction: "right"       # 抓取方向: right(右手/掌心向左) | left(左手/掌心向右)
 
-  # --- 瓶身灵巧手偏移 (estun_run / estun_epiceye_run / 各 demo 使用) ---
+  # --- 瓶身灵巧手偏移 (RealSense_R: 手动像素映射, 瓶身3D位置更准) ---
   gripper_offset:
     t_offset: [0.055, -0.045, 0.075]   # C=0(右手大拇指向上)时的标准平移偏移 (x, y, z), 米; 实际运行时根据C动态旋转,考虑从安装位置旋转到C=0时的末端坐标（末端一起旋转）
     r_offset: [0, 0, -90]        # 法兰坐标系下的旋转偏移 (A, B, C), 度; A=B=0, C∈{-90,0,90,180}; 当C = -90时, X增加=灵巧手向下, Y增加=灵巧手向左, Z增加=灵巧手向后
 
-  # --- 把手抓取 (estun_handle_run / estun_handle_demo 使用) ---
+  # --- 把手抓取 (RealSense 新版 rs.align: 抓取姿态/旋转更准) ---
   handle_grasp:
     gripper_offset:                    # 把手灵巧手偏移 (独立于瓶身)
       t_handle_offset: [0.06, -0.028, 0.094]   # 抓把手标准平移偏移 (x, y, z), 米; 初始同瓶身, 后续微调
@@ -75,7 +75,7 @@ estun:
   handle_detection:
     fine_tune_mode: false          # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移
 
-  # --- 水杯检测与抓取 (estun_handle_cup_run / estun_handle_cup_demo / estun_cup_demo 使用) ---
+  # --- 水杯检测与抓取 (RealSense 新版 rs.align: 水杯检测/抓取更准) ---
   cup_grasp:
     enabled: true                           # 总开关
     fine_tune_mode: true                   # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移

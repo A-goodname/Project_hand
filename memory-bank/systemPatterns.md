@@ -3,24 +3,32 @@
 ## 系统架构
 
 ```text
-[相机] → 6D检测 → 手眼标定(相机→法兰)
-                          ↓
-                   工具偏移补偿(法兰→夹爪)
-                          ↓
-                   转基坐标系(TCP发送)
-                          ↓
-                   [ESTUN机器人 + Omnihand灵巧手]
+Camera A (眼在手上, rs.align)      Camera B (眼在手外, 手动像素映射)
+        ↓                                    ↓
+  Handle+Cup 6D 检测                   PersonDetector (人体X)
+        ↓                                    ↓
+  手眼标定 (cam→ee)                    scale×X+bias → X_base
+        ↓                                    ↓
+  工具偏移补偿                              ──→ Cup P3 X
+        ↓                               YZ/ABC ← config 预示教
+  转基系 (TCP pack_three)                    ↓
+        ↓                               HandInCup 判定
+        └──────────┬──────────────────────┘
+                   ↓
+          [ESTUN 机器人 + Omnihand 灵巧手]
 ```
 
 ## 关键技术决策
 
 | 决策 | 选择 | 理由 |
 | ------ | ------ | ------ |
-| 检测框架 | YOLOv8 (标准) / YOLO-World (零样本) / 微调 YOLOv8n | 场景多样化, 各有利弊 |
+| 检测框架 | YOLOv8 / YOLO-World / 微调 YOLOv8n / YOLOv8-Pose | 场景多样化, 各有利弊; Pose 用于 HandInCup |
 | 位姿计算 | PCA + PointNet++ (主), SAM2 (把手) | PCA 稳定高效, SAM 适合不规则物体 |
 | 深度对齐 | rs.align (新相机) / 手动像素映射 (旧相机) | 旧相机内参损坏无法使用 rs.align |
-| 通信协议 | TCP JSON 协议 | 简单可靠, 与 ESTUN 兼容 |
+| 通信协议 | TCP 单 Session 全流程 | 简单可靠, 与 ESTUN 兼容; 避免多连接状态同步 |
 | 配置管理 | YAML 文件 (模块级 config.yaml) | 不改代码可调参数 |
+| HandInCup | YOLOv8m(cup bbox) + YOLOv8n-Pose(wrist) | 2D 判定, 零额外依赖, 独立可测试 |
+| Cup P3 递送 | X 动态 (Camera B) + YZ/ABC 固定 (示教) | 安全: YZ/ABC 预教避免碰撞, X 自适应人体位置 |
 
 ## 设计模式
 
@@ -38,18 +46,21 @@
 ### 位姿稳定
 
 - `PoseStabilizer` 类: 缓存最近 N 帧, 位置+角度变化均低于阈值时输出均值
+- 代际计数器 (`_gf`): 客户端断开重连时自增, 防旧帧污染新连接
 - 仅检测帧执行, 避免跨帧零值/旧值污染
 
 ### 双检测器共享 Pipeline
 
-- `Estun/estun_handle_cup_demo.py` / `estun_handle_cup_run.py`
 - Cup 检测器以 `start_pipeline=False` 初始化, 通过 `inject_frames()` 复用 Handle 检测器的帧
 - 避免重复打开相机硬件
 
-### 通信协议: `pack_three` 三括号标记
+### 通信协议: `pack_three` + 新指令
 
-- 格式: `<P1>[P2]{P3}`, P1 用 `<>` (原为 `()` 但机器人 `TranStrToCpos` 不支持), P2 用 `[]`, P3 用 `{}`
-- 机械臂端 `TranStrToCpos` 按括号类型分别解析, 与 PC 端 `pack_three` 一一对应
+- `pack_three`: `<P1>[P2]{P3}`, 与 ESTUN `TranStrToCpos` 括号标记约定匹配
+- 新增 Phase D 指令:
+  - `READY` (Robot→PC): 到达 P3, 等待 HandInCup 判定
+  - `CONTINUE` (PC→Robot): HandInCup=TRUE, 松手退避
+  - `ABORT` (PC→Robot): HandInCup=FALSE, 放回杯子
 
 ### P3 多倒水角度示教
 
@@ -57,22 +68,62 @@
 - `pour_angle` 顶层 key 控制当前使用哪个角度
 - 加载时按 `str(pour_angle)` 查找, 不存在则回退到第一个可用角度
 
+### Cup P3 递送位姿模式
+
+- X: 动态 — `scale × X_cam + bias` (Camera B PersonDetector + EyeToHand 标定)
+- Y, Z, A, B, C: 固定 — `EyeToHand/config.yaml` delivery 段预示教
+- 人体位置仅在 CUP 指令时取一次最新稳定值, PersonDetector 随后暂停
+
+### HandInCup 检测模式
+
+- 双模型 2D 判定: YOLOv8m (杯 bbox class=41) + YOLOv8n-Pose (手腕 kpt 9/10)
+- 连续 N 帧手腕在杯 bbox 扩展区内 → `is_hand_on_cup = True`
+- 独立文件 `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试
+
+### PersonDetector / HandInCup 共用 Camera B Pipeline
+
+- `PersonDetector` 打开 Camera B pipeline
+- main loop 通过标志位 (`stop_person_detector` / `hand_in_cup_active`) 切换检测逻辑
+- Pipeline 始终保持运行, 帧来源不变
+
+### 状态机 — 2 状态线性往返
+
+```text
+IDLE  ←──────────────────────→  HANDLE_GRASP_AND_POUR
+    (PersonDetector 检测到人)       (SocketClose)
+```
+
+- 全流程在单 TCP Session 内完成: Phase A (初始位姿) → B (Handle) → C (指令循环 + Cup) → D (HandInCup 判定)
+- 异常回 IDLE, 清理所有资源后重新等待
+
 ## 模块关系
 
 ```text
-Estun/                              ← 顶层入口
-  ├── estun_run.py                  ← RealSense 实时瓶身
-  ├── estun_handle_run.py           ← RealSense 把手抓取
-  ├── estun_handle_cup_run.py       ← RealSense 把手+水杯融合
-  ├── estun_epiceye_run.py          ← EpicEye 单次瓶身
-  └── utils_shared.py               ← 共享坐标变换+灵巧手
+Orchestrator/                        ← 系统入口
+  ├── main.py                        ← 双相机主循环 + Person/HandInCup 切换
+  └── state_machine.py               ← 2 状态 + 单 Session TCP handler
 
-RealSense_R/ 或 RealSense/          ← 检测模块
-  ├── test_6D.py                    ← 瓶身 6D
-  ├── test_handle_6D.py             ← 把手 6D
-  ├── test_cup_6D.py                ← 水杯 6D
-  └── realsense_shared.py           ← 基类+工具
+Estun/                               ← 顶层入口 (单相机)
+  ├── estun_handle_cup_run.py        ← RealSense Handle+Cup 融合 (参考实现)
+  ├── estun_handle_run.py            ← RealSense 把手抓取
+  ├── estun_run.py                   ← RealSense 实时瓶身
+  ├── estun_epiceye_run.py           ← EpicEye 单次瓶身
+  └── utils_shared.py                ← 共享坐标变换+灵巧手
 
-EpicEye/                            ← 灰度相机检测
-Omnihand/                           ← 灵巧手控制
-calib_data/                         ← 手眼标定
+RealSense/  (新相机, rs.align)       ← Camera A 检测模块
+  ├── test_6D.py / test_handle_6D.py / test_cup_6D.py
+  └── realsense_shared.py            ← BaseRealSenseDetector
+
+RealSense_R/  (旧相机, 手动像素映射) ← Camera B 基类
+  └── realsense_shared.py            ← BaseRealSenseDetector
+
+EyeToHand/                           ← 眼在手外模块
+  ├── person_detector.py             ← PersonDetector (人体 X)
+  ├── hand_in_cup.py                 ← HandInCupDetector (YOLOv8m+YOLOv8n-Pose)
+  ├── detector.py                    ← load_calibration / camera_x_to_base_x
+  ├── config.yaml                    ← Person + 递送 + HandInCup 配置
+  └── calibration/
+      ├── calibrate.py               ← 1D 标定工具
+      └── result.yaml                ← scale/bias
+
+EpicEye/   Omnihand/   calib_data/   ← 灰度相机 / 灵巧手 / 手眼标定

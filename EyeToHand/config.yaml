@@ -37,3 +37,10 @@ delivery:
 calibration:
   scale: 1.0                     # 相机深度 → 基系 X 缩放系数
   bias: 0.0                      # 相机深度 → 基系 X 偏置 (米)
+
+# ---- Hand-in-cup 人手-杯把手重合检测 ----
+hand_in_cup:
+  cup_model: "model/yolov8m.pt"       # YOLO 检测杯子的模型 (v8n/v8m 按需)
+  pose_model: "model/yolov8n-pose.pt" # YOLO-Pose 手腕关键点 (v8n-pose/v8m-pose 按需)
+  conf_threshold: 0.5                  # 关键点置信度阈值
+  required_stable: 5                   # 连续确认帧数

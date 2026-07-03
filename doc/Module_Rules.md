@@ -180,8 +180,12 @@
 - 标定工具: `calibration/calibrate.py` — 1D 最小二乘线性回归 (N≥2 点, 建议 3-5 点, 范围尽量大), 红色胶带辅助检测
   - 前置: 机械臂末端 YZ/ABC = 预示教递送值, 仅沿 X 移动
   - 操作: 'c' 采集 → 'f' 拟合 → 's' 保存
-- 递送策略: YZ/ABC 预示教固定 + X 动态从人体检测获取 + 固定 2s 定时松手 (不依赖手势识别)
-- 配置入口: `EyeToHand/config.yaml`, `stabilizer` 段控制稳定参数, `delivery` 段控制递送位置
+- 递送策略: YZ/ABC 预示教固定 + X 动态从人体检测获取 + **HandInCup 判定松手** (YOLOv8m+YOLOv8n-Pose)
+- HandInCup 检测器: `hand_in_cup.py` — 独立模块, 可单独测试 (`python EyeToHand/hand_in_cup.py`)
+  - 模型: YOLOv8m (cup bbox class=41) + YOLOv8n-Pose (wrist kpt 9/10)
+  - 判定: 连续 N 帧手腕在杯 bbox 扩展区 → is_hand_on_cup = True
+  - 配置: `EyeToHand/config.yaml` → `hand_in_cup` 段
+- 配置入口: `EyeToHand/config.yaml`, `stabilizer` 段 (人体), `delivery` 段 (递送), `hand_in_cup` 段 (手杯检测)
 - `CalibrationDetector` 直接继承 `BaseRealSenseDetector`, 与 `person_detector.py` 共享同一相机绑定模式
 - 导入约定: 与 `RealSense_R/` 模块约定一致 (BaseRealSenseDetector + 手动像素映射)
 
@@ -190,14 +194,15 @@
 存放路径: `Orchestrator/`
 
 - **模块角色**: 串联眼在手上 (Handle+Cup 抓取倒水) + 眼在手外 (人体检测递送) 的全流程状态机
-- **状态流转**: IDLE → HANDLE_GRASP_AND_POUR → LOCATE_PERSON → APPROACH_PERSON → WAIT_AND_RELEASE → RETREAT → IDLE
+- **状态流转**: IDLE ↔ HANDLE_GRASP_AND_POUR (2 状态, 单 TCP Session)
 - 核心文件:
-  - `state_machine.py`: `StateMachine` 引擎 + 6 个 `StateHandler` 实现 + `HandleCupRunner` (封装 Handle+Cup 全流程) + 共享工具 (PoseStabilizer/fmt_pose/pack_three)
-  - `main.py`: 双相机主循环, 每 tick 获取 Camera B 帧 → 驱动状态机 → 可视化
+  - `state_machine.py`: `StateMachine` 引擎 + `IdleHandler` + `HandleGraspAndPourHandler` (含完整 TCP 协议 + HandInCup 判定)
+  - `main.py`: 双相机主循环, PersonDetector / HandInCup 检测切换
 - **关键设计**:
-  - Handle+Cup 逻辑从 `estun_handle_cup_run.py` 复制适配 (不改原文件), 仅增加 completion event 通知
-  - Camera B (eye-to-hand) 全程运行; Camera A (eye-in-hand) 由状态机管理生命周期
-  - 递送阶段使用独立 TCP 单 pose 协议: `<x,y,z,A,B,C>` + READY 确认 + RELEASE 指令
-  - 异常回退: 任何状态异常 → on_error → IDLE
-- **serial 绑定**: `BaseRealSenseDetector.__init__` 新增 `serial_number=None` 参数, Orchestrator 传入眼在手外 serial
-- 配置入口: `Estun/estun_config.yaml` (Handle+Cup + TCP), `EyeToHand/config.yaml` (人体检测 + 递送), `RealSense_R/config.yaml` (Handle+Cup 检测)
+  - Camera A (眼在手上): `RealSense/` (rs.align, 内参完好的新相机)
+  - Camera B (眼在手外): `RealSense_R/` (手动像素映射, 内参损坏的旧相机)
+  - 单 TCP Session 全流程: Phase A (初始位姿) → B (Handle) → C (指令循环+Cup) → D (HandInCup判定)
+  - Cup P3 递送位姿: X 动态 (Camera B) + YZ/ABC 固定 (config 预示教)
+  - 新协议指令: `READY`, `CONTINUE`, `ABORT`
+  - HandInCup: TRUE → CONTINUE → 松手退避; FALSE → ABORT → 放回杯子
+- 配置入口: `Estun/estun_config.yaml` (Handle+Cup + TCP), `EyeToHand/config.yaml` (人体 + HandInCup), `RealSense/config.yaml` (Camera A 检测)

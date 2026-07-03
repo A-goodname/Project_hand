@@ -9,10 +9,10 @@ Orchestrator — 系统入口
 
 流程:
   1. 加载配置
-  2. 初始化眼在手外 PersonDetector
-  3. 构建状态机 (IDLE 默认)
-  4. 主循环: 获取 Camera B 帧 → 驱动状态机 → 可视化
-  5. 状态机内部管理 Camera A (Handle+Cup) 的生命周期
+  2. 初始化 Camera B (PersonDetector, 眼在手外)
+  3. 构建状态机 (IDLE → HANDLE_GRASP_AND_POUR → IDLE)
+  4. 主循环: Camera B 帧 → Person/HandInCup 检测 → 驱动状态机 → 可视化
+  5. Camera A 由 HandleGraspAndPourHandler 内部管理
 
 退出: 按 'q' 键或 Ctrl+C
 """
@@ -31,17 +31,15 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入 ----
-from RealSense_R.realsense_shared import load_camera_serial
+from RealSense_R.realsense_shared import load_camera_serial  # Camera B (旧相机, 内参损坏)
 from Orchestrator.state_machine import (
     SharedContext,
     StateMachine,
+    OrchestratorState,
     IdleHandler,
     HandleGraspAndPourHandler,
-    LocatePersonHandler,
-    ApproachPersonHandler,
-    WaitAndReleaseHandler,
-    RetreatHandler,
 )
+from EyeToHand.hand_in_cup import HandInCupDetector
 
 
 def load_yaml(path):
@@ -61,20 +59,20 @@ def load_yaml(path):
 def main():
     print("=" * 60)
     print("  Orchestrator — 双相机全流程状态机")
-    print("  眼在手上: Handle + Cup 6D 抓取")
-    print("  眼在手外: 人体检测 + 递送")
+    print("  Camera A (眼在手上, rs.align): Handle + Cup 6D")
+    print("  Camera B (眼在手外): 人体检测 + Hand-in-cup")
     print("=" * 60)
     print()
 
     # ---- [1] 加载配置 ----
     print("[INFO] 加载配置...")
-    realsense_cfg = load_yaml("RealSense_R/config.yaml")
+    realsense_cfg = load_yaml("RealSense/config.yaml")         # Camera A (Handle+Cup, 新相机)
     estun_cfg = load_yaml("Estun/estun_config.yaml")["estun"]
     eye_to_hand_cfg = load_yaml("EyeToHand/config.yaml")
     eye_to_hand_serial = load_camera_serial(
         os.path.join(_project_root, "EyeToHand/D435i_info.yaml")
     )
-    print(f"[INFO] 眼在手外相机 serial: {eye_to_hand_serial}")
+    print(f"[INFO] Camera B serial: {eye_to_hand_serial}")
 
     # ---- [2] 构建共享上下文 ----
     ctx = SharedContext(
@@ -85,27 +83,25 @@ def main():
     )
 
     # ---- [3] 注册状态机 ----
-    from Orchestrator.state_machine import OrchestratorState
-
     sm = StateMachine()
     sm.register(OrchestratorState.IDLE, IdleHandler())
     sm.register(OrchestratorState.HANDLE_GRASP_AND_POUR, HandleGraspAndPourHandler())
-    sm.register(OrchestratorState.LOCATE_PERSON, LocatePersonHandler())
-    sm.register(OrchestratorState.APPROACH_PERSON, ApproachPersonHandler())
-    sm.register(OrchestratorState.WAIT_AND_RELEASE, WaitAndReleaseHandler())
-    sm.register(OrchestratorState.RETREAT, RetreatHandler())
-
-    # 进入 IDLE 状态
     sm.transition_to(ctx, OrchestratorState.IDLE)
 
+    # ---- [4] Hand-in-cup 检测器 (Camera B, 与 PersonDetector 共用 pipeline) ----
+    hand_in_cup = HandInCupDetector()
+    # PersonDetector 在 IdleHandler.on_enter 中创建, pipeline 持续运行
+
     # ---- [5] 主循环 ----
-    cv2.namedWindow("Orchestrator - Eye-to-Hand", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("Orchestrator - Eye-in-Hand", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Orchestrator - Camera B (Eye-to-Hand)", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Orchestrator - Camera A (Eye-in-Hand)", cv2.WINDOW_NORMAL)
 
     running = True
     try:
         while running and not ctx.stop_event.is_set():
-            # ---- 采集 Camera B (眼在手外) ----
+            # ============================================================
+            # Camera B: 帧采集 (pipeline 始终运行, 由 PersonDetector 管理)
+            # ============================================================
             pd = ctx.person_detector
             if pd is not None:
                 try:
@@ -117,44 +113,84 @@ def main():
             else:
                 ctx.frames_b = None
 
-            # ---- 驱动状态机 ----
+            # ---- Person 检测 (IDLE & HANDLE_GRASP_AND_POUR 初期) ----
+            if pd is not None and not ctx.stop_person_detector:
+                if ctx.frames_b is not None:
+                    color_b, depth_b, _, depth_frame_b = ctx.frames_b
+                    if color_b is not None and depth_frame_b is not None:
+                        result = pd.detect_person_stable(color_b, depth_frame_b)
+                        if result is not None and result["pos_3d_cam"] is not None:
+                            ctx.latest_person_3d = result["pos_3d_cam"]
+                            ctx.person_stable_x_cam = float(result["pos_3d_cam"][0])
+
+            # ---- Hand-in-cup 检测 (READY → RELEASE) ----
+            if ctx.hand_in_cup_active:
+                if ctx.frames_b is not None:
+                    color_b, depth_b, _, depth_frame_b = ctx.frames_b
+                    if color_b is not None and depth_frame_b is not None:
+                        # TODO: 实现完整的 MediaPipe Hand-in-cup 检测
+                        hand_in_cup.update(color_b, depth_frame_b)
+                        ctx.hand_on_cup = hand_in_cup.is_hand_on_cup
+
+            # ============================================================
+            # 驱动状态机
+            # ============================================================
             sm.update(ctx)
 
-            # ---- 可视化 Camera B ----
+            # ============================================================
+            # 可视化 Camera B
+            # ============================================================
             if ctx.frames_b is not None and ctx.frames_b[0] is not None:
                 vis_b = ctx.frames_b[0].copy()
-                # 状态覆盖
                 state_name = sm.state.name
+
+                # 状态
                 cv2.putText(vis_b, f"State: {state_name}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                if ctx.delivery_pose is not None:
-                    xyz, abc = ctx.delivery_pose
-                    cv2.putText(vis_b, f"Deliver: ({xyz[0]:.3f}, {xyz[1]:.3f}, {xyz[2]:.3f})",
-                                (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                    cv2.putText(vis_b, f"ABC: ({abc[0]:.1f}, {abc[1]:.1f}, {abc[2]:.1f})",
-                                (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                # Person 检测状态
+                if not ctx.stop_person_detector:
+                    if ctx.latest_person_3d is not None:
+                        px, py, pz = ctx.latest_person_3d
+                        cv2.putText(vis_b, f"Person: ({px:.3f},{py:.3f},{pz:.3f})",
+                                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    else:
+                        cv2.putText(vis_b, "Person: detecting...", (10, 55),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                else:
+                    cv2.putText(vis_b, "Person: STOPPED", (10, 55),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
 
-                cv2.imshow("Orchestrator - Eye-to-Hand", vis_b)
+                # Hand-in-cup 状态
+                if ctx.hand_in_cup_active:
+                    h_status = f"HandInCup: {'ON_CUP' if ctx.hand_on_cup else 'waiting...'}"
+                    h_color = (0, 255, 0) if ctx.hand_on_cup else (0, 165, 255)
+                    cv2.putText(vis_b, h_status, (10, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, h_color, 2)
 
-            # ---- 可视化 Camera A ----
+                cv2.imshow("Orchestrator - Camera B (Eye-to-Hand)", vis_b)
+
+            # ============================================================
+            # 可视化 Camera A
+            # ============================================================
             if ctx.frames_a is not None and ctx.frames_a[0] is not None:
                 vis_a = ctx.frames_a[0].copy()
                 cv2.putText(vis_a, f"State: {sm.state.name}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-                h_ok = "H:OK" if ctx.handle_detector and ctx.handle_detector.last_known_pose is not None else "H:..."
-                c_ok = "C:OK" if ctx.cup_detector and ctx.cup_detector.last_known_pose is not None else "C:..."
+                h_ok = "H:OK" if (ctx.handle_detector and
+                                  ctx.handle_detector.last_known_pose is not None) else "H:..."
+                c_ok = "C:OK" if (ctx.cup_detector and
+                                  ctx.cup_detector.last_known_pose is not None) else "C:..."
                 cv2.putText(vis_a, f"{h_ok} {c_ok}", (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-                cv2.imshow("Orchestrator - Eye-in-Hand", vis_a)
+                cv2.imshow("Orchestrator - Camera A (Eye-in-Hand)", vis_a)
             else:
-                # 无画面时显示空白提示
                 blank = 255 * np.ones((480, 640, 3), dtype=np.uint8)
-                cv2.putText(blank, f"State: {sm.state.name} (Camera A waiting...)", (50, 240),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
-                cv2.imshow("Orchestrator - Eye-in-Hand", blank)
+                cv2.putText(blank, f"State: {sm.state.name} (Camera A waiting...)",
+                            (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
+                cv2.imshow("Orchestrator - Camera A (Eye-in-Hand)", blank)
 
             # ---- 退出检测 ----
             key = cv2.waitKey(25) & 0xFF
@@ -175,12 +211,14 @@ def main():
         print("[INFO] 正在清理资源...")
         ctx.stop_event.set()
         cv2.destroyAllWindows()
+
         if ctx.person_detector is not None:
             try:
                 ctx.person_detector.stop()
                 print("[INFO] PersonDetector 已停止")
             except Exception as e:
                 print(f"[WARN] PersonDetector 停止异常: {e}")
+
         if ctx.handle_detector is not None:
             try:
                 ctx.handle_detector.pipeline.stop()
@@ -193,6 +231,7 @@ def main():
                 print("[INFO] Cup 检测器已停止")
             except Exception as e:
                 print(f"[WARN] Cup 检测器停止异常: {e}")
+
         from Estun.utils_shared import is_hand_available, disable_hand
         if is_hand_available():
             try:
@@ -200,6 +239,7 @@ def main():
                 print("[INFO] 灵巧手已关闭")
             except Exception as e:
                 print(f"[WARN] 灵巧手关闭异常: {e}")
+
         print("[INFO] 程序已退出")
 
 
