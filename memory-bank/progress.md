@@ -81,20 +81,34 @@
 | 🔴 实操标定 | `EyeToHand/calibration/calibrate.py` | 需机械臂, 红色胶带, 末端沿 X 移动 3-5 点 |
 | 🔴 填入递送参数 | `EyeToHand/config.yaml` → `delivery.*` | Y_TEACH/Z_TEACH/ABC 示教值 |
 | 🔴 机器人端 v4 程序录入示教器 | `doc/estun_handle_cup_code_v4.txt` 或 `doc/handlepluscup-v4.crp` | 将 v4 CRP 导入 ESTUN 示教器, 并示教 C_P4/DCp2/DummyCpos |
-| 🟡 HandInCup 独立测试 | `EyeToHand/hand_in_cup.py` | 需 Camera B, 模型文件, 人手在杯旁 |
+| 🟡 HandInCup 无遮挡实测 ✅ | `EyeToHand/hand_in_cup.py` | 人手侧握杯把, 无灵巧手遮挡 — **已测试, 详见下方** |
+| 🟡 HandInCup 有遮挡实测 | `EyeToHand/hand_in_cup.py` | **灵巧手遮挡杯把场景 — 尚未测试** |
 | 🟢 Orchestrator 联调 | `Orchestrator/main.py` | 双相机 + 机器人 + 灵巧手全流程 |
 
 ### 📋 待完成 (非硬件)
 
 - [ ] 机器人端 .crp 程序修改 (适配新协议指令)
-- [ ] HandInCup 模型下载 (`yolov8n-pose.pt` → `model/`)
-- [ ] HandInCup 阈值调优 (实测后调整 `required_stable` / `conf_threshold`)
+- [x] HandInCup 模型下载 (`yolov8n-pose.pt` → `model/`) ✅ (两模型均已在 `model/`)
+- [ ] HandInCup 阈值调优 (有/无遮挡实测后调整 `dist_factor` / `depth_tolerance`)
 
 ## 已知问题
 
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
 - `EyeToHand/calibration/result.yaml` scale/bias 为默认占位值 1.0/0.0, 需标定后更新
-- HandInCup 检测器未经实际测试, 参数需实测调优
+- HandInCup 无遮挡已实测, 但 `dist_factor`/`depth_tolerance` 修正参数仍需调优; **有灵巧手遮挡场景未测试**
 - Orchestrator 机器人端 .crp 尚未适配新指令 (READY/CONTINUE/ABORT)
+
+### 🧪 HandInCup 实测记录
+
+**无灵巧手遮挡场景** (人手直接侧握杯把):
+- 实测发现: 侧握姿态下手腕关键点落在杯 bbox 扩展区之外, `dist_factor=0.8` × bbox 对角线不足以覆盖.
+- 修正: 引入 `dist_factor` (距离阈值系数) 和 `depth_tolerance` (深度一致性容差, 默认 5cm) 作为可调参数, 扩大判定半径的同时用深度差过滤误报.
+- 状态: 修正参数 **已实现但未实地验证** (`dist_factor=0.8` 和 `depth_tolerance=0.05` 为初始猜测值).
+- 下一步: 重测无遮挡场景, 逐步调整 `dist_factor` 找到合适阈值; 注意 `dist_factor` 过大会引入误报, 需配合 `depth_tolerance` 使用.
+
+**有灵巧手遮挡场景** (Omnihand 抓杯把时手指遮挡杯把区域):
+- ❌ 尚未测试.
+- 预期风险: 灵巧手手指遮挡杯 bbox 和手腕关键点, 可能降低检测置信度或导致漏检.
+- 需等待实物条件具备后实测.
 - `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓)
 - free 模式不应限制角度: 已加 `if ORIENTATION_MODE == "vertical"` 守卫

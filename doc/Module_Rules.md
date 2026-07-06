@@ -183,7 +183,13 @@
 - 递送策略: YZ/ABC 预示教固定 + X 动态从人体检测获取 + **HandInCup 判定松手** (YOLOv8m+YOLOv8n-Pose)
 - HandInCup 检测器: `hand_in_cup.py` — 独立模块, 可单独测试 (`python EyeToHand/hand_in_cup.py`)
   - 模型: YOLOv8m (cup bbox class=41) + YOLOv8n-Pose (wrist kpt 9/10)
+    - 模型文件: `model/yolov8m-pose.pt` (主用) + `model/yolov8n-pose.pt` (轻量备用), 均已下载
   - 判定: 连续 N 帧手腕在杯 bbox 扩展区 → is_hand_on_cup = True
+  - **实测状态 (2026-07-06)**:
+    - ✅ 无灵巧手遮挡: 人手侧握杯把场景已测试, 发现手腕关键点落在 bbox 扩展区之外
+    - ⚡ 修正措施: 引入 `dist_factor` (扩大判定半径) + `depth_tolerance` (深度一致性过滤误报), 二者均 **已实现但未实地验证**, 当前值为初始猜测值 (`dist_factor=0.8`, `depth_tolerance=0.05m`)
+    - ❌ 有灵巧手遮挡: 尚未测试, 预期存在手指遮挡杯 bbox/手腕关键点的风险
+  - 调优方向: 无遮挡场景逐步增大 `dist_factor` 直至手腕被稳定捕获, 同时用 `depth_tolerance` 防止误报; 有遮挡场景需实测后评估置信度下降程度, 必要时降低 `conf_threshold` 或切换至 `yolov8m-pose.pt`
   - 配置: `EyeToHand/config.yaml` → `hand_in_cup` 段
 - 配置入口: `EyeToHand/config.yaml`, `stabilizer` 段 (人体), `delivery` 段 (递送), `hand_in_cup` 段 (手杯检测)
 - `CalibrationDetector` 直接继承 `BaseRealSenseDetector`, 与 `person_detector.py` 共享同一相机绑定模式

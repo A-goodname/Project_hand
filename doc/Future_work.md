@@ -146,6 +146,12 @@ HandInCup 判定逻辑:
 - YOLOv8n-Pose 检测手腕关键点 (kpt 9=left_wrist, 10=right_wrist)
 - 连续 5 帧手腕在杯 bbox 扩展区内 → True
 - 2D 判定, 无需 3D 深度反投影, 避免深度噪声
+- 可选深度辅助: `depth_tolerance=0.05m` 校验手腕-杯心深度一致性
+
+实测修正 (2026-07-06):
+- 无遮挡实测发现手腕在 ROI 外, 引入 `dist_factor` (判定半径 = bbox 对角线 × 系数) 和 `depth_tolerance` (深度容差, 防误报)
+- 两参数当前为初始猜测值, **未实地验证**
+- 有灵巧手遮挡场景 **未测试**
 
 独立模块: `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试.
 
@@ -285,7 +291,7 @@ HANDLE_GRASP_AND_POUR 内部单 TCP Session:
 
 - [ ] **Step 8: 实操标定** — `EyeToHand/calibration/calibrate.py` (需机械臂) ⚡ P0 阻塞
 - [ ] **Step 9: 填入递送参数** — `delivery.Y_TEACH/Z_TEACH/ABC` (需机械臂) ⚡
-- [ ] **Step 10: HandInCup 实测** — `python EyeToHand/hand_in_cup.py` (需 Camera B + 模型) ⚡
+- [~] **Step 10: HandInCup 实测** — 无遮挡已测 (`dist_factor`/`depth_tolerance` 待调优); **有遮挡未测** ⚡
 - [ ] **Step 11: 机器人 .crp 适配** — 新指令 READY/CONTINUE/ABORT ⚡
 - [ ] **Step 12: 全流程联调** — 双相机 + 机器人 + 灵巧手 ⚡
 

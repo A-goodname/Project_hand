@@ -5,18 +5,20 @@ EyeToHand 人手-杯把手重合检测 (Hand-in-cup)
 双模型判定: YOLOv8m (cup bbox) + YOLOv8n-Pose (wrist keypoints).
 
 判定策略:
-  - 手腕到杯 bbox 中心的 2D 像素距离 < 阈值 (bbox 尺寸 × 系数) → 邻近
-  - 可选: 手腕深度与杯中心深度差值 < 阈值 → 确认在同一平面
+  - 手腕到杯 bbox 中心的 2D 像素距离 < 阈值 (bbox 对角线 × dist_factor) → 邻近
+  - 可选: 手腕深度与杯中心深度差值 < depth_tolerance → 确认在同一平面
   - 连续 N 帧满足 → hand_on_cup = True
 
-使用方法:
-  1. 下载模型: yolov8n-pose.pt 放到 model/
-  2. 测试:   python EyeToHand/hand_in_cup.py
-  3. 接入:   from EyeToHand.hand_in_cup import HandInCupDetector
+实测状态 (2026-07-06):
+  ✅ 无灵巧手遮挡: 人手侧握杯把时发现手腕在 ROI 外, 已引入 dist_factor 和
+     depth_tolerance 作为可调修正, 但二者仍为初始猜测值, 未实地验证.
+  ❌ 有灵巧手遮挡: 尚未测试.
+  详细记录见 memory-bank/progress.md 的 "HandInCup 实测记录" 段.
 
 模型:
   - Cup:     model/yolov8m.pt       (COCO class 41 "cup")
   - Pose:    model/yolov8n-pose.pt  (COCO keypoints, wrist=9,10)
+             model/yolov8m-pose.pt  (备用, 已下载)
 
 接口:
   - update(color_image, depth_frame=None) : 每帧调用
