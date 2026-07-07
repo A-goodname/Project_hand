@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-estun 把手位姿转换验证 Demo (RealSense Handle 版)
+estun 把手位姿转换验证 Demo (RealSense_R 旧相机版)
 ==================================================
 剥离 estun_handle_run 的位姿转换模块, 保留检测 + 稳定化 + 位姿转换完整链路.
 去除 TCP 服务器 / 灵巧手 / CRP 指令循环等硬件/UI 依赖.
@@ -579,7 +579,7 @@ def main():
         print("请将机械臂移动到上述目标位姿, 然后手动微调")
         print("使灵巧手掌心正对把手, 手指穿过把手孔洞")
         print("输入微调后的实际机械臂位姿 [X,Y,Z,A,B,C]")
-        print("(X,Y,Z 单位 mm, A,B,C 单位 deg)")
+        print("(X,Y,Z 单位 mm, A,B,C 单位 deg, 仅使用 XYZ 计算, ABC 记录)")
         print("直接回车跳过微调")
 
         adj_input = input("微调后位姿: ").strip()
@@ -591,21 +591,14 @@ def main():
                     adj_xyz = np.array([float(p) / 1000.0 for p in adj_parts[:3]])
                     adj_ABC = np.array([float(p) for p in adj_parts[3:6]])
 
-                    # 反求新偏移:
-                    # 物体在基系下位置 (不变) = R_ee_base_orig @ pos_ee_orig + robot_xyz
-                    R_ee_base_orig = euler_to_rotation_matrix(*robot_ABC, order="zyx")
-                    p_obj_base = R_ee_base_orig @ mean_pos_ee + np.array(robot_xyz)
-
-                    # 物体在调整后末端系下位置
-                    R_ee_base_adj = euler_to_rotation_matrix(*adj_ABC, order="zyx")
-                    pos_ee_current = R_ee_base_adj.T @ (p_obj_base - adj_xyz)
-
-                    # 正确偏移 = pos_ee_current (物体在当前末端系下位置)
-                    t_effective_new = pos_ee_current
+                    # 增量公式: t_eff_new = t_handle_effective + R_ee_base.T @ (P1_xyz - adj_xyz)
+                    diff_xyz = pos_base_1 - adj_xyz
+                    delta_ee = R_ee_base.T @ diff_xyz
+                    t_effective_new = t_handle_effective + delta_ee
 
                     # 反推标准偏移 (C=0 时的 t_offset)
-                    Rz = euler_to_rotation_matrix(0, 0, HANDLE_R_OFFSET[2], order="zyx")  # Rz(-90度)
-                    t_offset_new = Rz.T @ t_effective_new  # = Rz(90度) @ t_effective_new
+                    Rz = euler_to_rotation_matrix(0, 0, HANDLE_R_OFFSET[2], order="zyx")
+                    t_offset_new = Rz.T @ t_effective_new
 
                     print(f"\n[FINE TUNE] 建议新偏移:")
                     print(f"  t_effective_new = ({t_effective_new[0]:.4f}, {t_effective_new[1]:.4f}, {t_effective_new[2]:.4f})")

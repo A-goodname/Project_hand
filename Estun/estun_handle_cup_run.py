@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-ESTUN RealSense Handle + Cup 6D 融合抓取系统
+ESTUN RealSense_R Handle + Cup 6D 融合抓取系统 (旧相机版)
 ==============================================
 整合 Handle 6D 检测器 (微调 YOLOv8n + SAM + 扫描线分离把手) 与 Cup 6D 检测器 (YOLOv8m COCO),
 手眼标定, TCP 服务器与灵巧手, 实现全流程: 抓壶倒水 → 抓杯递杯.
 
+使用 RealSense_R 旧模块 (手动像素映射, 无 rs.align).
+
 与 estun_handle_run.py 的差异:
-  - 双检测器: RealSenseHandle6DDetector + RealSenseCup6DDetector (共享 pipeline)
+  - 双检测器: RealSenseHandle6DDetector + RealSenseCup6DDetector (共享 pipeline, RealSense_R)
   - 两阶段: Phase 1 (Handle 抓取+倒水) + Phase 2 (Cup 抓取+递杯)
   - TCP Phase C 指令: Handle 阶段用 PREGRIP/GRIPDONE/RESET, Cup 阶段用 RELEASE/GRIP
   - P3_pour 倒水位置: 基于 Cup TCP 基系位置 + 杯几何偏移反算回相机系
@@ -21,7 +23,7 @@ ESTUN RealSense Handle + Cup 6D 融合抓取系统
   4. 机器人作为 TCP 客户端连接本服务器
 
 输入:
-  - RealSense/config.yaml            : 相机 / YOLO / SAM / cup 配置
+  - RealSense_R/config.yaml          : 相机 / YOLO / SAM / cup 配置 (旧相机)
   - Estun/estun_config.yaml          : 机器人 / 把手偏移 / 水杯偏移配置
   - calib_data/calibration_result.yaml : 手眼标定矩阵 (可选)
 
@@ -67,9 +69,9 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入自定义包 ----
-from RealSense.test_handle_6D import RealSenseHandle6DDetector
-from RealSense.test_cup_6D import RealSenseCup6DDetector
-from RealSense.realsense_shared import rotation_matrix_to_euler_angles
+from RealSense_R.test_handle_6D import RealSenseHandle6DDetector
+from RealSense_R.test_cup_6D import RealSenseCup6DDetector
+from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 from Estun.utils_shared import (
     euler_to_rotation_matrix, transform_pose_to_base,
     compute_gripper_offset_transform, compute_grasp_rotation,
@@ -86,7 +88,7 @@ _poses_cleared = False       # daemon 线程在机械臂断开时置 True
 _waiting_for_stable = False  # 主循环在等待重稳定时置 True
 
 # ---- 加载 RealSense / YOLO 配置 ----
-_cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
+_cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
 with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
@@ -115,7 +117,7 @@ HANDLE_PRE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["r_offse
 HANDLE_TARGET_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["t_offset"], dtype=float)
 HANDLE_TARGET_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["r_offset"], dtype=float)
 
-# ---- cup handle_side (从 RealSense config 的 cup 段读取) ----
+# ---- cup handle_side (从 RealSense_R config 的 cup 段读取) ----
 CUP_HANDLE_SIDE = _cfg.get("cup", {}).get("handle_side", "back")
 print(f"[INFO] cup handle_side: {CUP_HANDLE_SIDE}")
 
@@ -627,7 +629,7 @@ def handle_client(conn, addr, detector, T_cam2ee, cup_detector):
 def main():
     global _hand_available, _poses_cleared, _waiting_for_stable
     print("=" * 60)
-    print("  ESTUN RealSense Handle + Cup 6D 融合抓取系统")
+    print("  ESTUN RealSense_R Handle + Cup 6D 融合抓取系统 (旧相机版)")
     print("  模型: Handle=微调YOLOv8n+SAM | Cup=YOLOv8m COCO")
     print("  流程: 抓壶倒水 → 抓杯递杯")
     print("=" * 60, flush=True)
@@ -647,7 +649,7 @@ def main():
         print("[WARN] 灵巧手未就绪, 将模拟所有手势操作")
 
     # ---- [Init 3] 初始化 Handle 6D 检测器 (启动 pipeline) ----
-    print(f"\n[INFO] 正在初始化 RealSense Handle 6D 检测器...")
+    print(f"\n[INFO] 正在初始化 RealSense_R Handle 6D 检测器 (旧相机)...")
     try:
         detector = RealSenseHandle6DDetector(config_dict=_cfg)
     except Exception as e:
@@ -660,11 +662,15 @@ def main():
         return
 
     # ---- [Init 4] 初始化 Cup 6D 检测器 (不启动 pipeline, 复用帧) ----
-    print(f"\n[INFO] 正在初始化 RealSense Cup 6D 检测器 (复用 pipeline)...")
+    print(f"\n[INFO] 正在初始化 RealSense_R Cup 6D 检测器 (复用 pipeline)...")
     try:
         cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=False)
-        # 从 Handle 检测器拷贝彩色内参 (复用 pipeline 时不调用 _init_realsense, color_intrinsics 为 None)
+        # 复用 pipeline 时不调用 _init_realsense, 从 Handle 检测器拷贝所有相机参数
         cup_detector.color_intrinsics = detector.color_intrinsics
+        cup_detector.depth_intrinsics = detector.depth_intrinsics
+        cup_detector.depth_scale = detector.depth_scale
+        cup_detector.color_to_depth_extrinsics = detector.color_to_depth_extrinsics
+        cup_detector.depth_to_color_extrinsics = detector.depth_to_color_extrinsics
     except Exception as e:
         print(f"[FATAL] Cup 检测器初始化失败: {e}")
         try:
@@ -697,7 +703,7 @@ def main():
         window=STABLE_WINDOW, pos_thresh=POS_THRESHOLD, angle_thresh=ANGLE_THRESHOLD
     )
 
-    cv2.namedWindow("ESTUN Handle+Cup 6D (RealSense)", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("ESTUN Handle+Cup 6D (RealSense_R)", cv2.WINDOW_NORMAL)
 
     # ---- 跳帧控制 ----
     frame_counter = 0
@@ -832,7 +838,7 @@ def main():
                 vis_panel = np.hstack((display_img, depth_small))
             else:
                 vis_panel = display_img
-            cv2.imshow("ESTUN Handle+Cup 6D (RealSense)", vis_panel)
+            cv2.imshow("ESTUN Handle+Cup 6D (RealSense_R)", vis_panel)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("\n[INFO] 用户按 q 退出", flush=True)
                 stop_event.set()

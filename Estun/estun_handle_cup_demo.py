@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块版)
+estun 把手+水杯融合位姿转换验证 Demo (RealSense_R 旧相机版)
 =============================================
 整合 Handle 6D 检测器 (微调 YOLOv8n + SAM + 扫描线分离) 与 Cup 6D 检测器 (YOLOv8m COCO),
-共享 RealSense pipeline, 使用 RealSense/ 新模块 (rs.align 简化深度对齐).
+共享 RealSense pipeline, 使用 RealSense_R/ 旧模块 (手动像素映射).
 
-与 estun_handle_cup_demo.py (RealSense_R 版) 的差异:
-  - 检测器切换至 RealSense/ 新模块 (rs.align 版)
+与 RealSense (rs.align) 版的差异:
+  - 检测器切换至 RealSense_R/ 旧模块 (手动像素映射, 无 rs.align)
   - 检测频率解耦: Handle 跳帧 (90) + Cup 跳帧 (10), 各自独立稳定
   - Cup 加入 handle_side 偏移选择 (t_cup_offset / t_cup_offset_left)
   - Cup P1 加入 B/C 角 clamp (back/left 分模式)
-  - 去掉 fine_tune_mode 相关逻辑
+  - 去掉 fine_tune_mode 相关逻辑 (偏移测定使用单独 Demo)
 
 输入:
-  - RealSense/config.yaml            : 相机 / YOLO / SAM / cup 配置 (新模块)
+  - RealSense_R/config.yaml          : 相机 / YOLO / SAM / cup 配置 (旧模块)
   - Estun/estun_config.yaml          : 机器人 / 把手偏移 / 水杯偏移配置
   - calib_data/calibration_result.yaml : 手眼标定矩阵
 
@@ -52,15 +52,15 @@ from Estun.utils_shared import (
     compute_grasp_rotation,
     post_correct_angles,
 )
-from RealSense.realsense_shared import rotation_matrix_to_euler_angles
+from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 
 
 # =============================================================
 # 配置加载
 # =============================================================
 
-# ---- 加载 RealSense / YOLO 配置 (新模块 RealSense/) ----
-_cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
+# ---- 加载 RealSense_R / YOLO 配置 (旧模块) ----
+_cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
 with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
@@ -86,7 +86,7 @@ HANDLE_PRE_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["pre_offset"]["r_offse
 HANDLE_TARGET_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["t_offset"], dtype=float)
 HANDLE_TARGET_R_OFFSET = np.array(_cfg_estun["handle_grasp"]["target_offset"]["r_offset"], dtype=float)
 
-# ---- cup handle_side (从 RealSense config 的 cup 段读取) ----
+# ---- cup handle_side (从 RealSense_R config 的 cup 段读取) ----
 CUP_HANDLE_SIDE = _cfg.get("cup", {}).get("handle_side", "back")
 print(f"[INFO] cup handle_side: {CUP_HANDLE_SIDE}")
 
@@ -242,7 +242,7 @@ class PoseStabilizer:
 
 def main():
     print("=" * 60)
-    print("  estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块)")
+    print("  estun 把手+水杯融合位姿转换验证 Demo (RealSense_R 旧相机)")
     print("  标定: " + CALIB_RESULT_PATH)
     print("=" * 60, flush=True)
 
@@ -259,9 +259,9 @@ def main():
     print(f"[INFO] 壶嘴偏移 spout_offset:        ({SPOUT_T_OFFSET[0]:.4f}, {SPOUT_T_OFFSET[1]:.4f}, {SPOUT_T_OFFSET[2]:.4f}) m")
     print(f"[INFO] 倒水防碰撞偏移:               ({POUR_T_OFFSET_BASE[0]:.4f}, {POUR_T_OFFSET_BASE[1]:.4f}, {POUR_T_OFFSET_BASE[2]:.4f}) m (基系 Z)")
 
-    # ---- [Step 2] 初始化 Handle 检测器 (启动 pipeline, RealSense 新模块) ----
-    from RealSense.test_handle_6D import RealSenseHandle6DDetector
-    print("[INFO] 初始化 RealSense Handle 6D 检测器 (新模块, rs.align)...")
+    # ---- [Step 2] 初始化 Handle 检测器 (启动 pipeline, RealSense_R 旧相机) ----
+    from RealSense_R.test_handle_6D import RealSenseHandle6DDetector
+    print("[INFO] 初始化 RealSense Handle 6D 检测器 (旧相机, RealSense_R)...")
     try:
         handle_detector = RealSenseHandle6DDetector(config_dict=_cfg)
     except Exception as e:
@@ -269,13 +269,17 @@ def main():
         print("[FATAL] 请确认已连接 RealSense D400 系列相机")
         return
 
-    # ---- [Step 3] 初始化 Cup 检测器 (不启动 pipeline, 复用帧, RealSense 新模块) ----
-    from RealSense.test_cup_6D import RealSenseCup6DDetector
-    print("[INFO] 初始化 RealSense Cup 6D 检测器 (新模块, 复用 pipeline)...")
+    # ---- [Step 3] 初始化 Cup 检测器 (不启动 pipeline, 复用帧, RealSense_R 旧相机) ----
+    from RealSense_R.test_cup_6D import RealSenseCup6DDetector
+    print("[INFO] 初始化 RealSense Cup 6D 检测器 (旧相机, 复用 pipeline)...")
     try:
         cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=False)
-        # 从 Handle 检测器拷贝彩色内参 (复用 pipeline 时不调用 _init_realsense, color_intrinsics 为 None)
+        # 复用 pipeline 时不调用 _init_realsense, 从 Handle 检测器拷贝所有相机参数
         cup_detector.color_intrinsics = handle_detector.color_intrinsics
+        cup_detector.depth_intrinsics = handle_detector.depth_intrinsics
+        cup_detector.depth_scale = handle_detector.depth_scale
+        cup_detector.color_to_depth_extrinsics = handle_detector.color_to_depth_extrinsics
+        cup_detector.depth_to_color_extrinsics = handle_detector.depth_to_color_extrinsics
     except Exception as e:
         print(f"[FATAL] Cup 检测器初始化失败: {e}")
         try:
@@ -292,7 +296,7 @@ def main():
         window=STABLE_WINDOW, pos_thresh=POS_THRESHOLD, angle_thresh=ANGLE_THRESHOLD
     )
 
-    cv2.namedWindow("estun Handle+Cup Demo (RealSense)", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("estun Handle+Cup Demo (RealSense_R)", cv2.WINDOW_NORMAL)
 
     handle_stable_pose_ee: Any = None   # (pos_ee, euler_ee) or None
     cup_stable_pose_cam: Any = None     # (pos_cam, euler_cam) or None
@@ -419,7 +423,7 @@ def main():
                 vis_panel = np.hstack((display_img, depth_small))
             else:
                 vis_panel = display_img
-            cv2.imshow("estun Handle+Cup Demo (RealSense)", vis_panel)
+            cv2.imshow("estun Handle+Cup Demo (RealSense_R)", vis_panel)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("\n[INFO] 用户按 q 退出", flush=True)
                 running = False
@@ -691,7 +695,7 @@ def main():
 
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("=" * 60 + "\n")
-        f.write("  estun 把手+水杯融合位姿转换验证 Demo (RealSense 新模块)\n")
+        f.write("  estun 把手+水杯融合位姿转换验证 Demo (RealSense_R 旧相机)\n")
         f.write("=" * 60 + "\n\n")
 
         f.write("--- 配置参数 ---\n")

@@ -2,48 +2,39 @@
 
 ## 当前焦点
 
-**机器人端代码 v4 建立完成** — 伪代码 + CRP 示教器文件 + PC 端响应格式同步更新。
-**HandInCup 检测器完成** — YOLOv8m + YOLOv8n-Pose 双模型，可独立测试。
+**RealSense_R 偏移重新测定** — 从 RealSense (rs.align) 切换到旧相机 RealSense_R (手动像素映射)，
+需要重新 fine_tune 所有灵巧手偏移。Cup back/left 已完成，Handle 初次完成，融合 Demo/Run 待修复。
 
 ## 最近变更
 
-1. **机器人端代码 v4** (2026-07-03):
-   - `doc/estun_handle_cup_code_v4.txt`: 完整伪代码，含 READY/CONTINUE/ABORT 协议 + 双分支
-   - `doc/handlepluscup-v4.crp`: 示教器项目文件 (由 `update_crp_v4.py` 从 v3 CRP 自动生成)
-   - `doc/update_crp_v4.py`: CRP 自动修改脚本 (可复现)
-   - `Orchestrator/state_machine.py`: PC 端 CONTINUE/ABORT 响应格式改为 `<0,0,0,0,0,0>` / `[0,0,0,0,0,0]` (与机器人端 TranStrToCpos 标记配对)
-   - 新增变量: str7="READY", socketstr5, strflag_cont, strflag_abort
-   - 新增位姿点: DCp2 (DCPOS), C_P4 (CPOS), DummyCpos (CPOS)
-   - Cup P4 安全退避算法: CposOffset(C_P1, DCp2), DCp2.dz = C_P3.z - C_P1.z
+1. **RealSense_R Cup 偏移测定** (2026-07-07):
+   - `t_cup_offset_left`: RealSense `[0.049, -0.070, 0.100]` → RealSense_R `[0.040, -0.060, 0.080]` (161033 final)
+   - `t_cup_offset` (back): RealSense `[0.057, -0.010, 0.139]` → RealSense_R `[0.048, -0.009, 0.098]` (163920 final)
+   - 旧值已注释保留，标注相机来源
+   - Git 历史确认: cup offset 无历史 fine_tune 记录 (只有 `41525ff` 初始值)
 
-2. **Orchestrator 状态机重构** (2026-07-03):
-   - `Orchestrator/state_machine.py`: 6 状态 → 2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR)
-   - 单 TCP Session 完整协议:
-     - Phase A: Robot → PC 初始位姿
-     - Phase B: PC → Robot Handle `<P1>[P2]{P3}`
-     - Phase C: PREGRIP → GRIPDONE → RESET → CUP → PC 回复 `<Cup_P1>[Cup_P2]{P3}`
-     - Phase D: READY → RELEASE → HandInCup 判定 → CONTINUE/ABORT
-   - Cup P3 的 X 来自 Camera B 人体检测 + EyeToHand 标定, YZ/ABC 来自 config 预示教
-   - 新增指令: READY (Robot→PC), CONTINUE (PC→Robot), ABORT (PC→Robot)
-   - Camera A 修正为 `RealSense/` (rs.align, 内参完好的新相机)
+2. **RealSense_R Handle 偏移测定** (2026-07-07):
+   - `t_handle_offset`: RealSense `[0.06, -0.028, 0.094]` → RealSense_R `[0.048, -0.037, 0.074]` (164610)
+   - Git 历史对比: 历史 RealSense_R 值为 `[0.04, -0.03, 0.080]` (f2e3579 之前)
+   - 新旧偏差: X+8mm, Y-7mm, Z-6mm，方向量级合理
+   - 待更多实测验证
 
-2. **HandInCup 检测器** (2026-07-03, 实测更新 2026-07-06):
-   - `EyeToHand/hand_in_cup.py`: YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点) 双模型
-   - 2D 判定: 连续 N 帧手腕在杯 bbox 扩展区 → is_hand_on_cup = True
-   - **无遮挡实测**: 人手侧握杯把时手腕在 ROI 外, 引入 `dist_factor` (距离阈值系数) 和 `depth_tolerance` (深度容差 5cm) 修正; 修正参数未实地验证, 仍为初始猜测值
-   - **灵巧手遮挡**: 尚未测试
-   - 模型文件 `model/yolov8m-pose.pt` + `yolov8n-pose.pt` 均已存在
-   - 配置段: `EyeToHand/config.yaml` → `hand_in_cup` 段
+3. **Demo/Run 切换至 RealSense_R** (2026-07-07):
+   - `estun_handle_cup_demo.py`: RealSense/ → RealSense_R/ + 拷贝全部5个相机参数
+   - `estun_cup_demo.py`: RealSense/ → RealSense_R/ + 同步 Cup P1 clamp 守卫和防跳变
+   - `estun_handle_demo.py`: fine_tune 反算改为 Cup 式增量法
+   - `estun_handle_cup_run.py`: RealSense/ → RealSense_R/ + 拷贝全部5个相机参数
+   - `estun_config.yaml`: 所有偏移值更新 + 旧值注释保留 + `handle_detection.fine_tune_mode: true`
 
-3. **文档更新** (2026-07-03): memory-bank 更新至当前状态.
+4. **⚠️ 未解决问题**:
+   - **融合 Demo/Run Cup 检测失败**: 单独 Cup Demo (`start_pipeline=True`) 正常; 融合模式 (`start_pipeline=False` + inject_frames) cup 无位姿. 已拷贝全部5个相机参数仍未解决. 导致 run 无法完成 stable → 全流程阻塞.
+   - **P4 Y 后退未实现**: P4 新定义和 Y 偏移量已写入配置和文档, 但机械臂 CRP 端尚未编码. 当前仍使用旧 P4 定义.
 
-## 下一步 — 按优先级
+## 下一步
 
-| 优先级 | 任务 | 需要硬件? |
-|:---:|------|:---:|
-| 🔴 P0 | **实操标定** `EyeToHand/calibration/calibrate.py` | ✅ 机械臂 |
-| 🔴 P0 | **填入递送参数** `delivery.Y_TEACH/Z_TEACH/ABC` 预示教值 | ✅ 机械臂 |
-| 🟡 P1 | **HandInCup 无遮挡重测**: 调优 `dist_factor`/`depth_tolerance` | ✅ Camera B |
-| 🟡 P1 | **HandInCup 有遮挡实测**: 灵巧手遮挡杯把场景 | ✅ Camera B + 灵巧手 |
-| 🟡 P2 | **机器人 .crp 适配**: 新协议 (READY/CONTINUE/ABORT 指令) | ✅ 机械臂 |
-| 🟢 P3 | **Orchestrator 全流程联调**: 双相机 + 机器人 + 灵巧手 | ✅ 全部硬件 |
+| 优先级 | 任务 | 说明 |
+|:---:|------|------|
+| 🔴 P0 | **修复融合 Demo/Run Cup 检测** | start_pipeline=False 时 cup 无输出, run 全流程阻塞 |
+| 🔴 P0 | **P4 Y 后退 CRP 实现** | 设计已定, 待机械臂端编码 CposOffset + Y 后退 |
+| 🟡 P1 | **Handle P3 示教验证** | 旧 p3_teach_offset 在 RealSense_R 下是否仍有效 |
+| 🟡 P1 | **Handle offset 多测几次** | 对比历史值 `[0.04, -0.03, 0.080]`，确认稳定性 |

@@ -1,6 +1,6 @@
 # 水杯抓取与把手抓取融合 (Handle + Cup)
 
-## 上次更新: 2026-06-30 (v6: left 模式全流程通过 + P3 四角度实测)
+## 上次更新: 2026-07-07 (v7: RealSense_R 切换 + P4 重构 + 偏移重测定)
 
 ---
 
@@ -12,6 +12,12 @@
 2. **Phase 2 — 抓水杯 + 递杯**: 检测水杯 → 抓取 → 移动到递杯位置 → 释放
 
 共 6 个机器人位姿 (Handle P1/P2/P3_pour + Cup P1/P2/P3), 分两阶段发送.
+此外 P4 预倒水点设计草案已出 (P4.XYZ=P3.XYZ+Y后退, P4.ABC=P1.ABC),
+待机械臂 CRP 端实现, 见 §9.3.
+
+**v7 核心变更**: 从 RealSense (rs.align) 切换到 RealSense_R (手动像素映射) 旧相机,
+所有灵巧手偏移 (t_handle_offset, t_cup_offset, t_cup_offset_left) 重新 fine_tune 测定.
+P4 重构为 P4.XYZ=P3.XYZ + Y 后退, 倒水为纯 B 轴旋转.
 
 **v4 核心变更**: 倒水口不再由 cup 检测器直接输出 (移除 Phase 3/4 的 PCA rim 检测), 而是基于 Cup TCP 在基系下的位置 `c_pos_base_1` + 杯几何偏移 (rim_radius, height) 计算得到. 修复了透明杯子深度误差导致倒水口位置不准的问题.
 
@@ -38,9 +44,12 @@
 ### 3.1 流程
 
 ```text
-MoveP2(handle) → PREGRIP → MoveP1(handle) → GRIPDONE → MoveP3(handle_pour) → wait 1s(倒水)
-→ MoveP1(handle) → PREGRIP → MoveP2(handle) → RESET → MoveHome
+MoveP2(handle) → PREGRIP → MoveP1(handle) → GRIPDONE
+→ MoveP4 → MoveP3(handle_pour, B轴旋转倒水) → wait 1s(倒水)
+→ MoveP4 → MoveP1(handle) → PREGRIP → MoveP2(handle) → RESET → MoveHome
 ```
+
+P4 为预倒水安全点, 在机械臂 CRP 端计算 (PC 端不参与). 详见 §9.3.
 
 ### 3.2 Handle P1 (抓取点)
 
@@ -254,20 +263,25 @@ CUP 命令由机械臂在 handle 流程完成后发送. 回复 cup 位姿时, �
 
 ## 7. 配置参数说明
 
-### 7.1 `Estun/estun_config.yaml` — cup_grasp 段
+### 7.1 `Estun/estun_config.yaml` — cup_grasp 段 (v7: RealSense_R 重测定)
 
-| 参数 | 值 | 说明 |
-| ------ | ----- | ------ |
-| `enabled` | true | 总开关 |
-| `spout_offset.t_offset` | [-0.06, 0.17, 0.0] | 壶嘴在抓取末端系下的偏移 (m), 已实际测量 |
-| `gripper_offset.t_cup_offset` | [0.057, -0.010, 0.139] | 抓水杯的灵巧手平移偏移 (m), back 模式, 已微调 |
-| `gripper_offset.t_cup_offset_left` | [0.049, -0.070, 0.100] | 抓水杯的灵巧手平移偏移 (m), left 模式, 已微调 |
-| `gripper_offset.r_cup_offset` | [0, 0, -90] | 灵巧手安装角度 (度) |
-| `pre_offset.t_offset` | [-0.0, 0.0, -0.05] | 预抓取平移偏移 (m) |
-| `target_offset.t_offset` | [-0.2, 0, 0] | 递杯平移偏移 (m) |
-| `target_offset.r_offset` | [0, 0, 0] | 递杯旋转偏移 (度) |
-| `pour_offset.t_offset` | [0, 0, 0.05] | 基系 Z 轴防碰撞偏移 (m) |
-| `pour_offset.r_offset` | [0, 0, -45] | 倒水旋转偏移 (度, 同 handle target) |
+v7 从 RealSense (rs.align) 切换到 RealSense_R (手动像素映射), 所有偏移重新 fine_tune.
+旧值已注释保留在配置文件中.
+
+| 参数 | RealSense_R 值 (v7) | RealSense 旧值 | 说明 |
+| ------ | ----- | ----- | ------ |
+| `enabled` | true | — | 总开关 |
+| `fine_tune_mode` | true | — | 偏移微调模式开关 |
+| `spout_offset.t_offset` | [-0.06, 0.17, 0.0] | 同 | 壶嘴偏移 (m) |
+| `gripper_offset.t_cup_offset` | [0.048, -0.009, 0.098] | [0.057, -0.010, 0.139] | back 模式 (m), 2026-07-07 fine_tune |
+| `gripper_offset.t_cup_offset_left` | [0.040, -0.060, 0.080] | [0.049, -0.070, 0.100] | left 模式 (m), 2026-07-07 fine_tune |
+| `gripper_offset.r_cup_offset` | [0, 0, -90] | 同 | 灵巧手安装角度 (度) |
+| `handle_grasp.gripper_offset.t_handle_offset` | [0.048, -0.037, 0.074] | [0.06, -0.028, 0.094] | 把手偏移 (m), 2026-07-07 fine_tune |
+| `pre_offset.t_offset` | [-0.05, 0.0, -0.05] | — | 预抓取平移偏移 (m) |
+| `target_offset.t_offset` | [-0.2, 0, 0] | — | 递杯平移偏移 (m) |
+| `target_offset.r_offset` | [0, 0, 0] | — | 递杯旋转偏移 (度) |
+| `pour_offset.t_offset` | [0, 0, 0.05] | — | 基系 Z 轴防碰撞偏移 (m) |
+| `pour_offset.r_offset` | [0, 0, -55] | — | 倒水旋转偏移 (度) |
 
 ### 7.2 `RealSense/config.yaml` — cup 段 (注意: v4 后统一使用 RealSense/ 新模块)
 
@@ -371,24 +385,63 @@ if ORIENTATION_MODE == "vertical" and GRASP_DIRECTION == "right":
 
 **fixed 模式** 使用配置固定 ABC, 不存在跳变问题.
 
-### 9.3 P4 预倒水点
+### 9.3 P4 预倒水点 (v7 重构, **尚未实现**)
 
-**动机**: Handle P1→P3 运动时若水杯与水壶接近, 高位直接 Z 向运动可能碰撞.
+> ⚠️ 以下为设计草案, Y 后退逻辑尚未在机械臂 CRP 中编码. 当前仍使用旧 P4 定义.
 
-**定义**: `P4 = [P1.x, P1.y, P3.z, P1.a, P1.b, P1.c]` — 继承 P1 的 XY 和姿态, 取 P3 的 Z 高度.
+**v7 新定义**:
 
-**路径**: `P2 → P1 → P4 → P3 → P4 → P1 → P2`
+```
+P4.XYZ = P3.XYZ       → 位置与倒水点相同
+P4.ABC = P1.ABC       → 姿态与抓取点相同
+倒水动作 = P4 → P3     → 仅 B 轴旋转 (壶嘴从竖直→倾斜)
+```
 
-**实现**: 由机械臂端 CposOffset 实现, Python 侧不额外发送位姿. 适用于 P3_TEACH_ENABLE=true (示教模式) 和视觉模式.
+**对比旧定义 (v2-v6)**:
 
-**当前状态**: 已完成. 机械臂端代码见 `doc/estun_handle_cup_code.txt` (v2), 待在实际示教器上测试.
+| | 旧 (v2-v6) | 新 (v7) |
+|--|-----------|---------|
+| P4.XYZ | [P1.x, P1.y, P3.z] | = P3.XYZ |
+| P4.ABC | = P1.ABC | = P1.ABC (不变) |
+| 倒水 | P4→P3 (含平移) | P4→P3 (**纯 B 旋转**) |
+| 优点 | 结构简单 | 壶嘴画弧线接近杯口, 动作更自然 |
+
+**基系 Y 后退 (防洒水)**:
+
+P4 在机械臂端实际执行时, 从 P3.XYZ 沿基系 Y 轴后退一段距离.
+后退量与倒水角度成反比 (角度越小, 水流越竖直, 需要更多空间):
+
+| 倒水 B 角 | Y 后退量 | 说明 |
+|:--:|:--:|------|
+| 10° | 100mm | 水流近竖直, 壶嘴需离杯更远 |
+| 15° | 75mm | (线性插值初始猜测) |
+| 20° | 60mm | (线性插值初始猜测) |
+| 30° | 50mm | 水流有水平分量, 壶嘴可更近 |
+
+配置位置: `estun_config.yaml` → `handle_grasp.p4_definition`
+
+**运动路径** (机械臂 CRP 端):
+
+```text
+P1 → P4(Y后退) → P3(B轴旋转倒水) → P4(Y前进) → P1
+```
+
+**实现**: 全程由机械臂端 CRP 计算 (CposOffset/DCPos), **PC 端不参与**.
+PC 端仅发送 P1/P2/P3, 不发送 P4.
 
 ---
 
 ## 10. 待办事项
 
-- [x] P4 预倒水点: 机械臂端代码已实现 (`doc/estun_handle_cup_code.txt` v2), 待示教器测试
-- [x] PC 端通信协议重构: `fmt_pose()`/`pack_three()` + 断开时清零 + 自动重稳定 (2026-06-25)
-- [x] **灵巧手使能可靠性**: `init_hand()` 使能重试 + `is_hand_available()` (2026-06-26)
-- [x] **left 模式示教 + 全流程实测通过** (2026-06-30): P3 四角度(10°/15°/20°/30°)全部实测校正, run 测试通过
+- [x] **RealSense_R 切换** (2026-07-07): cup/run 三个 Demo 全部切换至 RealSense_R 旧相机模块
+- [x] **t_cup_offset 重测定** (2026-07-07): back/left 两模式完成 fine_tune
+- [x] **t_handle_offset 重测定** (2026-07-07): 初次完成, 待多次验证
+- [x] **P4 重构** (2026-07-07): P4.XYZ=P3.XYZ + Y 后退, P4.ABC=P1.ABC
+- [x] P4 预倒水点: 机械臂端代码已实现 (`doc/estun_handle_cup_code.txt` v2)
+- [x] PC 端通信协议重构: `fmt_pose()`/`pack_three()` + 断开时清零 + 自动重稳定
+- [x] **灵巧手使能可靠性**: `init_hand()` 使能重试 + `is_hand_available()`
+- [x] **left 模式示教 + 全流程实测通过**: P3 四角度(10°/15°/20°/30°)全部实测校正
+- [ ] **融合 Demo Cup 检测修复**: start_pipeline=False 时 cup 无位姿 (进行中)
+- [ ] **Handle offset 多测验证**: 对比历史值 `[0.04, -0.03, 0.080]`
+- [ ] **Handle P3 示教验证**: p3_teach_offset 在 RealSense_R 下是否需重测
 - [ ] free 模式完整姿态测试 (当前仅 vertical 模式做 B/C 修正)

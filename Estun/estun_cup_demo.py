@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-estun 水杯位姿转换验证 Demo (RealSense Cup 版)
+estun 水杯位姿转换验证 Demo (RealSense_R 旧相机版)
 =============================================
 基于 estun_handle_cup_demo.py 剥离 Handle 检测部分, 仅保留 Cup 单检测链路.
-使用 RealSense/test_cup_6D.py 的 RealSenseCup6DDetector (独立启动 pipeline, rs.align 简化版).
+使用 RealSense_R/test_cup_6D.py 的 RealSenseCup6DDetector (独立启动 pipeline, RealSense_R 旧相机).
 
 与 estun_handle_cup_demo.py 的差异:
   - 单检测器: RealSenseCup6DDetector (start_pipeline=True, 独立 pipeline)
@@ -13,7 +13,7 @@ estun 水杯位姿转换验证 Demo (RealSense Cup 版)
   - 支持 fine_tune_mode: 手动调整后反算新 t_cup_offset
 
 输入:
-  - RealSense/config.yaml              : 相机 / YOLO / cup 配置 (新相机)
+  - RealSense_R/config.yaml            : 相机 / YOLO / cup 配置 (旧相机)
   - Estun/estun_config.yaml            : 机器人 / cup_grasp 偏移 / fine_tune_mode
   - calib_data/calibration_result.yaml : 手眼标定矩阵
 
@@ -53,7 +53,7 @@ from Estun.utils_shared import (
     compute_grasp_rotation,
     post_correct_angles,
 )
-from RealSense.realsense_shared import rotation_matrix_to_euler_angles
+from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 
 
 # =============================================================
@@ -61,7 +61,7 @@ from RealSense.realsense_shared import rotation_matrix_to_euler_angles
 # =============================================================
 
 # ---- 加载 RealSense / YOLO / cup 配置 ----
-_cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
+_cfg_path = os.path.join(_project_root, "RealSense_R", "config.yaml")
 with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
@@ -212,8 +212,8 @@ def main():
     print(f"[INFO] 水杯偏移 t_cup_effective: ({t_cup_effective[0]:.4f}, {t_cup_effective[1]:.4f}, {t_cup_effective[2]:.4f}) m")
 
     # ---- [Step 2] 初始化 Cup 检测器 (启动独立 pipeline) ----
-    from RealSense.test_cup_6D import RealSenseCup6DDetector
-    print("[INFO] 初始化 RealSense Cup 6D 检测器 (新相机, rs.align 版)...")
+    from RealSense_R.test_cup_6D import RealSenseCup6DDetector
+    print("[INFO] 初始化 RealSense Cup 6D 检测器 (旧相机, RealSense_R)...")
     try:
         cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=True)
     except Exception as e:
@@ -369,24 +369,34 @@ def main():
     c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
     cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
     cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
-    # ---- 根据 handle_side 施加角度约束 ----
-    if HANDLE_SIDE == "back":
-        # back 模式: 把手背对相机, 灵巧手右侧抓取
-        # B 角 clamp 到 [70, 90], 使灵巧手从水平方向接近水杯
-        if not (70 <= cB1 <= 90):
-            print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 80.0 (back 模式)")
-            cB1 = 80.0
-        # C 角 clamp 到 [-120, -100], 使灵巧手手指垂直于杯身
-        if not (-120 <= cC1 <= -100):
-            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
-            cC1 = -110.0
-    else:
-        # left 模式: 把手在相机左侧, 灵巧手右侧抓取 (递给人)
-        # B 角暂不约束, 由 compute_grasp_rotation 自然决定 (杯身竖直时 B 角天然合理)
-        # C 角 clamp 到 [-100, -80], 默认 -90, 参考水壶约束
-        if not (-100 <= cC1 <= -80):
-            print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式, 参考水壶)")
-            cC1 = -90.0
+    # ---- 根据 handle_side 施加角度约束 (仅 vertical 模式; free 无限制, 仅可达性修复) ----
+    if ORIENTATION_MODE == "vertical":
+        if HANDLE_SIDE == "back":
+            # back 模式: 把手背对相机, 灵巧手右侧抓取
+            # B 角防跳变: <90->89, >90->91, ==90 不修正
+            if cB1 < 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 89.0 (vertical back)")
+                cB1 = 89.0
+            elif cB1 > 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 91.0 (vertical back)")
+                cB1 = 91.0
+            # C 角 clamp 到 [-120, -100], 使灵巧手手指垂直于杯身
+            if not (-120 <= cC1 <= -100):
+                print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -110.0 (back 模式)")
+                cC1 = -110.0
+        else:
+            # left 模式: 把手在相机左侧, 灵巧手右侧抓取 (递给人)
+            # B 角防跳变同 vertical back
+            if cB1 < 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 89.0 (vertical left)")
+                cB1 = 89.0
+            elif cB1 > 90:
+                print(f"[CLAMP] Cup P1 B 角 {cB1:.1f} -> 91.0 (vertical left)")
+                cB1 = 91.0
+            # C 角 clamp 到 [-100, -80], 默认 -90, 参考水壶约束
+            if not (-100 <= cC1 <= -80):
+                print(f"[CLAMP] Cup P1 C 角 {cC1:.1f} -> -90.0 (left 模式, 参考水壶)")
+                cC1 = -90.0
 
     c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
     c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
