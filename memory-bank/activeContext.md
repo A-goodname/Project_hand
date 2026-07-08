@@ -2,8 +2,8 @@
 
 ## 当前焦点
 
-**P4 Y 后退 CRP 实现** — v7 设计已定稿: `P4.XYZ = P3.XYZ + Y后退`, `P4.ABC = P1.ABC`，倒水为纯 B 轴旋转。
-RealSense_R 偏移重测定全部完成，融合 Cup 检测已修复。
+**Orchestrator 联调准备** — P4 Y 后退 CRP 已完成 (handlepluscup-orchestrator.crp)。
+RealSense_R 偏移重测定 + Cup 检测修复 + P4 Y 后退全部完成，进入双相机全流程联调阶段。
 
 ## 最近变更
 
@@ -38,14 +38,24 @@ RealSense_R 偏移重测定全部完成，融合 Cup 检测已修复。
 6. **Handle offset 多次验证** (2026-07-08):
    - ✅ `t_handle_offset = [0.048, -0.037, 0.074]` 多次实测确认稳定.
 
-7. **⚠️ 未解决问题**:
-   - **P4 Y 后退未实现**: P4 新定义和 Y 偏移量已写入配置和文档, 但机械臂 CRP 端尚未编码. 当前仍使用旧 P4 定义.
+7. **P4 Y 后退 CRP 实现** (2026-07-08):
+   - ✅ 基于 598 (P4 Y后退) + Phase D (HandInCup) 合并生成 `handlepluscup-orchestrator.crp`
+   - 2 个新 DCPOS (Retreat1/Retreat2) 复用字段存阈值+Y后退量
+   - Cascading If 实现 4 档角度映射: 10°→200mm, 15°→175mm, 20°→150mm, 30°→100mm
+   - P4 = [P3.x, P3.y-Y_RETREAT, P3.z, P1.a, P1.b, P1.c]; P4→P3 纯 B 旋转 + Y 前进
+
+8. **⚠️ 未解决问题**:
+   - **HandInCup 参数未实地验证**: `dist_factor`/`depth_tolerance` 为初始猜测值
+   - **EyeToHand 标定未实操**: scale/bias 为默认占位值
+   - **递送参数未填入**: `delivery.Y_TEACH/Z_TEACH/ABC` 需示教
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 P0 | **P4 Y 后退 CRP 实现** | 设计已定, 待机械臂端编码 CposOffset + Y 后退 |
+| 🔴 P0 | **Orchestrator 联调** | 双相机 + 机器人 + 灵巧手全流程 |
+| 🔴 P0 | **CRP 录入示教器** | 导入 handlepluscup-orchestrator.crp + 示教新增点位 |
 | 🟡 P1 | **HandInCup 无遮挡重测** | 调优 dist_factor/depth_tolerance |
 | 🟡 P1 | **HandInCup 有遮挡实测** | 灵巧手遮挡杯把场景 |
-| 🟢 P2 | Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |
+| 🟡 P1 | **EyeToHand 标定** | 实操 calibrate.py, 填入 scale/bias |
+| 🟢 P2 | 填入递送参数 | delivery.Y_TEACH/Z_TEACH/ABC 示教 |

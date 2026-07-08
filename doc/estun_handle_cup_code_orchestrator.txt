@@ -1,4 +1,4 @@
-ESTUN 把手+水杯融合抓取示教器代码 (v4 — Orchestrator 双相机协议 + HandInCup 判定)
+ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程: P4 Y后退 + HandInCup 判定)
 ============================================================
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
@@ -72,7 +72,7 @@ while strflag == 1
     Wait 500ms
 
 // ================================================================
-// [3] Handle 运动 (含 P4 预倒水点)
+// [3] Handle 运动 (含 P4 预倒水点 — v7 Y后退)
 // ================================================================
 MovL H_P2                       // 到预抓取点
 SocketSendStr('PREGRIP')        // → PC: 灵巧手 PREGRIP
@@ -80,16 +80,29 @@ Wait 1s
 MovL H_P1                       // 到抓取点
 SocketSendStr('GRIPDONE')       // → PC: 灵巧手 GRIPDONE
 Wait 1s
-// --- 计算 P4: 上升到倒水高度 (P1的XY + P3的Z + P1的姿态) ---
+// --- 计算 P4 (v7: P3位置Y后退 + P1姿态) ---
+// DCp1.xyz = P3.xyz - P1.xyz    (XZ偏移 → P4.XZ=P3.XZ)
+DCp1.dx = H_P3.x - H_P1.x
 DCp1.dz = H_P3.z - H_P1.z
+// Retreat1.dy 根据 P3.B 选择 Y 后退量 (cascading 覆写):
+//   默认 30° → 100mm,  <25°(20°档) → 150mm,  <17.5°(15°档) → 175mm,  <12.5°(10°档) → 200mm
+Retreat1.dy = Retreat1.dx       // 默认 100mm (Retreat1.dx=100)
+if H_P3.b < Retreat1.da:        // Retreat1.da=25 → 20°档
+    Retreat1.dy = Retreat2.dx   // Retreat2.dx=150mm
+if H_P3.b < Retreat1.db:        // Retreat1.db=17.5 → 15°档
+    Retreat1.dy = Retreat2.dy   // Retreat2.dy=175mm
+if H_P3.b < Retreat1.dc:        // Retreat1.dc=12.5 → 10°档
+    Retreat1.dy = Retreat2.dz   // Retreat2.dz=200mm
+DCp1.dy = H_P3.y - H_P1.y - Retreat1.dy
 H_P4 = CposOffset(H_P1, DCp1)
-MovL H_P4                       // → 预倒水点 (安全上升)
+// 结果: P4 = [P3.x, P3.y-Y_RETREAT, P3.z, P1.a, P1.b, P1.c]
+MovL H_P4                       // → 预倒水点 (P3位置+Y后退, P1姿态)
 Wait 1s
-// --- P3: 移动到倒水点 ---
+// --- P3: 移动到倒水点 (纯B旋转 + Y前进) ---
 MovL H_P3                       // 到倒水位置
 Wait 2s                         // 倒水延时
-// --- P4: 先升回安全高度再回 P1 ---
-MovL H_P4                       // → 预倒水点 (安全上升)
+// --- P4: 退避 → 回 P1 ---
+MovL H_P4                       // → 预倒水点 (退避)
 Wait 1s
 MovL H_P1                       // 回到抓取点
 SocketSendStr('PREGRIP')        // → PC: 灵巧手 PREGRIP
@@ -246,7 +259,7 @@ endif
 //    机械臂示教器不直接连接灵巧手.
 //
 // 7. CRP 文件:
-//    对应的示教器项目文件: doc/handlepluscup-v4.crp
-//    由 update_crp_v4.py 从 handlepluscup-Down-41.crp (v3) 自动生成.
-//    新增变量: str7, socketstr4, socketstr5, strflag2, strflag_cont, strflag_abort
-//    新增位姿点: DCp2, C_P4, DummyCpos
+//    对应的示教器项目文件: doc/handlepluscup-orchestrator.crp
+//    由 merge_crp_v4.py 从 handlepluscup-Down-598.crp (P4 Y后退) + Phase D 合并生成.
+//    新增变量: str7, socketstr4, socketstr5, strflag_cont, strflag_abort
+//    新增位姿点: DCp2, C_P4, DummyCpos, Retreat1, Retreat2

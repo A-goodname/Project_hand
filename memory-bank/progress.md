@@ -46,6 +46,10 @@
   - 修复: stabilizer 创建后立即 `capture_generation()` 同步代际 (2 行)
   - Demo 不受影响 (其 PoseStabilizer 无代际计数器)
 - [x] **Handle P3 示教验证** (2026-07-08): `p3_teach_offset` 在 RealSense_R 下验证通过 ✅
+- [x] **P4 Y 后退 CRP 实现** (2026-07-08):
+  - 基于 598 (Retreat1/Retreat2 DCPOS) + Phase D 合并 → `handlepluscup-orchestrator.crp`
+  - P4 = [P3.x, P3.y-Y_RETREAT, P3.z, P1.abc]; P4→P3 纯 B 旋转 + Y 前进
+  - 映射: 10°→200mm, 15°→175mm, 20°→150mm, 30°→100mm (实测调整)
 
 ### 灵巧手控制
 - [x] USB 串口通信 / 手势动作 / 速度控制 / 使能
@@ -57,7 +61,7 @@
 - [x] 机械臂端 `.crp` + `estun_handle_cup_code.txt` v3
 - [x] PC 端 `fmt_pose()`/`pack_three()` 抽函数
 - [x] `_poses_cleared` 修复 / 稳定位姿输出
-- [x] **机器人端代码 v4** — 伪代码 + CRP 示教器文件 + PC 响应格式同步
+- [x] **Orchestrator CRP** — `handlepluscup-orchestrator.crp` + `estun_handle_cup_code_orchestrator.txt` (P4 Y后退 + HandInCup 判定)
 
 ### 双相机体系
 - [x] Serial 绑定: Camera A (`819612071851`, RealSense rs.align) + Camera B (`342222071364`, RealSense_R)
@@ -83,19 +87,18 @@
 |------|------|
 | 🔴 实操标定 `EyeToHand/calibration/calibrate.py` | 需机械臂 |
 | 🔴 填入递送参数 `delivery.Y_TEACH/Z_TEACH/ABC` | 示教值 |
-| 🔴 机器人端 v4 程序录入示教器 | 导入 CRP + 示教 C_P4/DCp2/DummyCpos |
+| 🔴 机器人端 Orchestrator CRP 录入示教器 | 导入 handlepluscup-orchestrator.crp + 示教 Retreat1/Retreat2/C_P4/DCp2/DummyCpos |
 | 🟡 HandInCup 无遮挡重测 | 调优 dist_factor/depth_tolerance |
 | 🟡 HandInCup 有遮挡实测 | 灵巧手遮挡杯把场景 |
 | 🟢 Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |
 
 ### 📋 待完成 (非硬件)
-- [ ] P4 Y 后退 CRP 实现 (设计已定, 机械臂端未编码)
 - [ ] HandInCup 阈值调优 (有/无遮挡实测后)
-- [ ] Orchestrator 机器人端 .crp 适配新指令
+- [ ] Orchestrator 机器人端 .crp 适配新指令 (READY/CONTINUE/ABORT)
 
 ## 已知问题
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
 - `EyeToHand/calibration/result.yaml` scale/bias 为默认占位值 1.0/0.0
 - HandInCup `dist_factor`/`depth_tolerance` 修正参数未实地验证
-- **融合 Demo/Run 中 cup 检测 (start_pipeline=False) 无法获取位姿**，单独 Cup Demo (start_pipeline=True) 正常
 - `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓)
+- P4 Y 后退角度映射 (10°→200/15°→175/20°→150/30°→100) 中 15°/20° 为线性插值，待实测验证
