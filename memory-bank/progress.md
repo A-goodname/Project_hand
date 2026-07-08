@@ -73,6 +73,11 @@
   - `hand_in_cup.py`: YOLOv8m+YOLOv8n-Pose 人手-杯把手重合检测 ✅
 - [x] **Orchestrator 状态机重构** (2026-07-03) ✅
 - [x] **HandInCup 检测器** (2026-07-03) ✅
+- [x] **HandInCup 无遮挡实测** (2026-07-08):
+  - ✅ 实时 Camera B 测试通过, 2D+深度判定工作正常
+  - 参数标定: `dist_factor`=1.2, `depth_tolerance`=0.08
+  - 新增功能: 图片模式 (文件/文件夹), 诊断模式 (实时+图片→日志)
+  - 配置集中: `EyeToHand/config.yaml` → `hand_in_cup` 段
 
 ### 工程
 - [x] `memory-bank/` — 上下文持久化
@@ -88,17 +93,16 @@
 | 🔴 实操标定 `EyeToHand/calibration/calibrate.py` | 需机械臂 |
 | 🔴 填入递送参数 `delivery.Y_TEACH/Z_TEACH/ABC` | 示教值 |
 | 🔴 机器人端 Orchestrator CRP 录入示教器 | 导入 handlepluscup-orchestrator.crp + 示教 Retreat1/Retreat2/C_P4/DCp2/DummyCpos |
-| 🟡 HandInCup 无遮挡重测 | 调优 dist_factor/depth_tolerance |
-| 🟡 HandInCup 有遮挡实测 | 灵巧手遮挡杯把场景 |
+| 🟡 HandInCup 有遮挡实测 | 灵巧手遮挡杯把场景 (无遮挡已通过) |
 | 🟢 Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |
 
 ### 📋 待完成 (非硬件)
-- [ ] HandInCup 阈值调优 (有/无遮挡实测后)
+- [ ] HandInCup 有遮挡实测 (灵巧手遮挡杯把场景)
 - [ ] Orchestrator 机器人端 .crp 适配新指令 (READY/CONTINUE/ABORT)
 
 ## 已知问题
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
 - `EyeToHand/calibration/result.yaml` scale/bias 为默认占位值 1.0/0.0
-- HandInCup `dist_factor`/`depth_tolerance` 修正参数未实地验证
+- HandInCup 有遮挡场景未测试 (无遮挡已通过, dist_factor=1.2, depth_tolerance=0.08)
 - `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓)
 - P4 Y 后退角度映射 (10°→200/15°→175/20°→150/30°→100) 中 15°/20° 为线性插值，待实测验证

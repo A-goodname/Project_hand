@@ -44,8 +44,15 @@ RealSense_R 偏移重测定 + Cup 检测修复 + P4 Y 后退全部完成，进�
    - Cascading If 实现 4 档角度映射: 10°→200mm, 15°→175mm, 20°→150mm, 30°→100mm
    - P4 = [P3.x, P3.y-Y_RETREAT, P3.z, P1.a, P1.b, P1.c]; P4→P3 纯 B 旋转 + Y 前进
 
-8. **⚠️ 未解决问题**:
-   - **HandInCup 参数未实地验证**: `dist_factor`/`depth_tolerance` 为初始猜测值
+8. **HandInCup 无遮挡实测** (2026-07-08):
+   - ✅ 实时 Camera B 测试通过: 手腕稳定检测, 2D+深度判定正确
+   - 参数调整: `dist_factor` 0.8→1.2, `depth_tolerance` 0.05→0.08 (实测标定)
+   - 模型: YOLOv8n-Pose (轻量, 满足实时性)
+   - `required_stable`: 5 帧确认
+   - 新增功能: 图片模式 (支持文件/文件夹), 诊断模式 (实时+图片, 输出日志)
+   - 所有参数集中到 `EyeToHand/config.yaml` → `hand_in_cup` 段
+
+9. **⚠️ 未解决问题**:
    - **EyeToHand 标定未实操**: scale/bias 为默认占位值
    - **递送参数未填入**: `delivery.Y_TEACH/Z_TEACH/ABC` 需示教
 
@@ -55,7 +62,6 @@ RealSense_R 偏移重测定 + Cup 检测修复 + P4 Y 后退全部完成，进�
 |:---:|------|------|
 | 🔴 P0 | **Orchestrator 联调** | 双相机 + 机器人 + 灵巧手全流程 |
 | 🔴 P0 | **CRP 录入示教器** | 导入 handlepluscup-orchestrator.crp + 示教新增点位 |
-| 🟡 P1 | **HandInCup 无遮挡重测** | 调优 dist_factor/depth_tolerance |
-| 🟡 P1 | **HandInCup 有遮挡实测** | 灵巧手遮挡杯把场景 |
+| 🟡 P1 | **HandInCup 有遮挡实测** | 灵巧手遮挡杯把场景 (无遮挡已通过) |
 | 🟡 P1 | **EyeToHand 标定** | 实操 calibrate.py, 填入 scale/bias |
 | 🟢 P2 | 填入递送参数 | delivery.Y_TEACH/Z_TEACH/ABC 示教 |
