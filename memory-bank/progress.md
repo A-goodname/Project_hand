@@ -22,6 +22,7 @@
   - RealSense `[0.06, -0.028, 0.094]` → RealSense_R `[0.048, -0.037, 0.074]` (164610)
   - fine_tune 反算改为 Cup 式增量法 (更简洁)
   - 历史 RealSense_R 值 `[0.04, -0.03, 0.080]` (f2e3579) 可供对比
+- [x] **Handle offset 多次验证** (2026-07-08): 多次实测确认 `[0.048, -0.037, 0.074]` 稳定 ✅
 
 ### 水杯抓取
 - [x] 水杯 6D 检测 (RealSense_R/test_cup_6D.py)
@@ -40,7 +41,11 @@
 - [x] P4 预倒水点示教器验证
 - [x] `estun_handle_cup_demo.py` 切换至 RealSense_R/ + 相机参数拷贝修复
 - [x] `estun_handle_cup_run.py` 切换至 RealSense_R/ + 相机参数拷贝修复
-- [ ] **融合 Demo/Run Cup 检测修复** — start_pipeline=False 时 cup 无位姿, run 全流程阻塞 (进行中)
+- [x] **融合 Demo/Run Cup 检测修复** (2026-07-08):
+  - 根因: `PoseStabilizer._sf=-1 ≠ _gf=0` → `is_generation_valid()` 首次永远 False → reset → last_known_pose 永不赋值
+  - 修复: stabilizer 创建后立即 `capture_generation()` 同步代际 (2 行)
+  - Demo 不受影响 (其 PoseStabilizer 无代际计数器)
+- [x] **Handle P3 示教验证** (2026-07-08): `p3_teach_offset` 在 RealSense_R 下验证通过 ✅
 
 ### 灵巧手控制
 - [x] USB 串口通信 / 手势动作 / 速度控制 / 使能
@@ -76,19 +81,14 @@
 ### ⚡ 需要实际测试 (硬件依赖)
 | 任务 | 说明 |
 |------|------|
-| 🔴 修复融合 Demo Cup 检测 | start_pipeline=False 时 cup 无位姿 |
 | 🔴 实操标定 `EyeToHand/calibration/calibrate.py` | 需机械臂 |
 | 🔴 填入递送参数 `delivery.Y_TEACH/Z_TEACH/ABC` | 示教值 |
 | 🔴 机器人端 v4 程序录入示教器 | 导入 CRP + 示教 C_P4/DCp2/DummyCpos |
-| 🟡 Handle offset 多测验证 | 对比历史值 `[0.04, -0.03, 0.080]` |
-| 🟡 Handle P3 示教验证 | p3_teach_offset 在 RealSense_R 下是否有效 |
 | 🟡 HandInCup 无遮挡重测 | 调优 dist_factor/depth_tolerance |
 | 🟡 HandInCup 有遮挡实测 | 灵巧手遮挡杯把场景 |
 | 🟢 Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |
 
 ### 📋 待完成 (非硬件)
-- [ ] 融合 Demo/Run Cup 检测修复
-- [ ] Handle offset 多测几组取均值
 - [ ] P4 Y 后退 CRP 实现 (设计已定, 机械臂端未编码)
 - [ ] HandInCup 阈值调优 (有/无遮挡实测后)
 - [ ] Orchestrator 机器人端 .crp 适配新指令

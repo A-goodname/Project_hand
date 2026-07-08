@@ -2,8 +2,8 @@
 
 ## 当前焦点
 
-**RealSense_R 偏移重新测定** — 从 RealSense (rs.align) 切换到旧相机 RealSense_R (手动像素映射)，
-需要重新 fine_tune 所有灵巧手偏移。Cup back/left 已完成，Handle 初次完成，融合 Demo/Run 待修复。
+**P4 Y 后退 CRP 实现** — v7 设计已定稿: `P4.XYZ = P3.XYZ + Y后退`, `P4.ABC = P1.ABC`，倒水为纯 B 轴旋转。
+RealSense_R 偏移重测定全部完成，融合 Cup 检测已修复。
 
 ## 最近变更
 
@@ -26,15 +26,26 @@
    - `estun_handle_cup_run.py`: RealSense/ → RealSense_R/ + 拷贝全部5个相机参数
    - `estun_config.yaml`: 所有偏移值更新 + 旧值注释保留 + `handle_detection.fine_tune_mode: true`
 
-4. **⚠️ 未解决问题**:
-   - **融合 Demo/Run Cup 检测失败**: 单独 Cup Demo (`start_pipeline=True`) 正常; 融合模式 (`start_pipeline=False` + inject_frames) cup 无位姿. 已拷贝全部5个相机参数仍未解决. 导致 run 无法完成 stable → 全流程阻塞.
+4. **融合 Demo/Run Cup 检测修复** (2026-07-08):
+   - **根因**: `PoseStabilizer.__init__` 中 `_sf = -1`，全局 `_gf = 0`. 首次 `is_stable()` 返回 True 后，`is_generation_valid()` 检查 `-1 != 0` → False → `reset()` 清空 buffer → `last_known_pose` 永远不会被赋值.
+   - **修复**: stabilizer 创建后立即调用 `capture_generation()` 同步代际 (`_sf = _gf = 0`). 仅 2 行代码.
+   - Demo 不受影响因为其 PoseStabilizer 无代际计数器.
+   - ✅ 已修复，待实测验证.
+
+5. **Handle P3 示教验证** (2026-07-08):
+   - ✅ `p3_teach_offset` 在 RealSense_R 下验证通过，无需重测.
+
+6. **Handle offset 多次验证** (2026-07-08):
+   - ✅ `t_handle_offset = [0.048, -0.037, 0.074]` 多次实测确认稳定.
+
+7. **⚠️ 未解决问题**:
    - **P4 Y 后退未实现**: P4 新定义和 Y 偏移量已写入配置和文档, 但机械臂 CRP 端尚未编码. 当前仍使用旧 P4 定义.
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 P0 | **修复融合 Demo/Run Cup 检测** | start_pipeline=False 时 cup 无输出, run 全流程阻塞 |
 | 🔴 P0 | **P4 Y 后退 CRP 实现** | 设计已定, 待机械臂端编码 CposOffset + Y 后退 |
-| 🟡 P1 | **Handle P3 示教验证** | 旧 p3_teach_offset 在 RealSense_R 下是否仍有效 |
-| 🟡 P1 | **Handle offset 多测几次** | 对比历史值 `[0.04, -0.03, 0.080]`，确认稳定性 |
+| 🟡 P1 | **HandInCup 无遮挡重测** | 调优 dist_factor/depth_tolerance |
+| 🟡 P1 | **HandInCup 有遮挡实测** | 灵巧手遮挡杯把场景 |
+| 🟢 P2 | Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |

@@ -702,6 +702,9 @@ def main():
     main_cup_stabilizer = PoseStabilizer(
         window=STABLE_WINDOW, pos_thresh=POS_THRESHOLD, angle_thresh=ANGLE_THRESHOLD
     )
+    # 初始化时同步代际, 确保首次稳定即赋值 last_known_pose (避免 _sf=-1 != _gf=0 导致重置)
+    main_handle_stabilizer.capture_generation()
+    main_cup_stabilizer.capture_generation()
 
     cv2.namedWindow("ESTUN Handle+Cup 6D (RealSense_R)", cv2.WINDOW_NORMAL)
 
