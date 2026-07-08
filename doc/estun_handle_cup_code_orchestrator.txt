@@ -100,7 +100,7 @@ MovL H_P4                       // → 预倒水点 (P3位置+Y后退, P1姿态)
 Wait 1s
 // --- P3: 移动到倒水点 (纯B旋转 + Y前进) ---
 MovL H_P3                       // 到倒水位置
-Wait 2s                         // 倒水延时
+Wait 5s                         // 倒水延时
 // --- P4: 退避 → 回 P1 ---
 MovL H_P4                       // → 预倒水点 (退避)
 Wait 1s
@@ -136,7 +136,7 @@ MovL C_P1                       // 到抓取点
 SocketSendStr('GRIP')           // → PC: 灵巧手 GRIP (夹紧)
 Wait 1s
 MovL C_P3                       // 到递杯位置
-Wait 1s
+Wait 3s
 
 // ================================================================
 // [6] Phase D: HandInCup 判定 (v4 新增)

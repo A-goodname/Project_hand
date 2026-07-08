@@ -68,7 +68,7 @@ MovL H_P4                       // → 预倒水点 (安全上升)
 Wait 1s
 // --- P3: 移动到倒水点 ---
 MovL H_P3                       // 到倒水位置
-Wait 2s                         // 倒水延时
+Wait 5s                         // 倒水延时
 // --- P4: 先升回安全高度再回 P1 ---
 MovL H_P4                       // → 预倒水点 (安全上升)
 Wait 1s
@@ -100,7 +100,7 @@ MovL C_P1                       // 到抓取点
 SocketSendStr('GRIP')           // → 本机: 灵巧手 GRIP (夹紧)
 Wait 1s
 MovL C_P3                       // 到递杯位置
-Wait 2s                         // 等人取杯
+Wait 3s                         // 等人取杯
 MovL C_P1                       // 回到抓取点
 SocketSendStr('RELEASE')        // → 本机: 灵巧手 RELEASE (释放)
 Wait 1s
