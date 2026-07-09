@@ -2,166 +2,200 @@
 """
 模板项目名称 (中文注释 + 英文标点规范)
 ======================================
-功能描述: 本次任务的具体功能
+功能描述: 本次任务的具体功能.
 
-标点声明: 本文件遵循英文标点规范, 注释中使用的句号为 `.` 而非 `.`,
-          逗号为 `,` 而非 `,`, 冒号为 `:` 而非 `:`, 不得出现中文全角标点.
+使用说明:
+  1. 连接硬件设备 (相机/串口等)
+  2. 修改配置文件中的 host / port / serial 等参数
+  3. 运行 python path/to/this_script.py
+  4. 按 'q' 退出, Ctrl+C 中断
 
 输入:
-  - input_file_1   : 说明
-  - input_file_2   : 说明
+  - config.yaml          : 模块配置 (相机 / 模型 / 检测参数)
+  - estun_config.yaml    : 机器人 / 灵巧手 / 偏移配置
 
 输出:
-  - output_file_1  : 说明
-  - output_file_2  : 说明
+  - TCP 位姿数据          : 发送至机器人的目标位姿
+  - 实时画面               : OpenCV 窗口显示检测结果
+  - logs/*.log            : 运行日志 (可选)
 
-流程:
-  1. Step 1 说明
-  2. Step 2 说明
-  3. Step 3 说明
-
-架构:
-  - 辅助函数: 纯函数, 无副作用
-  - 功能函数: 封装主要业务逻辑
-  - 主函数:   按步骤串联完整流程
+完整流程:
+  Phase 0 (可选):   打招呼 / 初始化
+  Phase A (Init):   接收机器人初始位姿
+  Phase B (Detect): 视觉检测 → 位姿计算 → 发送
+  Phase C (Command): TCP 指令循环
 """
 
 import os
+import socket
 import sys
-import csv
-import json
-from datetime import datetime
-
+import threading
+import time
+from pathlib import Path
 
 import cv2
 import numpy as np
 import yaml
 
 
+# ---- 将项目根目录加入 sys.path ----
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+# ---- 导入自定义包 ----
+from Estun.utils_shared import (
+    init_hand, is_hand_available, disable_hand,
+    grip_object, release_object,
+)
+
+# ---- 全局变量 ----
+stop_event = threading.Event()
+_hand_available = False
+
+
 # ---- 加载配置 ----
-_config_path = "config.yaml"
-with open(_config_path, "r", encoding="utf-8") as f:
+_cfg_path = os.path.join(_project_root, "ModuleName", "config.yaml")
+with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
-# 提取配置项 (使用大写变量或 _cfg 前缀)
-SAVE_DIR = _cfg.get("save_dir", "output")
-INPUT_DIR = _cfg.get("input_dir", "data")
+_estun_cfg_path = os.path.join(_project_root, "Estun", "estun_config.yaml")
+if not os.path.exists(_estun_cfg_path):
+    print(f"[FATAL] ESTUN 配置文件未找到: {_estun_cfg_path}")
+    sys.exit(1)
+with open(_estun_cfg_path, "r", encoding="utf-8") as f:
+    _cfg_estun = yaml.safe_load(f)["estun"]
+
+HOST = _cfg_estun["tcp_server"]["host"]
+PORT = _cfg_estun["tcp_server"]["port"]
+HAND_PORT = _cfg_estun["hand"]["port"]
 
 
 # =============================================================
-# 辅助函数
+# 辅助函数 (纯函数, 无副作用)
 # =============================================================
 
-def helper_function_1(param1, param2):
+def helper_function(param1, param2):
     """
-    辅助函数 1 的功能描述
+    辅助函数的功能描述.
 
     参数:
-        param1 : 类型, 说明
-        param2 : 类型, 说明
+        param1 : float, 说明
+        param2 : float, 说明
 
     返回:
-        类型, 说明
+        float, 计算结果
     """
-    result = param1 + param2
-    return result
-
-
-def helper_function_2(param):
-    """
-    辅助函数 2 的功能描述
-    参数:
-        param : 类型, 说明
-
-    返回:
-        类型, 说明
-    """
-    processed = param * 2
-    return processed
+    return param1 + param2
 
 
 # =============================================================
-# 功能模块: 数据加载
+# 功能模块: 示例类
 # =============================================================
 
-def load_data(file_path):
+class ExampleProcessor:
     """
-    从指定路径加载数据
+    示例处理器 — 封装某阶段业务逻辑.
 
-    参数:
-        file_path : str, 文件路径
-
-    返回:
-        dict, 加载的数据
+    使用:
+        processor = ExampleProcessor(config, callback)
+        processor.run()
     """
-    print("[INFO] 加载数据: %s" % file_path)
-    data = {}
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
+
+    def __init__(self, config, frame_callback=None):
+        """
+        参数:
+            config          : dict, 配置字典
+            frame_callback  : callable or None, 帧获取回调 () -> np.ndarray | None
+        """
+        self.config = config
+        self.get_frame = frame_callback
+        self._running = False
+
+    def run(self):
+        """主循环 (阻塞)."""
+        self._running = True
+        print("[INFO] ExampleProcessor 启动")
+        try:
+            while self._running and not stop_event.is_set():
+                frame = self.get_frame() if self.get_frame else None
+                if frame is None:
+                    time.sleep(0.05)
                     continue
-                parts = line.split(",")
-                key = int(parts[0])
-                values = [float(v) for v in parts[1:]]
-                data[key] = values
-        print("[INFO] 加载了 %d 条数据" % len(data))
+                # 处理帧...
+        except KeyboardInterrupt:
+            print("[INFO] 用户中断")
+        finally:
+            self._cleanup()
+
+    def stop(self):
+        """安全停止."""
+        self._running = False
+
+    def _cleanup(self):
+        """资源清理."""
+        print("[INFO] ExampleProcessor 已停止")
+
+
+# =============================================================
+# 功能模块: TCP 客户端处理 (daemon 线程)
+# =============================================================
+
+def handle_client(conn, addr):
+    """
+    TCP 客户端处理入口 (在 daemon 线程中运行).
+
+    参数:
+        conn : socket, 客户端连接
+        addr : (str, int), 客户端地址
+    """
+    print(f"[INFO] 客户端已连接: {addr}")
+    try:
+        # ---- Phase A: 接收初始位姿 ----
+        conn.settimeout(5.0)
+        data = conn.recv(1024)
+        if not data:
+            print("[WARN] 机器人未发送初始位姿, 断开连接", flush=True)
+            return
+        print(f"[INFO] 收到初始位姿: {data.decode('utf-8').strip()}", flush=True)
+
+        # ---- Phase B: 检测 → 发送位姿 ----
+        # ... 视觉检测 + 位姿计算 ...
+        # msg = pack_three(p1, p2, p3)
+        # conn.sendall(msg.encode("utf-8"))
+
+        # ---- Phase C: 指令循环 ----
+        conn.settimeout(2.0)
+        while not stop_event.is_set():
+            try:
+                data = conn.recv(1024)
+            except socket.timeout:
+                continue
+            if not data:
+                print("[INFO] 连接已关闭", flush=True)
+                break
+            cmd = data.decode("utf-8").strip().upper()
+            print(f"[RECV] {cmd}", flush=True)
+
+            if cmd == "GRIP":
+                if _hand_available:
+                    grip_object()
+            elif cmd == "RELEASE":
+                if _hand_available:
+                    release_object()
+            else:
+                print(f"[INFO] 未知指令: {cmd}", flush=True)
+
+    except ConnectionResetError:
+        print(f"[INFO] 连接重置: {addr}", flush=True)
     except Exception as e:
-        print("[ERROR] 加载失败: %s" % str(e))
-    return data
-
-
-# =============================================================
-# 功能模块: 核心处理
-# =============================================================
-
-def process_data(data, config):
-    """
-    核心数据处理
-
-    参数:
-        data   : dict, 输入数据
-        config : dict, 配置参数
-
-    返回:
-        list, 处理结果列表
-    """
-    results = []
-    for key, values in data.items():
-        print("  [INFO] 处理 #%d ..." % key)
-        processed = helper_function_1(values[0], values[1])
-        results.append({
-            "index": key,
-            "processed": processed,
-        })
-    return results
-
-
-# =============================================================
-# 功能模块: 结果保存
-# =============================================================
-
-def save_results(save_dir, results, metadata):
-    """
-    保存结果到 YAML 文件
-
-    参数:
-        save_dir : str, 保存目录
-        results  : list, 结果列表
-        metadata : dict, 附加元数据
-    """
-    os.makedirs(save_dir, exist_ok=True)
-
-    output = {
-        "metadata": metadata,
-        "results": results,
-    }
-
-    output_path = os.path.join(save_dir, "result.yaml")
-    with open(output_path, "w", encoding="utf-8") as f:
-        yaml.dump(output, f, default_flow_style=None, allow_unicode=True, sort_keys=False)
-    print("[DONE] 结果已保存: %s" % output_path)
+        print(f"[ERROR] 客户端处理异常: {e}", flush=True)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        print(f"[INFO] 客户端已断开: {addr}", flush=True)
 
 
 # =============================================================
@@ -169,43 +203,81 @@ def save_results(save_dir, results, metadata):
 # =============================================================
 
 def main():
+    global _hand_available
+
     print("=" * 60)
     print("  模板项目名称")
-    print("  配置: config_path=%s" % _config_path)
     print("=" * 60)
 
-    # ---- [Step 1] 加载输入数据 ----
-    print("[INFO] Step 1: 加载数据...")
-    input_file = os.path.join(INPUT_DIR, "input.csv")
-    if not os.path.exists(input_file):
-        print("[ERROR] 输入文件不存在: %s" % input_file)
-        return
+    # ---- [Init 1] 加载标定 ----
+    # T_cam2ee = load_calibration(CALIB_PATH)
 
-    data = load_data(input_file)
-    if not data:
-        print("[ERROR] 数据为空")
-        return
+    # ---- [Init 2] 灵巧手 ----
+    print(f"\n[INIT] 灵巧手...")
+    init_hand(hand_port=HAND_PORT, initial_gesture="RESET")
+    _hand_available = is_hand_available()
 
-    # ---- [Step 2] 执行核心处理 ----
-    print("[INFO] Step 2: 执行数据处理...")
-    results = process_data(data, _cfg)
-    print("[INFO] 处理完成, 共 %d 条结果" % len(results))
+    # ---- [Init 3] 相机 / 检测器 ----
+    # detector = SomeDetector(config_dict=_cfg)
 
-    # ---- [Step 3] 保存结果 ----
-    print("[INFO] Step 3: 保存结果...")
-    metadata = {
-        "num_samples": len(results),
-        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-    }
-    save_results(SAVE_DIR, results, metadata)
+    # ---- [Init 4] TCP 服务器 (非阻塞) ----
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.setblocking(False)
+    server.bind((HOST, PORT))
+    server.listen(5)
+    print(f"\n[INFO] 服务器已启动: {HOST}:{PORT}")
+    print("[INFO] 等待机器人连接...", flush=True)
 
-    # ---- 打印摘要 ----
-    print()
-    print("=" * 60)
-    print("  处理完成")
-    print("  输入条数: %d" % len(data))
-    print("  输出条数: %d" % len(results))
-    print("=" * 60)
+    cv2.namedWindow("Window Title", cv2.WINDOW_NORMAL)
+
+    # ---- 主循环 ----
+    running = True
+    try:
+        while running:
+            # ---- 获取帧 + 检测 + 可视化 ----
+            # color_image, depth_frame = detector.get_frames()
+            # ... 检测逻辑 ...
+            # cv2.imshow("Window Title", display_img)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                print("\n[INFO] 用户按 q 退出", flush=True)
+                stop_event.set()
+                running = False
+                break
+
+            # ---- 非阻塞 accept ----
+            try:
+                conn, addr = server.accept()
+            except BlockingIOError:
+                continue
+
+            print(f"\n[TCP] 客户端连接: {addr}")
+            t = threading.Thread(
+                target=handle_client,
+                args=(conn, addr),
+                daemon=True,
+            )
+            t.start()
+            print("[TCP] 等待下一次连接...", flush=True)
+
+    except KeyboardInterrupt:
+        print("\n[INFO] 键盘中断 (Ctrl+C)")
+    except Exception as e:
+        print(f"[ERROR] 服务器异常: {e}")
+    finally:
+        # ---- 资源清理 ----
+        cv2.destroyAllWindows()
+        print("\n[INFO] 正在清理资源...")
+        server.close()
+        # detector.pipeline.stop()
+        if _hand_available:
+            try:
+                disable_hand()
+            except Exception:
+                pass
+        print("[INFO] 程序已退出", flush=True)
 
 
 if __name__ == "__main__":
