@@ -58,5 +58,50 @@
         "pos_axis_7": 0,
         "pos_axis_8": 2470,
         "pos_axis_9": 4095
+    },
+    {
+        "name": "HAND_SHAKE",
+        "pos_axis_1": 4095,
+        "pos_axis_10": 2872,
+        "pos_axis_11": 0,
+        "pos_axis_12": 0,
+        "pos_axis_2": 4095,
+        "pos_axis_3": 1356,
+        "pos_axis_4": 0,
+        "pos_axis_5": 3563,
+        "pos_axis_6": 3324,
+        "pos_axis_7": 0,
+        "pos_axis_8": 3138,
+        "pos_axis_9": 4095
+    },
+    {
+        "name": "Hello_1",
+        "pos_axis_1": 4095,
+        "pos_axis_10": 4095,
+        "pos_axis_11": 0,
+        "pos_axis_12": 0,
+        "pos_axis_2": 0,
+        "pos_axis_3": 1595,
+        "pos_axis_4": 0,
+        "pos_axis_5": 4095,
+        "pos_axis_6": 4095,
+        "pos_axis_7": 0,
+        "pos_axis_8": 4095,
+        "pos_axis_9": 4095
+    },
+    {
+        "name": "Hello_2",
+        "pos_axis_1": 4095,
+        "pos_axis_10": 2154,
+        "pos_axis_11": 0,
+        "pos_axis_12": 0,
+        "pos_axis_2": 0,
+        "pos_axis_3": 1595,
+        "pos_axis_4": 0,
+        "pos_axis_5": 2632,
+        "pos_axis_6": 2739,
+        "pos_axis_7": 0,
+        "pos_axis_8": 2473,
+        "pos_axis_9": 4095
     }
 ]

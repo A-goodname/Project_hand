@@ -52,7 +52,7 @@ import yaml
 import cv2
 import numpy as np
 
-from RealSense_R.realsense_shared import BaseRealSenseDetector, detect_red_tape
+from RealSense.realsense_shared import BaseRealSenseDetector, detect_red_tape
 
 # ---- 加载 EyeToHand 配置 ----
 _cfg_path = os.path.join(_eye_to_hand_dir, "config.yaml")

@@ -41,7 +41,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from RealSense_R.realsense_shared import BaseRealSenseDetector
+from RealSense.realsense_shared import BaseRealSenseDetector
 
 
 # ============================================================

@@ -3,7 +3,7 @@
 ## 系统架构
 
 ```text
-Camera A (眼在手上, rs.align)      Camera B (眼在手外, 手动像素映射)
+Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
         ↓                                    ↓
   Handle+Cup 6D 检测                   PersonDetector (人体X)
         ↓                                    ↓
@@ -110,11 +110,11 @@ Estun/                               ← 顶层入口 (单相机)
   ├── estun_epiceye_run.py           ← EpicEye 单次瓶身
   └── utils_shared.py                ← 共享坐标变换+灵巧手
 
-RealSense/  (新相机, rs.align)       ← Camera A 检测模块
+RealSense_R/  (旧相机, 手动像素映射) ← Camera A 检测模块
   ├── test_6D.py / test_handle_6D.py / test_cup_6D.py
   └── realsense_shared.py            ← BaseRealSenseDetector
 
-RealSense_R/  (旧相机, 手动像素映射) ← Camera B 基类
+RealSense/  (新相机, rs.align)       ← Camera B 基类
   └── realsense_shared.py            ← BaseRealSenseDetector
 
 EyeToHand/                           ← 眼在手外模块

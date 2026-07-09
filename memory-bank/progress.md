@@ -55,6 +55,10 @@
 - [x] USB 串口通信 / 手势动作 / 速度控制 / 使能
 - [x] `init_hand()` 使能重试
 - [x] `is_hand_available()` 函数
+- [x] **手势扩展**: HAND_SHAKE(19) / HELLO_1(20) / HELLO_2(21) (2026-07-08)
+- [x] **压力检测**: `get_pressure()` / `wait_for_pressure()` / `wait_for_pressure_release()` (2026-07-08)
+  - 默认检测手背 (5x5=25 触点)，实测标定: 无接触=0, 轻微接触=150
+  - 阈值: 抓握>100, 松手<20 (uint8 原始值)
 
 ### 通信协议
 - [x] `pack_three` `<>[]{}` 三括号标记
@@ -64,7 +68,7 @@
 - [x] **Orchestrator CRP** — `handlepluscup-orchestrator.crp` + `estun_handle_cup_code_orchestrator.txt` (P4 Y后退 + HandInCup 判定)
 
 ### 双相机体系
-- [x] Serial 绑定: Camera A (`819612071851`, RealSense rs.align) + Camera B (`342222071364`, RealSense_R)
+- [x] Serial 绑定: Camera A (`342222071364`, RealSense_R 手动像素映射) + Camera B (`819612071851`, RealSense rs.align)
 - [x] `EyeToHand/` 眼在手外模块:
   - `person_detector.py`: PersonDetector + PersonStabilizer ✅
   - `detector.py`: `load_calibration()` / `camera_x_to_base_x()` 工具 ✅
@@ -99,6 +103,8 @@
 ### 📋 待完成 (非硬件)
 - [ ] HandInCup 有遮挡实测 (灵巧手遮挡杯把场景)
 - [ ] Orchestrator 机器人端 .crp 适配新指令 (READY/CONTINUE/ABORT)
+- [ ] 打招呼 .crp 接口对接 (等同事完成 .crp 后接入 PC 端手势+压力检测)
+- [ ] 打招呼协议信号: Person检测→开始打招呼、握手完成→继续
 
 ## 已知问题
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射

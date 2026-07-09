@@ -68,6 +68,9 @@ class Gesture(Enum):
     GRIP = 16       # 握住 (如握住水瓶/水杯)
     GRIPDONE = 17    # 握住完成 (如水瓶被完全握住时的位姿)
     PREGRIP = 18     # 握住预备 (如接近水瓶时的位姿)
+    HAND_SHAKE = 19  # 握手
+    HELLO_1 = 20     # 挥手阶段1 (手指并拢)
+    HELLO_2 = 21     # 挥手阶段2 (手指微弯)
     EXIT = 99       # 退出
 
 
@@ -248,6 +251,42 @@ class KinematicsConverter:
             4095,  # J8 Pinky Ab/Ad (axis_9)
             2520,  # J9 Pinky PIP (axis_10)
         ],
+        Gesture.HAND_SHAKE.value: [
+            4095,  # J0 Thumb Roll (axis_1)
+            4095,  # J1 Thumb Ab/Ad (axis_2)
+            1356,  # J2 Thumb MCP (axis_3)
+            0,  # J3 Index Ab/Ad (axis_4)
+            3563,  # J4 Index PIP (axis_5)
+            3324,  # J5 Middle PIP (axis_6)
+            0,  # J6 Ring Ab/Ad (axis_7)
+            3138,  # J7 Ring PIP (axis_8)
+            4095,  # J8 Pinky Ab/Ad (axis_9)
+            2872,  # J9 Pinky PIP (axis_10)
+        ],
+        Gesture.HELLO_1.value: [
+            4095,  # J0 Thumb Roll (axis_1)
+            0,  # J1 Thumb Ab/Ad (axis_2)
+            1595,  # J2 Thumb MCP (axis_3)
+            0,  # J3 Index Ab/Ad (axis_4)
+            4095,  # J4 Index PIP (axis_5)
+            4095,  # J5 Middle PIP (axis_6)
+            0,  # J6 Ring Ab/Ad (axis_7)
+            4095,  # J7 Ring PIP (axis_8)
+            4095,  # J8 Pinky Ab/Ad (axis_9)
+            4095,  # J9 Pinky PIP (axis_10)
+        ],
+        Gesture.HELLO_2.value: [
+            4095,  # J0 Thumb Roll (axis_1)
+            0,  # J1 Thumb Ab/Ad (axis_2)
+            1595,  # J2 Thumb MCP (axis_3)
+            0,  # J3 Index Ab/Ad (axis_4)
+            2632,  # J4 Index PIP (axis_5)
+            2739,  # J5 Middle PIP (axis_6)
+            0,  # J6 Ring Ab/Ad (axis_7)
+            2473,  # J7 Ring PIP (axis_8)
+            4095,  # J8 Pinky Ab/Ad (axis_9)
+            2154,  # J9 Pinky PIP (axis_10)
+        ],
     }
 
     @classmethod
@@ -298,6 +337,9 @@ GESTURE_NAMES: Dict[Gesture, str] = {
     Gesture.GRIP:    "握住",
     Gesture.GRIPDONE: "握住完成",
     Gesture.PREGRIP:  "握住预备",
+    Gesture.HAND_SHAKE: "握手",
+    Gesture.HELLO_1: "挥手1",
+    Gesture.HELLO_2: "挥手2",
 }
 
 
@@ -418,6 +460,142 @@ class OmniHandGesture:
         """读取全部关节温度 (C)"""
         return self.serial.read_all_temp()
 
+    # ---- 触觉传感器 (压力检测) ----
+
+    def read_all_sensors(self) -> dict:
+        """
+        一次性读取全部 7 个触觉传感器
+
+        返回:
+            {
+                "thumb":  List[List[int]],  # 拇指 4x4
+                "index":  List[List[int]],  # 食指 4x4
+                "middle": List[List[int]],  # 中指 4x4
+                "ring":   List[List[int]],  # 无名指 4x4
+                "little": List[List[int]],  # 小指 4x4
+                "palm":   List[List[int]],  # 手心 5x5
+                "back":   List[List[int]],  # 手背 5x5
+            }
+        """
+        g1 = self.serial.read_all_sensor_group_1()
+        g2 = self.serial.read_all_sensor_group_2()
+        g3 = self.serial.read_all_sensor_group_3()
+        return {
+            "thumb":  g1["thumb"],
+            "index":  g1["index"],
+            "middle": g1["middle"],
+            "ring":   g2["ring"],
+            "little": g2["little"],
+            "palm":   g3["palm"],
+            "back":   g3["back"],
+        }
+
+    # 可选传感器名称列表
+    ALL_SENSOR_NAMES = ["thumb", "index", "middle", "ring", "little", "palm", "back"]
+
+    def get_pressure(self, *sensor_names: str) -> int:
+        """
+        读取指定触觉传感器的压力原始值总和 (uint8 原始值, 无量纲)
+
+        参数:
+            sensor_names: 传感器名称, 可选 "thumb"/"index"/"middle"/"ring"/"little"/"palm"/"back",
+                          不传则返回全部传感器总和
+
+        返回:
+            指定传感器压力原始值总和 (0 表示无接触)
+        """
+        sensors = self.read_all_sensors()
+        names = sensor_names if sensor_names else self.ALL_SENSOR_NAMES
+        total = 0
+        for name in names:
+            matrix = sensors.get(name)
+            if matrix is None:
+                print(f"  [警告] 未知传感器: {name}, 可用: {self.ALL_SENSOR_NAMES}")
+                continue
+            for row in matrix:
+                total += sum(row)
+        return total
+
+    def get_total_pressure(self) -> int:
+        """所有传感器压力值总和 (兼容旧接口)"""
+        return self.get_pressure()
+
+    def wait_for_pressure(
+        self,
+        threshold: int = 100,
+        timeout: float = 10.0,
+        poll_interval: float = 0.1,
+        sensor_filter: Optional[list] = None,
+    ) -> bool:
+        """
+        阻塞等待压力超过阈值 (有人握住灵巧手)
+
+        参数:
+            threshold: 压力阈值, 默认 100 (手背 25 触点原始值之和)
+            timeout: 超时时间 (秒, 默认 10.0)
+            poll_interval: 轮询间隔 (秒, 默认 0.1)
+            sensor_filter: 关注的传感器列表, 默认只检测手背 ["back"],
+                           传 None 或 [] 检测全部传感器
+
+        返回:
+            True = 检测到压力, False = 超时
+        """
+        if sensor_filter is None:
+            sensor_filter = ["back"]
+        sensor_label = ", ".join(sensor_filter) if sensor_filter else "全部"
+
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                total = self.get_pressure(*sensor_filter)
+                if total > threshold:
+                    print(f"  [压力检测] 检测到压力 ({sensor_label}): {total} > {threshold}")
+                    return True
+            except Exception as e:
+                print(f"  [压力检测] 读取异常: {e}")
+            _time.sleep(poll_interval)
+        print(f"  [压力检测] 超时 ({timeout}s 内 {sensor_label} 未检测到压力 > {threshold})")
+        return False
+
+    def wait_for_pressure_release(
+        self,
+        threshold: int = 20,
+        timeout: float = 10.0,
+        poll_interval: float = 0.1,
+        sensor_filter: Optional[list] = None,
+    ) -> bool:
+        """
+        阻塞等待压力低于阈值 (松手)
+
+        参数:
+            threshold: 压力阈值, 默认 20 (手背 25 触点原始值之和)
+            timeout: 超时时间 (秒, 默认 10.0)
+            poll_interval: 轮询间隔 (秒, 默认 0.1)
+            sensor_filter: 关注的传感器列表, 默认只检测手背 ["back"],
+                           传 None 或 [] 检测全部传感器
+
+        返回:
+            True = 已松手, False = 超时
+        """
+        if sensor_filter is None:
+            sensor_filter = ["back"]
+        sensor_label = ", ".join(sensor_filter) if sensor_filter else "全部"
+
+        import time as _time
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            try:
+                total = self.get_pressure(*sensor_filter)
+                if total < threshold:
+                    print(f"  [压力检测] 已松手 ({sensor_label}): {total} < {threshold}")
+                    return True
+            except Exception as e:
+                print(f"  [压力检测] 读取异常: {e}")
+            _time.sleep(poll_interval)
+        print(f"  [压力检测] 超时 ({timeout}s 内 {sensor_label} 压力未降至 < {threshold})")
+        return False
+
     # ---- 手势执行 ----
 
     def do_gesture(self, gesture: Gesture, delay: float = 1.5) -> dict:
@@ -526,6 +704,9 @@ def print_menu():
         (16, "握住"),
         (17, "握住完成"),
         (18, "握住预备"),
+        (19, "握手"),
+        (20, "挥手1"),
+        (21, "挥手2"),
         (99, "退出程序"),
     ]
     for num, name in items:
@@ -538,6 +719,8 @@ def print_menu():
     print("    p  - 读取当前位置")
     print("    c  - 读取电流")
     print("    t  - 读取温度")
+    print("    pr - 读取触觉压力")
+    print("    pw - 压力检测测试 (等待抓握→松手)")
     print()
 
 
@@ -604,6 +787,40 @@ def interactive_mode(port: str = "COM5"):
             elif cmd == "t":
                 temp = hand.read_temp()
                 print(f"  各关节温度: {[f'{t}C' for t in temp]}")
+                continue
+
+            elif cmd == "pr":
+                try:
+                    sensors = hand.read_all_sensors()
+                    total = hand.get_total_pressure()
+                    print(f"  总压力: {total}")
+                    for name in ["thumb", "index", "middle", "ring", "little"]:
+                        matrix = sensors[name]
+                        row_sums = [sum(row) for row in matrix]
+                        print(f"    {name}: {row_sums} (sum={sum(row_sums)})")
+                    for name in ["palm", "back"]:
+                        matrix = sensors[name]
+                        row_sums = [sum(row) for row in matrix]
+                        print(f"    {name}: {row_sums} (sum={sum(row_sums)})")
+                except Exception as e:
+                    print(f"  [错误] 读取压力失败: {e}")
+                continue
+
+            elif cmd == "pw":
+                print("  等待抓握... (按 Ctrl+C 取消)")
+                try:
+                    if hand.wait_for_pressure(threshold=200, timeout=30.0):
+                        print("  >>> 检测到抓握! 保持 2 秒...")
+                        time.sleep(2.0)
+                        print("  等待松手...")
+                        if hand.wait_for_pressure_release(threshold=100, timeout=30.0):
+                            print("  >>> 已松手!")
+                        else:
+                            print("  [超时] 未检测到松手")
+                    else:
+                        print("  [超时] 未检测到抓握")
+                except KeyboardInterrupt:
+                    print("\n  取消")
                 continue
 
             # 数字命令

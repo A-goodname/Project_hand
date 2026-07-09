@@ -16,7 +16,7 @@ EyeToHand 人体位置检测
   按 'q' 退出
 
 参考:
-  - 继承模式: RealSense_R/test_3D.py (直接继承 BaseRealSenseDetector)
+  - 继承模式: RealSense/test_3D.py (直接继承 BaseRealSenseDetector)
   - 配置入口: EyeToHand/config.yaml
 """
 
@@ -31,7 +31,7 @@ import yaml
 import cv2
 import numpy as np
 
-from RealSense_R.realsense_shared import BaseRealSenseDetector, PositionSmoother
+from RealSense.realsense_shared import BaseRealSenseDetector, PositionSmoother
 
 
 # ============================================================

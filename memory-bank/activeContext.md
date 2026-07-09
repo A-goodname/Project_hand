@@ -2,12 +2,41 @@
 
 ## 当前焦点
 
-**Orchestrator 联调准备** — P4 Y 后退 CRP 已完成 (handlepluscup-orchestrator.crp)。
-RealSense_R 偏移重测定 + Cup 检测修复 + P4 Y 后退全部完成，进入双相机全流程联调阶段。
+**双相机对调完成** — Camera A (眼在手上) 换为 RealSense_R (旧相机, 手动像素映射),
+Camera B (眼在手外) 换为 RealSense (新相机, rs.align). 等硬件验证.
 
 ## 最近变更
 
-1. **RealSense_R Cup 偏移测定** (2026-07-07):
+1. **双相机对调** (2026-07-08):
+   - Camera A (眼在手上): `RealSense/` (rs.align, serial 819612071851) → `RealSense_R/` (手动像素映射, serial 342222071364)
+   - Camera B (眼在手外): `RealSense_R/` (手动像素映射, serial 342222071364) → `RealSense/` (rs.align, serial 819612071851)
+   - EyeToHand/ 3 文件 import 路径: `RealSense_R.` → `RealSense.`
+   - Orchestrator/main.py: Camera B serial → RealSense, Camera A config → RealSense_R
+   - Orchestrator/state_machine.py: Handle+Cup 检测器 → RealSense_R
+   - EyeToHand/D435i_info.yaml serial: 342222071364 → 819612071851
+   - 原因: 示教重新完成, 旧相机更适合眼在手上 (已标定偏移)
+
+2. **Omnihand 手势扩展** (2026-07-08):
+   - Gesture 枚举新增 `HAND_SHAKE(19)`, `HELLO_1(20)`, `HELLO_2(21)`
+   - DIRECT_POSITIONS 同步 actlist.json 的 3 个新手势编码器
+   - actlist.json 中 "Handshake" 改名 "HAND_SHAKE" 匹配枚举
+
+2. **Omnihand 压力检测** (2026-07-08):
+   - 新增 `get_pressure(*sensor_names)` — 按传感器名读取压力原始值总和 (uint8, 无量纲)
+   - 新增 `get_total_pressure()` — 全部 130 触点总和 (兼容旧接口)
+   - 新增 `wait_for_pressure(threshold=100, sensor_filter=["back"])` — 阻塞等待抓握
+   - 新增 `wait_for_pressure_release(threshold=20, sensor_filter=["back"])` — 阻塞等待松手
+   - 默认检测手背 (5x5=25 触点)，实测标定: 无接触=0, 轻微接触=150
+   - 交互菜单新增 `pr` (压力读数) / `pw` (压力等待测试) 命令
+
+3. **打招呼握手流程设计** (2026-07-08):
+   - 流程: Home_1(观察) → 检测到人 → 打招呼位姿 → Hello_1↔Hello_2 ×2~3 → Paper → 压力检测 → Handshake(2s) → 松手 → Paper → Home_2
+   - 机械臂运动由其他同事的 .crp 控制，PC 侧仅负责手势+压力检测+协议信号
+   - 打招呼位姿/Home_1/Home_2 均为预示教固定位姿
+   - 打招呼时人在门口，Cup 前人到桌边 — 人体位置变化通过 Camera B 检测到人坐在椅子上后触发抓取 (由其他同事实现)
+
+4. **RealSense_R Cup 偏移测定** (2026-07-07):
+   - (原有内容保持不变)
    - `t_cup_offset_left`: RealSense `[0.049, -0.070, 0.100]` → RealSense_R `[0.040, -0.060, 0.080]` (161033 final)
    - `t_cup_offset` (back): RealSense `[0.057, -0.010, 0.139]` → RealSense_R `[0.048, -0.009, 0.098]` (163920 final)
    - 旧值已注释保留，标注相机来源
@@ -55,13 +84,16 @@ RealSense_R 偏移重测定 + Cup 检测修复 + P4 Y 后退全部完成，进�
 9. **⚠️ 未解决问题**:
    - **EyeToHand 标定未实操**: scale/bias 为默认占位值
    - **递送参数未填入**: `delivery.Y_TEACH/Z_TEACH/ABC` 需示教
+   - **HandInCup 有遮挡未实测**: 灵巧手握住杯子后遮挡手腕+杯 bbox
+   - **打招呼 .crp 接口未确定**: 需与机器人端同事对齐协议信号
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
+| 🔴 P0 | **HandInCup 有遮挡实测** | 灵巧手遮挡杯把+手腕场景，验证 YOLOv8m+YOLOv8n-Pose 可行 |
 | 🔴 P0 | **Orchestrator 联调** | 双相机 + 机器人 + 灵巧手全流程 |
 | 🔴 P0 | **CRP 录入示教器** | 导入 handlepluscup-orchestrator.crp + 示教新增点位 |
-| 🟡 P1 | **HandInCup 有遮挡实测** | 灵巧手遮挡杯把场景 (无遮挡已通过) |
+| 🟡 P1 | **打招呼 .crp 接口对接** | 等同事完成 .crp 后接入 PC 端手势+压力检测 |
 | 🟡 P1 | **EyeToHand 标定** | 实操 calibrate.py, 填入 scale/bias |
 | 🟢 P2 | 填入递送参数 | delivery.Y_TEACH/Z_TEACH/ABC 示教 |

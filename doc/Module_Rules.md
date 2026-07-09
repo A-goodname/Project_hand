@@ -173,7 +173,7 @@
 
 存放路径: `EyeToHand/`
 
-- 外置固定相机 (RealSense D435i, serial 342222071364), 使用 `RealSense_R/` 基类 (手动像素映射, 内参损坏)
+- 外置固定相机 (RealSense D435i, serial 819612071851), 使用 `RealSense/` 基类 (rs.align, 内参完好)
 - 人体检测使用标准 YOLOv8 COCO person (class_id=0), 无需额外模型
 - 位姿稳定: `PersonStabilizer` 窗口稳定器 (window=10, pos_thresh=0.03m), 参考 `PoseStabilizer`
 - 坐标转换: `detector.py` 提供 `load_calibration()` / `camera_x_to_base_x()` 工具函数
@@ -193,7 +193,7 @@
   - 配置: `EyeToHand/config.yaml` → `hand_in_cup` 段
 - 配置入口: `EyeToHand/config.yaml`, `stabilizer` 段 (人体), `delivery` 段 (递送), `hand_in_cup` 段 (手杯检测)
 - `CalibrationDetector` 直接继承 `BaseRealSenseDetector`, 与 `person_detector.py` 共享同一相机绑定模式
-- 导入约定: 与 `RealSense_R/` 模块约定一致 (BaseRealSenseDetector + 手动像素映射)
+- 导入约定: 与 `RealSense/` 模块约定一致 (BaseRealSenseDetector + rs.align)
 
 ## Orchestrator 双相机流程编排
 
@@ -205,8 +205,8 @@
   - `state_machine.py`: `StateMachine` 引擎 + `IdleHandler` + `HandleGraspAndPourHandler` (含完整 TCP 协议 + HandInCup 判定)
   - `main.py`: 双相机主循环, PersonDetector / HandInCup 检测切换
 - **关键设计**:
-  - Camera A (眼在手上): `RealSense/` (rs.align, 内参完好的新相机)
-  - Camera B (眼在手外): `RealSense_R/` (手动像素映射, 内参损坏的旧相机)
+  - Camera A (眼在手上): `RealSense_R/` (手动像素映射, 内参损坏的旧相机)
+  - Camera B (眼在手外): `RealSense/` (rs.align, 内参完好的新相机)
   - 单 TCP Session 全流程: Phase A (初始位姿) → B (Handle) → C (指令循环+Cup) → D (HandInCup判定)
   - Cup P3 递送位姿: X 动态 (Camera B) + YZ/ABC 固定 (config 预示教)
   - 新协议指令: `READY`, `CONTINUE`, `ABORT`

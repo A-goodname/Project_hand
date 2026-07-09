@@ -31,7 +31,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入 ----
-from RealSense_R.realsense_shared import load_camera_serial  # Camera B (旧相机, 内参损坏)
+from RealSense.realsense_shared import load_camera_serial  # Camera B (新相机, rs.align)
 from Orchestrator.state_machine import (
     SharedContext,
     StateMachine,
@@ -59,14 +59,14 @@ def load_yaml(path):
 def main():
     print("=" * 60)
     print("  Orchestrator — 双相机全流程状态机")
-    print("  Camera A (眼在手上, rs.align): Handle + Cup 6D")
-    print("  Camera B (眼在手外): 人体检测 + Hand-in-cup")
+    print("  Camera A (眼在手上, 手动像素映射): Handle + Cup 6D")
+    print("  Camera B (眼在手外, rs.align): 人体检测 + Hand-in-cup")
     print("=" * 60)
     print()
 
     # ---- [1] 加载配置 ----
     print("[INFO] 加载配置...")
-    realsense_cfg = load_yaml("RealSense/config.yaml")         # Camera A (Handle+Cup, 新相机)
+    realsense_cfg = load_yaml("RealSense_R/config.yaml")         # Camera A (Handle+Cup, 旧相机)
     estun_cfg = load_yaml("Estun/estun_config.yaml")["estun"]
     eye_to_hand_cfg = load_yaml("EyeToHand/config.yaml")
     eye_to_hand_serial = load_camera_serial(

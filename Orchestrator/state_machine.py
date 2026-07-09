@@ -34,9 +34,9 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入 ----
-from RealSense.realsense_shared import rotation_matrix_to_euler_angles
-from RealSense.test_handle_6D import RealSenseHandle6DDetector
-from RealSense.test_cup_6D import RealSenseCup6DDetector
+from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
+from RealSense_R.test_handle_6D import RealSenseHandle6DDetector
+from RealSense_R.test_cup_6D import RealSenseCup6DDetector
 from EyeToHand.person_detector import PersonDetector
 from EyeToHand.detector import load_calibration, camera_x_to_base_x
 from EyeToHand.hand_in_cup import HandInCupDetector

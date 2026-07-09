@@ -61,7 +61,7 @@ pip install -r requirements.txt
 | `doc/Module_Rules.md` | 各硬件模块开发规则汇总 |
 | `doc/Handle_Process.md` | 把手检测流程及关键设计决策记录 |
 | `doc/Handle_Cup_Process.md` | **把手+水杯融合流程文档**，6 点位姿计算、共享 pipeline 架构、配置参数说明 |
-| `doc/Future_work.md` | 未来工作规划: 双相机体系 (眼在手上+眼在手外) |
+| `doc/Project_Workflow.md` | 完整项目流程文档 (双相机体系 + 通信协议 + 标定) |
 | `doc/Yolo_World.md` | YOLO-World 零样本检测配置与使用说明 |
 | `doc/Grip_Process.md` | 位姿转换流程文档（末端接触+工具偏移两阶段） |
 | `doc/Kettle_Training_Task.md` | 水壶检测模型微调详细流程 |
@@ -196,8 +196,8 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
            FALSE: 放回P1 → RELEASE → P2退避 → RESET → Home
 ```
 
-- **Camera A** (眼在手上, serial `819612071851`, `RealSense/` rs.align): Handle+Cup 6D 检测
-- **Camera B** (眼在手外, serial `342222071364`, `RealSense_R/`): 人体检测 + HandInCup 检测
+- **Camera A** (眼在手上, serial `342222071364`, `RealSense_R/` 手动像素映射): Handle+Cup 6D 检测
+- **Camera B** (眼在手外, serial `819612071851`, `RealSense/` rs.align): 人体检测 + HandInCup 检测
 - **Cup P3**: X = `scale × X_cam + bias` (Camera B 动态检测), YZ/ABC = config 预示教固定值
 - **HandInCup**: YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点), 连续 N 帧判定
 - **松手**: Robot wait 2s → RELEASE → HandInCup 判定后才松
@@ -215,7 +215,7 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
 - **扫描线分离**：按 `handle_side` 取最外段（right=最右段/left=最左段），底部+顶部双向剔除 x 中心偏离行
 - **Cup handle_side 模式**：`RealSense_R/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + 角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left
 - **P3 多角度示教**：`estun_config.yaml` 中 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30)，`pour_angle` 切换当前使用角度，加载自动转字符串键防整数键 bug
-- **双相机体系**：两台 RealSense D435i，Camera A (眼在手上, serial 819612071851, `RealSense/` rs.align) + Camera B (眼在手外, serial 342222071364, `RealSense_R/` 手动像素映射)
+- **双相机体系**：两台 RealSense D435i，Camera A (眼在手上, serial 342222071364, `RealSense_R/` 手动像素映射) + Camera B (眼在手外, serial 819612071851, `RealSense/` rs.align)
 - **Orchestrator 状态机**：2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR)，单 TCP Session 全流程，Handle+Cup 流程封装在 `HandleGraspAndPourHandler` 中
 - **Cup P3 递送位姿**：X 来自 Camera B 人体检测 + EyeToHand 标定 (`scale × X_cam + bias`)，YZ/ABC 来自 `EyeToHand/config.yaml` delivery 段预示教
 - **HandInCup 检测**：YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点)，2D 判定人手是否在杯把手附近，连续 N 帧确认；独立模块 `EyeToHand/hand_in_cup.py`
