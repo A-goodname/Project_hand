@@ -7,7 +7,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
         ↓                                    ↓
   Handle+Cup 6D 检测                   PersonDetector (人体X)
         ↓                                    ↓
-  手眼标定 (cam→ee)                    scale×X+bias → X_base
+  手眼标定 (cam→ee)                    全示教 delivery.X_TEACH
         ↓                                    ↓
   工具偏移补偿                              ──→ Cup P3 X
         ↓                               YZ/ABC ← config 预示教
@@ -70,7 +70,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 
 ### Cup P3 递送位姿模式
 
-- X: 动态 — `scale × X_cam + bias` (Camera B PersonDetector + EyeToHand 标定)
+- X: 全示教固定值 `delivery.X_TEACH` (3D→1D 人体标定工具就绪, 暂未接入)
 - Y, Z, A, B, C: 固定 — `EyeToHand/config.yaml` delivery 段预示教
 - 人体位置仅在 CUP 指令时取一次最新稳定值, PersonDetector 随后暂停
 
@@ -120,10 +120,10 @@ RealSense/  (新相机, rs.align)       ← Camera B 基类
 EyeToHand/                           ← 眼在手外模块
   ├── person_detector.py             ← PersonDetector (人体 X)
   ├── hand_in_cup.py                 ← HandInCupDetector (YOLOv8m+YOLOv8n-Pose)
-  ├── detector.py                    ← load_calibration / camera_x_to_base_x
-  ├── config.yaml                    ← Person + 递送 + HandInCup 配置
+  ├── detector.py                    ← load_calibration / person_to_base_x
+  ├── config.yaml                    ← Person + 递送(全示教) + HandInCup 配置
   └── calibration/
-      ├── calibrate.py               ← 1D 标定工具
-      └── result.yaml                ← scale/bias
+      ├── calibrate.py               ← 3D→1D 人体标定工具
+      └── result.yaml                ← a,b,c,d 标定参数
 
 EpicEye/   Omnihand/   calib_data/   ← 灰度相机 / 灵巧手 / 手眼标定

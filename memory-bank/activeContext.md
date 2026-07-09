@@ -82,8 +82,8 @@ Camera B (眼在手外) 换为 RealSense (新相机, rs.align). 等硬件验证.
    - 所有参数集中到 `EyeToHand/config.yaml` → `hand_in_cup` 段
 
 9. **⚠️ 未解决问题**:
-   - **EyeToHand 标定未实操**: scale/bias 为默认占位值
-   - **递送参数未填入**: `delivery.Y_TEACH/Z_TEACH/ABC` 需示教
+   - **EyeToHand 标定暂废弃**: 递送 XYZ/ABC 全部示教固定, 3D→1D 人体标定工具就绪待接入
+   - **递送参数未填入**: `delivery.X_TEACH/Y_TEACH/Z_TEACH/A_TEACH/B_TEACH/C_TEACH` 需示教
    - **HandInCup 有遮挡未实测**: 灵巧手握住杯子后遮挡手腕+杯 bbox
    - **打招呼 .crp 接口未确定**: 需与机器人端同事对齐协议信号
 
@@ -95,5 +95,5 @@ Camera B (眼在手外) 换为 RealSense (新相机, rs.align). 等硬件验证.
 | 🔴 P0 | **Orchestrator 联调** | 双相机 + 机器人 + 灵巧手全流程 |
 | 🔴 P0 | **CRP 录入示教器** | 导入 handlepluscup-orchestrator.crp + 示教新增点位 |
 | 🟡 P1 | **打招呼 .crp 接口对接** | 等同事完成 .crp 后接入 PC 端手势+压力检测 |
-| 🟡 P1 | **EyeToHand 标定** | 实操 calibrate.py, 填入 scale/bias |
+| 🟡 P1 | **EyeToHand 标定** | 实操 calibrate.py, 采集 person_3d→X_base, 拟合 a,b,c,d |
 | 🟢 P2 | 填入递送参数 | delivery.Y_TEACH/Z_TEACH/ABC 示教 |

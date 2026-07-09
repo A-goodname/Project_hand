@@ -48,7 +48,7 @@ pip install -r requirements.txt
 | `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
-| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、1D 标定工具、相机→基系 X 坐标转换、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+YOLOv8n-Pose) |
+| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、3D→1D 人体标定工具、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+YOLOv8n-Pose) |
 | `Orchestrator/` | **双相机流程编排**：2 状态状态机 (IDLE ↔ HANDLE_GRASP_AND_POUR)、单 TCP Session 全流程 (抓壶倒水→抓杯递送→HandInCup判定→松手退避)、双相机主循环 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
@@ -135,7 +135,7 @@ pip install -r requirements.txt
 - **P3 倒水角度切换** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` (10/15/20/30)
 - **P3 示教偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.back` / `.left` 各角度 `t_offset` 和 `r_abc`
 - **眼在手外人体检测** → 修改 `EyeToHand/config.yaml` 中的 `model`、`stabilizer`、`delivery.*` 参数
-- **眼在手外标定** → 运行 `EyeToHand/calibration/calibrate.py` 采集 N 点拟合 `scale`/`bias`
+- **眼在手外标定** → 运行 `EyeToHand/calibration/calibrate.py` 采集 N 点拟合 `a,b,c,d` (3D→1D 人体标定, 暂未接入)
 
 ## 核心流程
 
@@ -198,7 +198,7 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
 
 - **Camera A** (眼在手上, serial `342222071364`, `RealSense_R/` 手动像素映射): Handle+Cup 6D 检测
 - **Camera B** (眼在手外, serial `819612071851`, `RealSense/` rs.align): 人体检测 + HandInCup 检测
-- **Cup P3**: X = `scale × X_cam + bias` (Camera B 动态检测), YZ/ABC = config 预示教固定值
+- **Cup P3**: XYZ/ABC 全示教固定值 (暂废弃 Camera B 动态检测 X, 3D→1D 人体标定工具就绪待接入)
 - **HandInCup**: YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点), 连续 N 帧判定
 - **松手**: Robot wait 2s → RELEASE → HandInCup 判定后才松
 - 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py`
@@ -217,6 +217,6 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
 - **P3 多角度示教**：`estun_config.yaml` 中 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30)，`pour_angle` 切换当前使用角度，加载自动转字符串键防整数键 bug
 - **双相机体系**：两台 RealSense D435i，Camera A (眼在手上, serial 342222071364, `RealSense_R/` 手动像素映射) + Camera B (眼在手外, serial 819612071851, `RealSense/` rs.align)
 - **Orchestrator 状态机**：2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR)，单 TCP Session 全流程，Handle+Cup 流程封装在 `HandleGraspAndPourHandler` 中
-- **Cup P3 递送位姿**：X 来自 Camera B 人体检测 + EyeToHand 标定 (`scale × X_cam + bias`)，YZ/ABC 来自 `EyeToHand/config.yaml` delivery 段预示教
+- **Cup P3 递送位姿**：XYZ/ABC 来自 `EyeToHand/config.yaml` delivery 段全示教 (3D→1D 人体标定工具就绪, 暂未接入)
 - **HandInCup 检测**：YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点)，2D 判定人手是否在杯把手附近，连续 N 帧确认；独立模块 `EyeToHand/hand_in_cup.py`
 - **新协议指令**：`READY` (Robot→PC, 到达 P3 等待)、`CONTINUE` (PC→Robot, HandInCup=True 继续退避)、`ABORT` (PC→Robot, HandInCup=False 放回杯子)

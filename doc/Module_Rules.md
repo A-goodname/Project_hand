@@ -176,10 +176,11 @@
 - 外置固定相机 (RealSense D435i, serial 819612071851), 使用 `RealSense/` 基类 (rs.align, 内参完好)
 - 人体检测使用标准 YOLOv8 COCO person (class_id=0), 无需额外模型
 - 位姿稳定: `PersonStabilizer` 窗口稳定器 (window=10, pos_thresh=0.03m), 参考 `PoseStabilizer`
-- 坐标转换: `detector.py` 提供 `load_calibration()` / `camera_x_to_base_x()` 工具函数
-- 标定工具: `calibration/calibrate.py` — 1D 最小二乘线性回归 (N≥2 点, 建议 3-5 点, 范围尽量大), 红色胶带辅助检测
-  - 前置: 机械臂末端 YZ/ABC = 预示教递送值, 仅沿 X 移动
-  - 操作: 'c' 采集 → 'f' 拟合 → 's' 保存
+- 坐标转换: `detector.py` 提供 `person_to_base_x(x,y,z)` 工具函数 (3D→1D 人体标定)
+- 标定工具: `calibration/calibrate.py` — 3D→1D 人体标定 (人站不同位置, 拟合 person_3d_cam → X_base)
+  - 模型: `X_base = a·x_cam + b·y_cam + c·z_cam + d` (SVD 最小二乘, ≥3 点)
+  - 操作: 人站好 → 'c' 采集 (自动取稳定 person_3d_cam) → 输入示教 X_base → 'f' 拟合 → 's' 保存
+  - 注: 当前递送 X 使用 `delivery.X_TEACH` 示教固定值, 标定暂未接入 Orchestrator
 - 递送策略: YZ/ABC 预示教固定 + X 动态从人体检测获取 + **HandInCup 判定松手** (YOLOv8m+YOLOv8n-Pose)
 - HandInCup 检测器: `hand_in_cup.py` — 独立模块, 可单独测试 (`python EyeToHand/hand_in_cup.py`)
   - 模型: YOLOv8m (cup bbox class=41) + YOLOv8n-Pose (wrist kpt 9/10)

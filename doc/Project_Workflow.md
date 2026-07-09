@@ -35,11 +35,11 @@ Project_hand/
 ├── EyeToHand/             ← 眼在手外模块
 │   ├── person_detector.py ← 人体位置检测 (YOLOv8m COCO person)
 │   ├── hand_in_cup.py     ← 人手-杯把手重合检测 (YOLOv8m + YOLOv8n-Pose)
-│   ├── detector.py        ← load_calibration / camera_x_to_base_x
-│   ├── config.yaml        ← Person + Delivery + HandInCup 配置
+│   ├── detector.py        ← load_calibration / person_to_base_x
+│   ├── config.yaml        ← Person + Delivery(全示教) + HandInCup 配置
 │   └── calibration/
-│       ├── calibrate.py   ← 1D 最小二乘线性回归标定工具
-│       └── result.yaml    ← scale/bias 标定结果
+│       ├── calibrate.py   ← 3D→1D 人体标定工具
+│       └── result.yaml    ← a,b,c,d 标定参数
 ├── Estun/                 ← 机器人通信 + 灵巧手控制
 │   ├── estun_config.yaml  ← 主配置 (IP/端口/偏移/模式/P3示教)
 │   ├── utils_shared.py    ← 坐标变换 + 灵巧手控制函数
@@ -228,13 +228,12 @@ TCP 指令循环:
   PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GRIP
 
 CUP 指令触发:
-  1. 等待 Camera B 提供 Cup P3 的 X 坐标
-     (PersonDetector → scale×X_cam + bias → 基系 X)
-  2. YZ/ABC 来自 EyeToHand/config.yaml delivery 段 (预示教固定值)
-  3. PC 回复: <Cup_P1>[Cup_P2]{Cup_P3}
+  1. Cup P3 递送位姿 XYZ/ABC 全部来自 EyeToHand/config.yaml delivery 段 (全示教固定值)
+     (标定暂废弃, X/Y/Z/A/B/C 均由示教器确定)
+  2. PC 回复: <Cup_P1>[Cup_P2]{Cup_P3}
      P1: 抓取点 (back/left 分模式)
      P2: 预抓取点
-     P3: 递送点 (X 动态 + YZ/ABC 预示教)
+     P3: 递送点 (全示教固定)
 ```
 
 ### 3.4 阶段 D — HandInCup 判定 + 递送/放回
@@ -273,9 +272,8 @@ Camera A (眼在手上):
 
 Camera B (眼在手外):
   相机检测 → bbox 中心深度 → person_pos_cam (相机系 3D)
-    → T_cam_base (外置相机标定)
-    → person_pos_base.x = scale × X_cam + bias
-    → 递送 X = person_pos_base.x
+    → 人体检测触发信号 (检测到人 → 启动抓取流程)
+    → 递送位姿 XYZ/ABC 全示教固定 (暂废弃标定)
 ```
 
 ### 4.2 物体坐标系约定
@@ -413,14 +411,13 @@ stabilizer:
   window: 10
   pos_thresh: 0.03             # 3cm 稳定阈值
 delivery:
+  X_TEACH: 0.0                 # [必填] 递送 X
   Y_TEACH: 0.0                 # [必填] 递送 Y
   Z_TEACH: 0.0                 # [必填] 递送 Z
-  A_TEACH: 0.0
-  B_TEACH: 0.0
-  C_TEACH: 0.0
-calibration:
-  scale: 1.0                   # [待标定]
-  bias: 0.0                    # [待标定]
+  A_TEACH: 0.0                 # 递送 A
+  B_TEACH: 0.0                 # 递送 B
+  C_TEACH: 0.0                 # 递送 C
+# 注: 标定暂废弃, 递送位姿全部由示教确定
 hand_in_cup:
   cup_model: "model/yolov8m.pt"
   pose_model: "model/yolov8n-pose.pt"
@@ -447,26 +444,28 @@ hand_in_cup:
 
 ### 7.2 眼在手外标定 (Camera B)
 
-**工具**: `EyeToHand/calibration/calibrate.py` — 1D 最小二乘线性回归
+**工具**: `EyeToHand/calibration/calibrate.py` — 3D→1D 人体标定
 
-**原理**: 递送仅需基系 X 坐标, ±2cm 容错.
+**原理**: YZ/ABC 示教固定, 只需标定 person_3d_cam → X_base.
+拟合模型: `X_base = a·x_cam + b·y_cam + c·z_cam + d`
 
 ```
 采集:
-  1. 机械臂末端贴红色胶带
-  2. YZ/ABC 保持预示教值, 仅沿 X 移动
-  3. 机械臂移到 X_base = x1 → 相机检测胶带 X_cam_1
-  4. 机械臂移到 X_base = x2 → 相机检测胶带 X_cam_2
+  1. 人站在桌边位置 A (如左边)
+  2. 机械臂示教 Cup P3 递送位姿, 记录 X_base
+  3. 按 'c' → 终端输入 X_base → 自动配对 person_3d_cam
+  4. 换位置 B, C... 重复 ≥3 次 (建议 3-5 点)
 
-拟合:
-  scale = (x2 - x1) / (X_cam_2 - X_cam_1)
-  bias  = x1 - scale × X_cam_1
+拟合 (SVD 最小二乘):
+  X_base = a·x + b·y + c·z + d
 
 运行时:
-  X_person = scale × X_cam_person + bias
+  person_3d = PersonDetector 检测
+  X_person = a·x + b·y + c·z + d
 ```
 
-**操作**: 运行 `python EyeToHand/calibration/calibrate.py` → 'c' 采集 → 'f' 拟合 → 's' 保存到 `result.yaml`. 建议 3-5 点, 范围尽量大.
+**操作**: 运行 `python EyeToHand/calibration/calibrate.py` → 'c' 采集 → 'f' 拟合 → 's' 保存.
+**注意**: 当前递送 X 使用 `delivery.X_TEACH` 示教固定值, 标定暂未接入 Orchestrator.
 
 ---
 
@@ -514,8 +513,8 @@ hand_in_cup:
 
 | 状态 | 问题 |
 |:---:|------|
-| ⚠️ | **EyeToHand 标定未实操**: scale/bias 为默认占位值 1.0/0.0 |
-| ⚠️ | **递送参数未填入**: `delivery.Y_TEACH/Z_TEACH/ABC` 需示教 |
+| ⚠️ | **递送参数未填入**: `delivery.X_TEACH/Y_TEACH/Z_TEACH/A_TEACH/B_TEACH/C_TEACH` 需示教 |
+| ℹ️ | **EyeToHand 标定暂废弃**: 递送 XYZ/ABC 全部改用示教固定值, 不再动态检测 X |
 | ⚠️ | **HandInCup 有遮挡未实测**: 灵巧手握住杯子后遮挡手腕+杯 bbox |
 | ⚠️ | **打招呼 .crp 接口未对接**: 等同事完成 .crp 后接入 PC 端手势+压力检测 |
 | ⚠️ | **P4 Y 后退 15°/20° 为线性插值**: 待实测验证 |

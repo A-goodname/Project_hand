@@ -38,7 +38,7 @@ from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 from RealSense_R.test_handle_6D import RealSenseHandle6DDetector
 from RealSense_R.test_cup_6D import RealSenseCup6DDetector
 from EyeToHand.person_detector import PersonDetector
-from EyeToHand.detector import load_calibration, camera_x_to_base_x
+
 from EyeToHand.hand_in_cup import HandInCupDetector
 from Estun.utils_shared import (
     euler_to_rotation_matrix,
@@ -326,8 +326,8 @@ class IdleHandler(StateHandler):
         if result is not None and result["pos_3d_cam"] is not None:
             pos = result["pos_3d_cam"]
             ctx.latest_person_3d = pos
-            ctx.person_stable_x_cam = float(pos[0])
-            print(f"[IDLE] 检测到人体 ✅ X_cam={pos[0]:.3f}, Y={pos[1]:.3f}, Z={pos[2]:.3f}")
+            ctx.person_stable_x_cam = float(pos[2])
+            print(f"[IDLE] 检测到人体 ✅ Z_cam={pos[2]:.3f} (深度), X={pos[0]:.3f}, Y={pos[1]:.3f}")
             return OrchestratorState.HANDLE_GRASP_AND_POUR
         return None
 
@@ -403,7 +403,7 @@ class HandleGraspAndPourHandler(StateHandler):
         self._fixed_abc = None
 
         # ---- EyeToHand 标定 + 递送参数 (start 时加载) ----
-        self._calib = None
+        self._x_teach = 0.0
         self._y_teach = 0.0
         self._z_teach = 0.0
         self._a_teach = 0.0
@@ -452,15 +452,14 @@ class HandleGraspAndPourHandler(StateHandler):
         self._load_offsets(cfg, estun)
 
         # ---- 加载 EyeToHand 标定 + 递送参数 ----
-        self._calib = load_calibration()
         delivery = eye_cfg.get("delivery", {})
+        self._x_teach = delivery.get("X_TEACH", 0.0)
         self._y_teach = delivery.get("Y_TEACH", 0.0)
         self._z_teach = delivery.get("Z_TEACH", 0.0)
         self._a_teach = delivery.get("A_TEACH", 0.0)
         self._b_teach = delivery.get("B_TEACH", 0.0)
         self._c_teach = delivery.get("C_TEACH", 0.0)
-        print(f"[INFO] EyeToHand 标定: scale={self._calib['scale']:.4f}, bias={self._calib['bias']:.4f}")
-        print(f"[INFO] 递送预示教: Y={self._y_teach:.3f} Z={self._z_teach:.3f} ABC=({self._a_teach:.1f},{self._b_teach:.1f},{self._c_teach:.1f})")
+        print(f"[INFO] 递送位姿 (全示教): X={self._x_teach:.3f} Y={self._y_teach:.3f} Z={self._z_teach:.3f} ABC=({self._a_teach:.1f},{self._b_teach:.1f},{self._c_teach:.1f})")
 
         # ---- 灵巧手 ----
         hand_port = estun.get("hand", {}).get("port", "COM5")
@@ -908,18 +907,9 @@ class HandleGraspAndPourHandler(StateHandler):
                 c_pos_base_2 = transform_pose_to_base(c_pos_ee_pre, robot_xyz, robot_ABC)
                 cA2, cB2, cC2 = cA1, cB1, cC1
 
-                # Cup P3 = delivery (EyeToHand)
-                #   取 PersonDetector 最新稳定 X_cam → X_base
-                #   YZ/ABC 用预示教值
-                c_person_x = c_pos_base_1[0]  # fallback: 用 Cup P1 X
-                if ctx.person_stable_x_cam is not None:
-                    c_person_x = camera_x_to_base_x(ctx.person_stable_x_cam, self._calib)
-                    print(f"[P3] X_cam={ctx.person_stable_x_cam:.3f} → X_base={c_person_x:.3f}")
-                else:
-                    print(f"[WARN] person_stable_x_cam=None, P3 X 用 Cup P1 X={c_person_x:.3f}")
-
+                # Cup P3 = 递送位姿 (全示教固定值, 暂废弃标定)
                 c_pos_base_3 = (
-                    float(c_person_x),
+                    self._x_teach,
                     self._y_teach,
                     self._z_teach,
                 )

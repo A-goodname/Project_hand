@@ -71,8 +71,8 @@
 - [x] Serial 绑定: Camera A (`342222071364`, RealSense_R 手动像素映射) + Camera B (`819612071851`, RealSense rs.align)
 - [x] `EyeToHand/` 眼在手外模块:
   - `person_detector.py`: PersonDetector + PersonStabilizer ✅
-  - `detector.py`: `load_calibration()` / `camera_x_to_base_x()` 工具 ✅
-  - `calibration/calibrate.py`: 1D 最小二乘线性回归 (代码完成) ✅
+  - `detector.py`: `load_calibration()` / `person_to_base_x()` 工具 (3D→1D 人体标定) ✅
+  - `calibration/calibrate.py`: 3D→1D 人体标定 (SVD 最小二乘, 代码完成) ✅
   - `person_detector` 独立测试通过 ✅
   - `hand_in_cup.py`: YOLOv8m+YOLOv8n-Pose 人手-杯把手重合检测 ✅
 - [x] **Orchestrator 状态机重构** (2026-07-03) ✅
@@ -95,7 +95,7 @@
 | 任务 | 说明 |
 |------|------|
 | 🔴 实操标定 `EyeToHand/calibration/calibrate.py` | 需机械臂 |
-| 🔴 填入递送参数 `delivery.Y_TEACH/Z_TEACH/ABC` | 示教值 |
+| 🔴 填入递送参数 `delivery.X_TEACH/Y_TEACH/Z_TEACH/ABC` | 示教值 |
 | 🔴 机器人端 Orchestrator CRP 录入示教器 | 导入 handlepluscup-orchestrator.crp + 示教 Retreat1/Retreat2/C_P4/DCp2/DummyCpos |
 | 🟡 HandInCup 有遮挡实测 | 灵巧手遮挡杯把场景 (无遮挡已通过) |
 | 🟢 Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |
@@ -108,7 +108,7 @@
 
 ## 已知问题
 - RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
-- `EyeToHand/calibration/result.yaml` scale/bias 为默认占位值 1.0/0.0
+- `EyeToHand/calibration/result.yaml` a,b,c,d 为默认占位值 (3D→1D 人体标定暂未实操)
 - HandInCup 有遮挡场景未测试 (无遮挡已通过, dist_factor=1.2, depth_tolerance=0.08)
 - `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓)
 - P4 Y 后退角度映射 (10°→200/15°→175/20°→150/30°→100) 中 15°/20° 为线性插值，待实测验证

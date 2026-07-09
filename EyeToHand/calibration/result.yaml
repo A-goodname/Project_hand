@@ -1,7 +1,11 @@
-# EyeToHand 外置相机标定结果 (2点1D线性映射)
-# 公式: X_base = scale * X_cam + bias
+# EyeToHand 外置相机标定结果 (3D→1D 人体标定)
+# 公式: X_base = a*x_cam + b*y_cam + c*z_cam + d
+# (x_cam, y_cam, z_cam) = PersonDetector 检测的人体 bbox 中心 3D 坐标
 # 由 calibration/calibrate.py 生成
+# 注: 标定暂废弃, 当前递送 X 使用 delivery.X_TEACH 示教固定值
 
 calibration:
-  scale: 1.0
-  bias: 0.0
+  a: 0.0
+  b: 0.0
+  c: 1.0
+  d: 0.0
