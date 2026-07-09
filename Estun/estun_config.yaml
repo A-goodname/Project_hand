@@ -106,3 +106,14 @@ estun:
     pour_offset:                            # [新增] Handle P3 倒水前位置: 壶嘴基系 + 此偏移
       t_offset: [0, 0, 0.05]                # (x, y, z) m, 基系 Z 轴向上 5cm (防碰撞)
       r_offset: [0.0, 0.0, -55.0]           # (A, B, C) 度, 倒水姿态 (同 handle_grasp.target_offset.r_offset)
+  greeting:                                  # Phase 0 打招呼阶段 (同事 CRP 7步协议)
+    port: 8600                               # Phase 0 TCP 端口
+    wave_cycles: 3                           # 挥手循环次数 (Hello_1↔Hello_2)
+    wave_interval: 0.6                       # 挥手切换间隔 (秒)
+    handshake_hold: 2.0                      # 握手保持时间 (秒)
+    pressure_threshold: 100                  # 抓握压力阈值 (手背 25 触点原始值之和)
+    release_threshold: 20                    # 松手压力阈值
+    # 打招呼位姿 (mm, deg) — 同事示教值
+    zhaoshou1_pose: [415.3, -19.6, 852.8, -89.0, 1.6, -116.8]
+    zhaoshou2_pose: [281.7, 65.0, 928.2, -46.9, -3.1, -118.4]
+    woshou_pose:    [633.6, 156.9, 602.4, -173.8, 65.9, 178.4]

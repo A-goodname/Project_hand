@@ -45,6 +45,7 @@ pip install -r requirements.txt
 | `Estun/estun_cup_demo.py` | **演示脚本：水杯单检测位姿转换验证**，独立 pipeline，支持 back/left handle_side 多模式角度约束 |
 | `Estun/estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
 | `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令，支持 back/left 双模式 |
+| `Estun/estun_greeting_handle_cup_run.py` | **主入口 (打招呼+Handle+Cup 融合版)**，Phase 0 打招呼(4步协议, port 8600) + Phase A-C Handle+Cup 抓取(port 8080)，YOLO人检测+挥手+握手 |
 | `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
@@ -61,6 +62,7 @@ pip install -r requirements.txt
 | `doc/Module_Rules.md` | 各硬件模块开发规则汇总 |
 | `doc/Handle_Process.md` | 把手检测流程及关键设计决策记录 |
 | `doc/Handle_Cup_Process.md` | **把手+水杯融合流程文档**，6 点位姿计算、共享 pipeline 架构、配置参数说明 |
+| `doc/Greeting_Flow.md` | **打招呼+Handle+Cup 全流程文档**，Phase 0/Phase A-C 协议时间线、位姿来源、文件一览 |
 | `doc/Project_Workflow.md` | 完整项目流程文档 (双相机体系 + 通信协议 + 标定) |
 | `doc/Yolo_World.md` | YOLO-World 零样本检测配置与使用说明 |
 | `doc/Grip_Process.md` | 位姿转换流程文档（末端接触+工具偏移两阶段） |
@@ -104,6 +106,15 @@ pip install -r requirements.txt
 6. 机器人作为TCP客户端连接本服务器，接收 Handle P1/P2/P3 三组位姿
 7. 倒水完成后机械臂发 `CUP` 指令获取 Cup P1/P2/P3 位姿
 8. 支持 back/left 双模式，P3 支撑多倒水角度 (10°/15°/20°/30°)
+
+### 打招呼 + Handle + Cup 融合版 (Phase 0 打招呼 + 抓取)
+
+1. 连接 RealSense 相机和灵巧手（USB串口）
+2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）、`hand.port`（串口号）
+3. 确认 `greeting` 段中 `zhaoshou1_pose` / `zhaoshou2_pose` / `woshou_pose` 示教值已填入 (mm/deg)
+4. 运行 `python Estun/estun_greeting_handle_cup_run.py`
+5. 机器人先连接 8600 执行打招呼 CRP (4步协议), 再连接 8080 执行 Handle+Cup CRP
+6. 打招呼阶段: 按 `q` 可跳过 Phase 0 直接进入抓取
 
 ### P3 倒水位置示教
 

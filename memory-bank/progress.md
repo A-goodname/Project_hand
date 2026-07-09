@@ -3,112 +3,63 @@
 ## 已实现功能
 
 ### 瓶身抓取
-- [x] RealSense 实时版 (Estun/estun_run.py + RealSense_R/)
-- [x] EpicEye 单次触发版 (Estun/estun_epiceye_run.py + EpicEye/)
-- [x] 位姿转换链路验证 Demo (estun_demo.py / estun_epiceye_demo.py)
-- [x] TCP 服务器模拟 (estun_test.py)
-- [x] 手眼标定工具 (calib_data/)
+- [x] RealSense 实时版 + EpicEye 单次触发版
+- [x] 位姿转换链路验证 Demo + 手眼标定工具
 
 ### 把手抓取
-- [x] RealSense Handle 6D 版 (Estun/estun_handle_run.py + RealSense_R/)
-- [x] 微调 YOLOv8n + SAM2 检测流程
-- [x] 扫描线分离把手
-- [x] 红色胶带辅助检测
-- [x] PoseStabilizer 多帧稳定
-- [x] 代际计数器防污染
-- [x] 把手位姿转换 Demo (estun_handle_demo.py)
-- [x] Handle P1 B/C 角 vertical 模式守卫 + B 角 clamp [84,86]→85
-- [x] **RealSense_R t_handle_offset fine_tune** (2026-07-07):
-  - RealSense `[0.06, -0.028, 0.094]` → RealSense_R `[0.048, -0.037, 0.074]` (164610)
-  - fine_tune 反算改为 Cup 式增量法 (更简洁)
-  - 历史 RealSense_R 值 `[0.04, -0.03, 0.080]` (f2e3579) 可供对比
-- [x] **Handle offset 多次验证** (2026-07-08): 多次实测确认 `[0.048, -0.037, 0.074]` 稳定 ✅
+- [x] RealSense Handle 6D 版 (微调 YOLOv8n + SAM2 + 扫描线分离)
+- [x] 红色胶带辅助检测 / PoseStabilizer
+- [x] Handle offset fine_tune: [0.048, -0.037, 0.074]
 
 ### 水杯抓取
-- [x] 水杯 6D 检测 (RealSense_R/test_cup_6D.py)
-- [x] 杯口定位 + 倒水目标点
-- [x] 双检测器共享 Pipeline (estun_handle_cup_demo.py / estun_handle_cup_run.py)
-- [x] Cup P1 B/C 角 vertical 模式守卫 (back/left 分模式, B 角防跳变)
-- [x] **RealSense_R t_cup_offset fine_tune** (2026-07-07):
-  - back: `[0.048, -0.009, 0.098]` (163920)
-  - left: `[0.040, -0.060, 0.080]` (161033)
-- [x] estun_cup_demo.py: import RealSense/→RealSense_R/ + clamp 同步融合 Demo
+- [x] 水杯 6D 检测 + 双检测器共享 Pipeline
+- [x] Cup offset fine_tune: back=[0.048,-0.009,0.098], left=[0.040,-0.060,0.080]
 
 ### Handle+Cup 融合
-- [x] `estun_handle_cup_run.py` — 抓壶倒水→抓杯递杯 全流程
-- [x] back/left 双模式实测通过 (RealSense 版)
-- [x] P3 多角度示教 (10°/15°/20°/30°)
-- [x] P4 预倒水点示教器验证
-- [x] `estun_handle_cup_demo.py` 切换至 RealSense_R/ + 相机参数拷贝修复
-- [x] `estun_handle_cup_run.py` 切换至 RealSense_R/ + 相机参数拷贝修复
-- [x] **融合 Demo/Run Cup 检测修复** (2026-07-08):
-  - 根因: `PoseStabilizer._sf=-1 ≠ _gf=0` → `is_generation_valid()` 首次永远 False → reset → last_known_pose 永不赋值
-  - 修复: stabilizer 创建后立即 `capture_generation()` 同步代际 (2 行)
-  - Demo 不受影响 (其 PoseStabilizer 无代际计数器)
-- [x] **Handle P3 示教验证** (2026-07-08): `p3_teach_offset` 在 RealSense_R 下验证通过 ✅
-- [x] **P4 Y 后退 CRP 实现** (2026-07-08):
-  - 基于 598 (Retreat1/Retreat2 DCPOS) + Phase D 合并 → `handlepluscup-orchestrator.crp`
-  - P4 = [P3.x, P3.y-Y_RETREAT, P3.z, P1.abc]; P4→P3 纯 B 旋转 + Y 前进
-  - 映射: 10°→200mm, 15°→175mm, 20°→150mm, 30°→100mm (实测调整)
+- [x] estun_handle_cup_run.py 全流程
+- [x] back/left 双模式 + P3 多角度示教 + P4 Y后退 CRP
+- [x] Cup 检测修复 (PoseStabilizer 代际同步)
 
 ### 灵巧手控制
-- [x] USB 串口通信 / 手势动作 / 速度控制 / 使能
-- [x] `init_hand()` 使能重试
-- [x] `is_hand_available()` 函数
-- [x] **手势扩展**: HAND_SHAKE(19) / HELLO_1(20) / HELLO_2(21) (2026-07-08)
-- [x] **压力检测**: `get_pressure()` / `wait_for_pressure()` / `wait_for_pressure_release()` (2026-07-08)
-  - 默认检测手背 (5x5=25 触点)，实测标定: 无接触=0, 轻微接触=150
-  - 阈值: 抓握>100, 松手<20 (uint8 原始值)
+- [x] USB 串口 / 手势 / 速度控制 / 使能
+- [x] 手势扩展: HAND_SHAKE(19) / HELLO_1(20) / HELLO_2(21)
+- [x] 压力检测 v1: get_pressure / wait_for_pressure / wait_for_pressure_release
+- [x] 压力检测 v2: 移植同事基线+增量双阈值
+
+### 打招呼 Phase 0 (未提交)
+- [x] Phase0Server 类: 4 步单连接协议 (替代旧的 7 步每步 Accept)
+- [x] YOLOv8n 人检测 (Camera A, class=0)
+- [x] 挥手: Hello_1↔Hello_2 ×3 (do_gesture)
+- [x] 握手: PAPER→等压力→HAND_SHAKE→松手→PAPER
+- [x] CRP greeting 段重建: 30 widget 单 Socket 持久连接 (全部 MovL)
+- [x] Phase A-C 完整保留 (与 estun_handle_cup_run.py 对齐)
+- [ ] CRP+PC 联调实测
 
 ### 通信协议
-- [x] `pack_three` `<>[]{}` 三括号标记
-- [x] 机械臂端 `.crp` + `estun_handle_cup_code.txt` v3
-- [x] PC 端 `fmt_pose()`/`pack_three()` 抽函数
-- [x] `_poses_cleared` 修复 / 稳定位姿输出
-- [x] **Orchestrator CRP** — `handlepluscup-orchestrator.crp` + `estun_handle_cup_code_orchestrator.txt` (P4 Y后退 + HandInCup 判定)
+- [x] pack_three / Orchestrator CRP / 同事 CRP
 
 ### 双相机体系
-- [x] Serial 绑定: Camera A (`342222071364`, RealSense_R 手动像素映射) + Camera B (`819612071851`, RealSense rs.align)
-- [x] `EyeToHand/` 眼在手外模块:
-  - `person_detector.py`: PersonDetector + PersonStabilizer ✅
-  - `detector.py`: `load_calibration()` / `person_to_base_x()` 工具 (3D→1D 人体标定) ✅
-  - `calibration/calibrate.py`: 3D→1D 人体标定 (SVD 最小二乘, 代码完成) ✅
-  - `person_detector` 独立测试通过 ✅
-  - `hand_in_cup.py`: YOLOv8m+YOLOv8n-Pose 人手-杯把手重合检测 ✅
-- [x] **Orchestrator 状态机重构** (2026-07-03) ✅
-- [x] **HandInCup 检测器** (2026-07-03) ✅
-- [x] **HandInCup 无遮挡实测** (2026-07-08):
-  - ✅ 实时 Camera B 测试通过, 2D+深度判定工作正常
-  - 参数标定: `dist_factor`=1.2, `depth_tolerance`=0.08
-  - 新增功能: 图片模式 (文件/文件夹), 诊断模式 (实时+图片→日志)
-  - 配置集中: `EyeToHand/config.yaml` → `hand_in_cup` 段
+- [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)
+- [x] EyeToHand: PersonDetector + HandInCup + 3D→1D 标定工具
+- [x] Orchestrator 状态机 + HandInCup 无遮挡实测
 
-### 工程
-- [x] `memory-bank/` — 上下文持久化
-- [x] Conda 环境配置 / YAML 配置管理
-- [x] 模型微调 (KettleTraining/)
-- [x] 配置版本管理: RealSense 旧值注释保留，RealSense_R 新值标注来源
+### EyeToHand 标定
+- [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
+- [x] result.yaml: {a,b,c,d} + detector.py: person_to_base_x()
+- [ ] 暂未接入 (递送 X 用 delivery.X_TEACH)
 
 ## 待完成
 
-### ⚡ 需要实际测试 (硬件依赖)
 | 任务 | 说明 |
 |------|------|
-| 🔴 实操标定 `EyeToHand/calibration/calibrate.py` | 需机械臂 |
-| 🔴 填入递送参数 `delivery.X_TEACH/Y_TEACH/Z_TEACH/ABC` | 示教值 |
-| 🔴 机器人端 Orchestrator CRP 录入示教器 | 导入 handlepluscup-orchestrator.crp + 示教 Retreat1/Retreat2/C_P4/DCp2/DummyCpos |
-| 🟡 HandInCup 有遮挡实测 | 灵巧手遮挡杯把场景 (无遮挡已通过) |
-| 🟢 Orchestrator 联调 | 双相机 + 机器人 + 灵巧手全流程 |
-
-### 📋 待完成 (非硬件)
-- [ ] HandInCup 有遮挡实测 (灵巧手遮挡杯把场景)
-- [ ] Orchestrator 机器人端 .crp 适配新指令 (READY/CONTINUE/ABORT)
-- [ ] 打招呼 .crp 接口对接 (等同事完成 .crp 后接入 PC 端手势+压力检测)
-- [ ] 打招呼协议信号: Person检测→开始打招呼、握手完成→继续
+| 🔴 打招呼联调 | CRP + PC 全流程实测 |
+| 🔴 HandInCup 有遮挡实测 | 灵巧手遮挡杯把 |
+| 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
+| 🟡 递送参数示教 | delivery 全字段 |
 
 ## 已知问题
-- RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏), 需手动像素映射
-- `EyeToHand/calibration/result.yaml` a,b,c,d 为默认占位值 (3D→1D 人体标定暂未实操)
-- HandInCup 有遮挡场景未测试 (无遮挡已通过, dist_factor=1.2, depth_tolerance=0.08)
-- `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓)
-- P4 Y 后退角度映射 (10°→200/15°→175/20°→150/30°→100) 中 15°/20° 为线性插值，待实测验证
+- RealSense_R rs.align 不可用 (内参损坏)
+- EyeToHand result.yaml a,b,c,d 默认占位
+- HandInCup 有遮挡未测试
+- P4 Y 后退 15/20° 线性插值未实测验证
+- 新打招呼 CRP 待联调验证

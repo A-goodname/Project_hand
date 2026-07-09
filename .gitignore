@@ -38,3 +38,6 @@ runs/
 # code tools
 .clinerules/
 .claude/
+
+# 参考文件
+reference/
