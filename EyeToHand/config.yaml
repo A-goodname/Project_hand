@@ -27,20 +27,21 @@ calibration:
   scale: 1.0
   bias: 0.0
 hand_in_cup:
-  cup_model: model/yolov8m.pt             # YOLO 杯检测
-  hand_model: model/hand_landmarker.task   # MediaPipe Hands 21 landmarks
+  cup_model: model/yolov8m.pt
+  hand_model: model/hand_landmarker.task
   conf_threshold: 0.5
   hand_min_detection_conf: 0.5
   hand_min_tracking_conf: 0.5
-  required_stable: 5                       # 连续确认帧数
+  required_stable: 5
   dist_factor: 1.2
-  depth_tolerance: 0.10                    # 深度差阈值 (米)
-  bbox_margin: 15                          # bbox 外扩像素 (容差)
-  curled_threshold: 25                     # MCP→TIP 距离阈值 (px), <此值=手指弯曲
-  curled_min_fingers: 2                    # 至少 N 根手指弯曲才判定为握杯手势
+  depth_tolerance: 0.1
+  cup_depth_expected: 1.09
+  bbox_margin: 20
+  curled_threshold: 25
+  curled_min_fingers: 2
   cup_roi_fallback:
     enabled: true
-    x1: 337
-    y1: 177
-    x2: 367
-    y2: 225
+    x1: 342
+    y1: 171
+    x2: 380
+    y2: 219

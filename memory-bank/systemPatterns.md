@@ -78,9 +78,9 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 
 - **杯检测**: YOLOv8m (class=41) → 失败回退固定 ROI (`cup_roi_fallback`)
 - **手检测**: MediaPipe Hands (21 landmarks, 帧间跟踪, RunningMode.VIDEO)
-- **判定**: landmarks-in-bbox 计分制 — 最近手的 wrist(×2) + MCP(×1) + TIP(×1) 落在杯 bbox 扩展区内 ≥ 2 分
-- **握拳 gate**: MCP→TIP 距离 < `curled_threshold`(25px) ≥ `curled_min_fingers`(2) 根才判定握杯，防止开掌划过误触发
-- **深度辅助**: 最近手手腕深度 vs 杯心深度 < `depth_tolerance`(0.10m)
+- **判定**: landmarks-in-bbox 计分制 — 最近手的 wrist(×2) + MCP(×1) + TIP(×1) ≥ 2 (bbox_margin=20px)
+- **curled gate**: wrist 在 bbox 内→跳过; wrist 不在→需 curled ≥ 2 (防开掌划过误触发)
+- **深度辅助**: YOLO 检测到杯→画面采样; fallback→cup_depth_expected 预标定值; diff < depth_tolerance(0.10m)
 - 独立文件 `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试 (`--calibrate-roi` 标定工具)
 
 ### PersonDetector / HandInCup 共用 Camera B Pipeline

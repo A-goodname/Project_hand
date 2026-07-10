@@ -49,13 +49,12 @@
 
 ### HandInCup MediaPipe 重构
 - [x] YOLOv8n-Pose → MediaPipe Hands (21 landmarks, 帧间跟踪)
-- [x] landmarks-in-bbox 计分制: wrist(×2) + MCP(×1) + TIP(×1) ≥ 2
-- [x] 握拳 gate: MCP→TIP 距离 < curled_threshold(25px) → 手指弯曲; curled ≥ 2 才判握杯
-- [x] 杯 ROI 回退: YOLO 失败 → cup_roi_fallback (解决灵巧手遮挡)
-- [x] 递送位姿 P3 已填入 config (0.2295/0.4427/0.3837m)
-- [x] `--calibrate-roi` 鼠标框选标定工具
+- [x] landmarks-in-bbox 计分制: wrist(×2) + MCP(×1) + TIP(×1) ≥ 2, bbox_margin=20px
+- [x] curled gate: wrist在bbox内→跳过; wrist不在→curled≥2 (防开掌划过)
+- [x] 深度: YOLO→画面采样; fallback→cup_depth_expected 预标定值
+- [x] 杯 ROI 回退: YOLO 失败 → cup_roi_fallback; --calibrate-roi 标定工具 (含深度)
+- [x] 递送位姿 P3 已填入 config
 - [x] 独立测试通过 (hand_in_cup.py)
-- [ ] Orchestrator 全流程联调
 
 ### EyeToHand 标定
 - [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)

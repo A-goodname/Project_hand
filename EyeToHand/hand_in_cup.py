@@ -104,6 +104,7 @@ class HandInCupDetector:
             "bbox_margin": int(hic.get("bbox_margin", 15)),
             "curled_threshold": int(hic.get("curled_threshold", 25)),
             "curled_min_fingers": int(hic.get("curled_min_fingers", 2)),
+            "cup_depth_expected": float(hic.get("cup_depth_expected", 0.0)),
             "cup_roi_fallback": _roi_bbox,
         }
 
@@ -136,6 +137,7 @@ class HandInCupDetector:
         self._bbox_margin = cfg["bbox_margin"]
         self._curled_threshold = cfg["curled_threshold"]
         self._curled_min_fingers = cfg["curled_min_fingers"]
+        self._cup_depth_expected = cfg["cup_depth_expected"]
         self._cup_roi_fallback = cfg.get("cup_roi_fallback")
         self._stable_count = 0
         self._on_cup = False
@@ -191,11 +193,12 @@ class HandInCupDetector:
             depth_frame: rs.depth_frame, 用于深度辅助判定 (可选).
         """
         # 1. 检测杯 bbox
-        cup_bbox = self._detect_cup(color_image)
+        cup_bbox, cup_source = self._detect_cup(color_image)
         self._last_cup_bbox = cup_bbox
         self._last_hands = []
         self._last_best_hand = None
         self._last_score = 0
+        self._last_curled = 0
         self._last_depth_ok = False
         cup_center = None
         hit = False
@@ -236,29 +239,47 @@ class HandInCupDetector:
 
                 # 握拳检测: 几根手指弯曲 (MCP→TIP 距离 < 阈值)?
                 curled_count = sum(1 for d in best_hand.get("finger_dists", []) if d < self._curled_threshold)
-                is_gripping = (curled_count >= self._curled_min_fingers)
+                wrist_in_bbox = (mx1 <= wx <= mx2 and my1 <= wy <= my2)
 
                 self._last_score = score
                 self._last_curled = curled_count
-                hit = (score >= 2) and is_gripping
+
+                # 判定: 手腕在 bbox 内 → 手已到位, 跳过握拳检测
+                #       手腕不在 bbox 内 → 需确认手指弯曲 (防开掌划过误触发)
+                if wrist_in_bbox:
+                    hit = (score >= 2)
+                else:
+                    hit = (score >= 2) and (curled_count >= self._curled_min_fingers)
 
                 # 5. 深度辅助: 最近手手腕深度 vs 杯深度
                 if hit and depth_frame is not None:
-                    cup_depths = []
-                    for dy in range(-2, 3):
-                        for dx in range(-2, 3):
-                            py, px = cy + dy, cx + dx
-                            if 0 <= py < color_image.shape[0] and 0 <= px < color_image.shape[1]:
-                                dd = depth_frame.get_distance(px, py)
-                                if 0 < dd < 2.0:
-                                    cup_depths.append(dd)
-                    if cup_depths:
-                        cup_z = np.median(cup_depths)
-                        wz = depth_frame.get_distance(wx, wy)
+                    wz = depth_frame.get_distance(wx, wy)
+                    if cup_source == "yolo":
+                        # YOLO 检测到杯 → 从画面采样 (杯可见, 可靠)
+                        cup_depths = []
+                        for dy in range(-2, 3):
+                            for dx in range(-2, 3):
+                                py, px = cy + dy, cx + dx
+                                if 0 <= py < color_image.shape[0] and 0 <= px < color_image.shape[1]:
+                                    dd = depth_frame.get_distance(px, py)
+                                    if 0 < dd < 2.0:
+                                        cup_depths.append(dd)
+                        if cup_depths:
+                            cup_z = np.median(cup_depths)
+                            if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance:
+                                self._last_depth_ok = True
+                            else:
+                                hit = False
+                        else:
+                            hit = False
+                    elif self._cup_depth_expected > 0:
+                        # fallback → 用预标定深度 (唯一可靠来源)
+                        cup_z = self._cup_depth_expected
                         if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance:
                             self._last_depth_ok = True
                         else:
                             hit = False
+                    # else: fallback + 未配置深度 → 跳过深度检查
 
         self._last_cup_center = cup_center
 
@@ -275,21 +296,22 @@ class HandInCupDetector:
         """YOLOv8m 检测水杯, 失败时回退到固定 ROI (cup_roi_fallback).
 
         Returns:
-            [x1,y1,x2,y2] 或 None.
+            (bbox, source) 或 (None, None).
         """
         results = self._cup_model(color_image, classes=[41], verbose=False)
         if results and len(results[0].boxes) > 0:
             boxes = results[0].boxes
             confs = boxes.conf.cpu().numpy()
             best_idx = confs.argmax()
-            if confs[best_idx] >= self._conf_threshold:
+            best_conf = float(confs[best_idx])
+            if best_conf >= self._conf_threshold:
                 xyxy = boxes.xyxy.cpu().numpy()[best_idx]
-                return [int(x) for x in xyxy]
+                return [int(x) for x in xyxy], "yolo"
 
         # YOLO 未检测到 → 回退到固定 ROI
         if self._cup_roi_fallback is not None:
-            return list(self._cup_roi_fallback)
-        return None
+            return list(self._cup_roi_fallback), "fallback"
+        return None, None
 
     # ------------------------------------------------------------
 
@@ -823,7 +845,162 @@ class HandInCupDetector:
 #  主入口
 # ============================================================
 
+# ============================================================
+#  杯 ROI 标定 (鼠标框选 + 深度测量 → 写入 config.yaml)
+# ============================================================
+
+def calibrate_cup_roi():
+    """Camera B 实时画面 + 鼠标框选杯区域 + 测量 ROI 中心深度.
+
+    操作:
+      鼠标拖拽框选 ROI → 画面显示深度值 → 按 s 保存 → 按 r 重选 → 按 q 退出.
+    保存内容:
+      - cup_roi_fallback: 框选的 bbox
+      - cup_depth_expected: ROI 中心的 5×5 中值深度
+    """
+    _cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    with open(_cfg_path, "r", encoding="utf-8") as f:
+        _cfg = yaml.safe_load(f)
+
+    class _CalibRunner(BaseRealSenseDetector):
+        USE_YOLO_WORLD = False; USE_SAM = False
+        LOG_NAME = "hand_in_cup_calib.log"; TARGET_CLASS_ID = 0
+
+    runner = _CalibRunner(config_dict=_cfg)
+
+    roi = {"x1": 0, "y1": 0, "x2": 0, "y2": 0, "drawing": False}
+
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            roi["drawing"] = True
+            roi["x1"], roi["y1"] = x, y
+            roi["x2"], roi["y2"] = x, y
+        elif event == cv2.EVENT_MOUSEMOVE:
+            if roi["drawing"]:
+                roi["x2"], roi["y2"] = x, y
+        elif event == cv2.EVENT_LBUTTONUP:
+            roi["drawing"] = False
+            roi["x2"], roi["y2"] = x, y
+
+    cv2.namedWindow("Cup ROI Calibration")
+    cv2.setMouseCallback("Cup ROI Calibration", on_mouse)
+
+    print("=" * 55)
+    print("  杯 ROI 标定 + 深度测量")
+    print("  鼠标拖拽框选杯区域 → s 保存(含深度) → r 重选 → q 退出")
+    print("=" * 55)
+
+    saved = False
+    try:
+        while True:
+            color, _, _, depth_frame = runner.get_frames()
+            if color is None:
+                continue
+            h, w = color.shape[:2]
+            display = color.copy()
+
+            x1, y1 = roi["x1"], roi["y1"]
+            x2, y2 = roi["x2"], roi["y2"]
+            if x1 != x2 or y1 != y2:
+                rx1, ry1 = min(x1, x2), min(y1, y2)
+                rx2, ry2 = max(x1, x2), max(y1, y2)
+                cv2.rectangle(display, (rx1, ry1), (rx2, ry2), (0, 255, 0), 2)
+
+                # 测量 ROI 中心深度
+                cx, cy = (rx1 + rx2) // 2, (ry1 + ry2) // 2
+                cv2.drawMarker(display, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 8, 1)
+                depths = []
+                if depth_frame is not None:
+                    for dy in range(-2, 3):
+                        for dx in range(-2, 3):
+                            py, px = cy + dy, cx + dx
+                            if 0 <= py < h and 0 <= px < w:
+                                dd = depth_frame.get_distance(px, py)
+                                if 0 < dd < 2.0:
+                                    depths.append(dd)
+                if depths:
+                    median_z = float(np.median(depths))
+                    cv2.putText(display,
+                                f"ROI:({rx1},{ry1})-({rx2},{ry2}) {rx2-rx1}x{ry2-ry1}  Z={median_z:.3f}m",
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                else:
+                    cv2.putText(display,
+                                f"ROI:({rx1},{ry1})-({rx2},{ry2}) {rx2-rx1}x{ry2-ry1}  Z=N/A",
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+            else:
+                cv2.putText(display, "Drag mouse to select cup ROI", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+
+            cv2.putText(display, "s:save  r:reset  q:quit", (10, h - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (128, 128, 128), 1)
+
+            cv2.imshow("Cup ROI Calibration", display)
+            key = cv2.waitKey(30) & 0xFF
+
+            if key == ord("q"):
+                break
+            elif key == ord("r"):
+                roi["x1"] = roi["y1"] = roi["x2"] = roi["y2"] = 0
+                print("[INFO] ROI 已重置")
+            elif key == ord("s"):
+                rx1, ry1 = min(roi["x1"], roi["x2"]), min(roi["y1"], roi["y2"])
+                rx2, ry2 = max(roi["x1"], roi["x2"]), max(roi["y1"], roi["y2"])
+                if rx1 == rx2 or ry1 == ry2:
+                    print("[WARN] 未框选 ROI, 请先用鼠标拖拽框选杯区域")
+                    continue
+                # 测量深度
+                cxs, cys = (rx1 + rx2) // 2, (ry1 + ry2) // 2
+                calib_depths = []
+                if depth_frame is not None:
+                    for dy in range(-2, 3):
+                        for dx in range(-2, 3):
+                            py, px = cys + dy, cxs + dx
+                            if 0 <= py < h and 0 <= px < w:
+                                dd = depth_frame.get_distance(px, py)
+                                if 0 < dd < 2.0:
+                                    calib_depths.append(dd)
+                calib_z = float(np.median(calib_depths)) if calib_depths else 0.0
+
+                # 写入 config.yaml
+                hic = _cfg.setdefault("hand_in_cup", {})
+                hic["cup_roi_fallback"] = {
+                    "enabled": True,
+                    "x1": rx1, "y1": ry1, "x2": rx2, "y2": ry2,
+                }
+                if calib_z > 0:
+                    hic["cup_depth_expected"] = round(calib_z, 3)
+                with open(_cfg_path, "w", encoding="utf-8") as f:
+                    yaml.dump(_cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+                print(f"[SAVE] cup_roi_fallback: ({rx1},{ry1})-({rx2},{ry2})")
+                print(f"[SAVE] cup_depth_expected: {calib_z:.3f}m")
+                print(f"[SAVE] → {_cfg_path}")
+                saved = True
+                break
+
+    except KeyboardInterrupt:
+        print("\n[INFO] 键盘中断")
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        runner.stop()
+        cv2.destroyAllWindows()
+        if saved:
+            print("[INFO] 标定完成!")
+        else:
+            print("[INFO] 已退出 (未保存)")
+
+
+# ============================================================
+#  主入口
+# ============================================================
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--calibrate-roi":
+        calibrate_cup_roi()
+        sys.exit(0)
+
     detector = HandInCupDetector()
 
     if len(sys.argv) > 1:
@@ -840,10 +1017,11 @@ if __name__ == "__main__":
 
         if not args:
             print("用法:")
-            print("  实时测试:   python hand_in_cup.py")
-            print("  图片测试:   python hand_in_cup.py <image_or_folder> ...")
-            print("  图片诊断:   python hand_in_cup.py --diagnose <image_or_folder> ...")
-            print("  实时诊断:   python hand_in_cup.py --diagnose-live")
+            print("  杯ROI标定:    python hand_in_cup.py --calibrate-roi")
+            print("  实时测试:     python hand_in_cup.py")
+            print("  图片测试:     python hand_in_cup.py <image_or_folder> ...")
+            print("  图片诊断:     python hand_in_cup.py --diagnose <image_or_folder> ...")
+            print("  实时诊断:     python hand_in_cup.py --diagnose-live")
             sys.exit(1)
 
         # 收集所有图片 (支持文件+文件夹混用)
