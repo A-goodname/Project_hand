@@ -1,50 +1,46 @@
-# EyeToHand 眼在手外模块配置
-# 外置相机 (固定安装) 用于人体位置检测
-
 model:
-  name: "./model/yolov8m"        # YOLO 模型路径 (相对项目根目录, 不含 .pt 后缀)
-  conf_threshold: 0.5            # 检测置信度阈值
-  target_class_id: 0             # COCO 目标类别 (0=person)
-  device: gpu                    # 运行设备: gpu优先 | cpu强制
-
+  name: ./model/yolov8m
+  conf_threshold: 0.5
+  target_class_id: 0
+  device: gpu
 depth:
-  min: 0.15                      # 最小有效深度 (米)
-  max: 1.5                       # 最大有效深度 (米)
-
+  min: 0.15
+  max: 1.5
 resolution:
-  width: 640                     # 图像宽度
-  height: 480                    # 图像高度
-  fps: 30                        # 帧率
-
+  width: 640
+  height: 480
+  fps: 30
 smoothing:
-  alpha: 0.4                     # 位置 EMA 时域平滑系数
-
-# ---- 人体位置稳定器 (参考 PoseStabilizer) ----
+  alpha: 0.4
 stabilizer:
-  window: 10                     # 缓冲区帧数 (~0.3s@30fps)
-  pos_thresh: 0.03               # 位置波动阈值 (米), 3cm内认为稳定
-
-# ---- 递送位姿 (基坐标系, 全示教固定值, 单位: 米/度) ----
-# 注: 标定暂废弃, 递送位姿全部由示教确定
+  window: 10
+  pos_thresh: 0.03
 delivery:
-  X_TEACH: 0.0                   # [用户必填] 递送 X 位置
-  Y_TEACH: 0.0                   # [用户必填] 递送 Y 位置 (桌面边缘上方)
-  Z_TEACH: 0.0                   # [用户必填] 递送 Z 位置 (递送高度)
-  A_TEACH: 0.0                   # 递送姿态 A (roll, 度)
-  B_TEACH: 0.0                   # 递送姿态 B (pitch, 度)
-  C_TEACH: 0.0                   # 递送姿态 C (yaw, 度)
-  wait_seconds: 2.0              # 递送等待时间 (秒), 到达后松手
-
-# ---- 标定参数 (暂废弃, 改用全示教) ----
+  X_TEACH: 0.2295
+  Y_TEACH: 0.4427
+  Z_TEACH: 0.3837
+  A_TEACH: 148.79
+  B_TEACH: 82.79
+  C_TEACH: -113.57
+  wait_seconds: 2.0
 calibration:
   scale: 1.0
   bias: 0.0
-
-# ---- Hand-in-cup 人手-杯把手重合检测 ----
 hand_in_cup:
-  cup_model: "model/yolov8m.pt"       # YOLO 检测杯子的模型
-  pose_model: "model/yolov8n-pose.pt"  # YOLO-Pose 手腕关键点
-  conf_threshold: 0.5                  # 关键点置信度阈值
-  required_stable: 5                   # 连续确认帧数
-  dist_factor: 1.2                     # 距离阈值 = bbox对角线 × dist_factor (2026-07-08 实测: 128/139=0.92→1.2)
-  depth_tolerance: 0.08                # 深度差阈值 (米) (2026-07-08 实测: diff≈0.062→0.08)
+  cup_model: model/yolov8m.pt             # YOLO 杯检测
+  hand_model: model/hand_landmarker.task   # MediaPipe Hands 21 landmarks
+  conf_threshold: 0.5
+  hand_min_detection_conf: 0.5
+  hand_min_tracking_conf: 0.5
+  required_stable: 5                       # 连续确认帧数
+  dist_factor: 1.2
+  depth_tolerance: 0.10                    # 深度差阈值 (米)
+  bbox_margin: 15                          # bbox 外扩像素 (容差)
+  curled_threshold: 25                     # MCP→TIP 距离阈值 (px), <此值=手指弯曲
+  curled_min_fingers: 2                    # 至少 N 根手指弯曲才判定为握杯手势
+  cup_roi_fallback:
+    enabled: true
+    x1: 337
+    y1: 177
+    x2: 367
+    y2: 225

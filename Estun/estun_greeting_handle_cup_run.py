@@ -83,13 +83,13 @@ _greet_cfg = _cfg_estun.get("greeting", {})
 GREET_PORT = _greet_cfg.get("port", 8600)
 GREET_WAVE_CYCLES = _greet_cfg.get("wave_cycles", 3)
 GREET_WAVE_INTERVAL = _greet_cfg.get("wave_interval", 0.6)
-# 位姿 (mm/deg → m/deg)
+# 打招呼位姿 (mm, deg) — CRP TranStrToCpos lengthunit=mm, 直接发送 mm
 _z1 = _greet_cfg.get("zhaoshou1_pose", [0]*6)
 _z2 = _greet_cfg.get("zhaoshou2_pose", [0]*6)
 _ws = _greet_cfg.get("woshou_pose", [0]*6)
-ZHAOSHOU1_POSE = [v/1000.0 for v in _z1[:3]] + list(_z1[3:])
-ZHAOSHOU2_POSE = [v/1000.0 for v in _z2[:3]] + list(_z2[3:])
-WOSHOU_POSE    = [v/1000.0 for v in _ws[:3]] + list(_ws[3:])
+ZHAOSHOU1_POSE = list(_z1)
+ZHAOSHOU2_POSE = list(_z2)
+WOSHOU_POSE    = list(_ws)
 
 # ---- 把手偏移 ----
 HANDLE_T_OFFSET = np.array(_cfg_estun["handle_grasp"]["gripper_offset"]["t_handle_offset"], dtype=float)
@@ -175,8 +175,8 @@ elif ORIENTATION_MODE == "horizontal":
 # ============================================================
 
 def _fmt_pose6(pose6):
-    """6元素位姿 → "x,y,z,A,B,C" (m, deg)"""
-    return f"{pose6[0]:.3f},{pose6[1]:.3f},{pose6[2]:.3f},{pose6[3]:.2f},{pose6[4]:.2f},{pose6[5]:.2f}"
+    """6元素位姿 → "x,y,z,A,B,C" (mm, deg) — CRP TranStrToCpos lengthunit=mm"""
+    return f"{pose6[0]:.1f},{pose6[1]:.1f},{pose6[2]:.1f},{pose6[3]:.2f},{pose6[4]:.2f},{pose6[5]:.2f}"
 
 
 def _parse_command_message(message):
@@ -363,7 +363,7 @@ class Phase0Server:
         return False
 
     def _execute_wave(self):
-        """Hello_1 ↔ Hello_2 ×N 挥手, 结束后 PAPER (手掌张开)."""
+        """Hello_1 ↔ Hello_2 ×N 挥手, 结束后 RESET 复位."""
         from Estun.utils_shared import _hand as _h
         from Omnihand.omnihand_gesture import Gesture
         if _h is not None:
@@ -372,21 +372,21 @@ class Phase0Server:
                 print(f"  {i+1}/{GREET_WAVE_CYCLES}")
                 _h.do_gesture(Gesture.HELLO_1, delay=GREET_WAVE_INTERVAL)
                 _h.do_gesture(Gesture.HELLO_2, delay=GREET_WAVE_INTERVAL)
-            # 挥手结束后手掌张开, 机器人安全移动到 WOSHOU 位置
-            print("[Phase 0] PAPER — 挥手结束, 手掌张开")
-            _h.do_gesture(Gesture.PAPER, delay=0.5)
+            # 挥手结束后复位, 机器人安全移动到 WOSHOU 位置
+            print("[Phase 0] RESET — 挥手结束, 复位")
+            _h.do_gesture(Gesture.RESET, delay=0.5)
         else:
             print("[Phase 0] 模拟挥手")
             time.sleep(GREET_WAVE_CYCLES * GREET_WAVE_INTERVAL * 2)
 
     def _execute_handshake(self):
-        """PAPER → 等压力 → HAND_SHAKE → 等1s → 无压力 → PAPER."""
+        """RESET → 等压力 → HAND_SHAKE → 等松手 → RESET."""
         from Estun.utils_shared import _hand as _h
         from Omnihand.omnihand_gesture import Gesture
         if _h is not None:
-            # 1. PAPER (手掌张开, 准备握手)
-            print("[Phase 0] PAPER — 手掌张开, 等待握手...")
-            _h.do_gesture(Gesture.PAPER, delay=0.5)
+            # 1. RESET (复位, 准备握手)
+            print("[Phase 0] RESET — 复位, 等待握手...")
+            _h.do_gesture(Gesture.RESET, delay=0.5)
             # 2. 等待手背压力
             self._wait_for_handshake_force()
             # 3. HAND_SHAKE (握手)
@@ -394,9 +394,9 @@ class Phase0Server:
             _h.do_gesture(Gesture.HAND_SHAKE, delay=1.0)
             # 4. 等松手
             self._wait_for_handshake_release()
-            # 5. PAPER (张开)
-            print("[Phase 0] PAPER — 握手结束")
-            _h.do_gesture(Gesture.PAPER, delay=0.5)
+            # 5. RESET (复位)
+            print("[Phase 0] RESET — 握手结束, 复位")
+            _h.do_gesture(Gesture.RESET, delay=0.5)
         else:
             print("[Phase 0] 模拟握手")
             time.sleep(3.0)
@@ -957,17 +957,25 @@ def main():
     init_hand(hand_port=HAND_PORT, initial_gesture="RESET")
     _hand_available = is_hand_available()
 
+    # ---- [Init 3] TCP 服务器 (提前启动, Phase 0 期间已在监听) ----
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.setblocking(False)
+    server.bind((HOST, PORT))
+    server.listen(5)
+    print(f"\n[TCP] Handle+Cup 服务器启动: {HOST}:{PORT}")
+
     # ================================================================
     # Phase 0: 打招呼 (独立 Camera pipeline, 人检测后关闭)
     # ================================================================
     phase0 = Phase0Server()
     phase0.serve(port=GREET_PORT)
 
-    # ---- [Init 3] Handle 检测器 (启动 Camera A pipeline, Phase A-C) ----
+    # ---- [Init 4] Handle 检测器 (启动 Camera A pipeline, Phase A-C) ----
     print(f"\n[INIT] Handle 6D 检测器 (RealSense_R)...")
     detector = RealSenseHandle6DDetector(config_dict=_cfg)
 
-    # ---- [Init 4] Cup 检测器 (复用 pipeline) ----
+    # ---- [Init 5] Cup 检测器 (复用 pipeline) ----
     print(f"\n[INIT] Cup 6D 检测器 (复用 pipeline)...")
     cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=False)
     cup_detector.color_intrinsics = detector.color_intrinsics
@@ -979,14 +987,6 @@ def main():
     # ================================================================
     # Phase A-C: Handle+Cup (与 estun_handle_cup_run.py 一致)
     # ================================================================
-
-    # ---- [Init 5] TCP 服务器 (非阻塞) ----
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.setblocking(False)
-    server.bind((HOST, PORT))
-    server.listen(5)
-    print(f"\n[TCP] Handle+Cup 服务器启动: {HOST}:{PORT}")
     print("[TCP] 等待机器人连接...", flush=True)
 
     detector.last_known_pose = None

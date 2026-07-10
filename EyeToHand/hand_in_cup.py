@@ -2,28 +2,29 @@
 """
 EyeToHand 人手-杯把手重合检测 (Hand-in-cup)
 =============================================
-双模型判定: YOLOv8m (cup bbox) + YOLOv8n-Pose (wrist keypoints).
+杯检测: YOLOv8m (class 41) → 失败时回退固定 ROI (cup_roi_fallback)
+手检测: MediaPipe Hands (21 landmarks, 帧间跟踪)
 
-判定策略:
-  - 手腕到杯 bbox 中心的 2D 像素距离 < 阈值 (bbox 对角线 × dist_factor) → 邻近
-  - 可选: 手腕深度与杯中心深度差值 < depth_tolerance → 确认在同一平面
-  - 连续 N 帧满足 → hand_on_cup = True
-
-实测状态 (2026-07-06):
-  ✅ 无灵巧手遮挡: 人手侧握杯把时发现手腕在 ROI 外, 已引入 dist_factor 和
-     depth_tolerance 作为可调修正, 但二者仍为初始猜测值, 未实地验证.
-  ❌ 有灵巧手遮挡: 尚未测试.
-  详细记录见 memory-bank/progress.md 的 "HandInCup 实测记录" 段.
+判定策略 (landmarks-in-bbox 计分制):
+  1. 取距离杯 bbox 中心最近的手
+  2. 统计该手落在杯 bbox (外扩 bbox_margin px) 内的关键 landmarks:
+       wrist (lm 0)  ×2 分
+       MCP  (lm 5,9,13,17)  ×1 分
+       TIP  (lm 4,8,12,16,20) ×1 分
+  3. score ≥ 2 → hit
+     - 仅手腕在 bbox 内 = 2 分 → hit
+     - 手腕不在但 2 MCP 在内 = 2 分 → hit (抓握场景)
+  4. 深度辅助: 最近手手腕深度 vs 杯深度 < depth_tolerance
+  5. 连续 N 帧满足 → hand_on_cup = True
 
 模型:
-  - Cup:     model/yolov8m.pt       (COCO class 41 "cup")
-  - Pose:    model/yolov8n-pose.pt  (COCO keypoints, wrist=9,10)
-             model/yolov8m-pose.pt  (备用, 已下载)
+  - Cup:  model/yolov8m.pt  (COCO class 41)
+  - Hand: model/hand_landmarker.task  (MediaPipe Hands)
 
 接口:
   - update(color_image, depth_frame=None) : 每帧调用
-  - is_hand_on_cup : bool, 人手是否在杯把手上
-  - stable_count   : int, 当前连续确认帧数
+  - is_hand_on_cup : bool
+  - stable_count   : int
   - reset()        : 重置内部状态
   - run()          : 交互式测试主循环 (连接 Camera B)
 """
@@ -43,6 +44,21 @@ from ultralytics import YOLO
 
 from RealSense.realsense_shared import BaseRealSenseDetector
 
+# MediaPipe Hands (Task API)
+from mediapipe.tasks.python import BaseOptions
+from mediapipe.tasks.python.vision import HandLandmarker, HandLandmarkerOptions, RunningMode
+import mediapipe as mp
+
+# MediaPipe landmark 索引
+MP_WRIST = 0
+MP_MCP = {5: "INDEX_MCP", 9: "MIDDLE_MCP", 13: "RING_MCP", 17: "PINKY_MCP"}
+MP_TIP  = {4: "THUMB_TIP", 8: "INDEX_TIP", 12: "MIDDLE_TIP", 16: "RING_TIP", 20: "PINKY_TIP"}
+# 手部骨架连线 (仅关键点)
+HAND_BONES = [
+    (0,5),(0,9),(0,13),(0,17),           # wrist → MCPs
+    (5,8),(9,12),(13,16),(17,20),         # MCP → TIP (简化)
+]
+
 
 # ============================================================
 #  HandInCupDetector
@@ -51,13 +67,9 @@ from RealSense.realsense_shared import BaseRealSenseDetector
 class HandInCupDetector:
     """人手-杯把手重合检测器.
 
-    使用邻近判定而非包含判定: 手侧握把手时, 手腕在杯 bbox 外部,
-    但到 bbox 中心的距离足够近.
+    使用 landmarks-in-bbox 计分制: 统计 MediaPipe 手部关键点中
+    落在杯 bbox (外扩 margin) 内的个数, ≥2 分即判定为 hand_on_cup.
     """
-
-    # COCO keypoint indices
-    LEFT_WRIST = 9
-    RIGHT_WRIST = 10
 
     # ------------------------------------------------------------
     @staticmethod
@@ -70,20 +82,35 @@ class HandInCupDetector:
         except Exception:
             _cfg = {}
         hic = _cfg.get("hand_in_cup", {})
+        # 杯 ROI 回退
+        _roi = hic.get("cup_roi_fallback", {})
+        _roi_bbox = None
+        if _roi.get("enabled", False):
+            _roi_bbox = [
+                int(_roi.get("x1", 0)), int(_roi.get("y1", 0)),
+                int(_roi.get("x2", 0)), int(_roi.get("y2", 0)),
+            ]
+            if _roi_bbox[2] <= _roi_bbox[0] or _roi_bbox[3] <= _roi_bbox[1]:
+                _roi_bbox = None
         return {
             "cup_model": hic.get("cup_model", os.path.join(_project_root, "model", "yolov8m.pt")),
-            "pose_model": hic.get("pose_model", os.path.join(_project_root, "model", "yolov8n-pose.pt")),
+            "hand_model": hic.get("hand_model", os.path.join(_project_root, "model", "hand_landmarker.task")),
             "conf_threshold": float(hic.get("conf_threshold", 0.5)),
+            "hand_min_detection_conf": float(hic.get("hand_min_detection_conf", 0.5)),
+            "hand_min_tracking_conf": float(hic.get("hand_min_tracking_conf", 0.5)),
             "required_stable": int(hic.get("required_stable", 5)),
             "dist_factor": float(hic.get("dist_factor", 1.2)),
-            "depth_tolerance": float(hic.get("depth_tolerance", 0.08)),
+            "depth_tolerance": float(hic.get("depth_tolerance", 0.10)),
+            "bbox_margin": int(hic.get("bbox_margin", 15)),
+            "curled_threshold": int(hic.get("curled_threshold", 25)),
+            "curled_min_fingers": int(hic.get("curled_min_fingers", 2)),
+            "cup_roi_fallback": _roi_bbox,
         }
 
     # ------------------------------------------------------------
 
     def __init__(self,
                  cup_model_path: str = "",
-                 pose_model_path: str = "",
                  device: str = "cuda",
                  conf_threshold: float = 0.0,
                  required_stable: int = 0,
@@ -92,48 +119,72 @@ class HandInCupDetector:
         """
         Args:
             cup_model_path:  YOLO 杯检测模型路径 (空=从 config 读).
-            pose_model_path: YOLO-Pose 模型路径 (空=从 config 读).
             device:          "cuda" | "cpu".
-            conf_threshold:  检测置信度阈值 (0=从 config 读).
+            conf_threshold:  杯检测置信度阈值 (0=从 config 读).
             required_stable: 连续确认帧数 (0=从 config 读).
-            dist_factor:     距离阈值 = bbox 对角线 × dist_factor (0=从 config 读).
+            dist_factor:     距离阈值因子 (保留, 未在计分制中使用).
             depth_tolerance: 手腕-杯心深度差阈值 (米) (0=从 config 读).
         """
         cfg = self._load_default_config()
         if not cup_model_path:
             cup_model_path = cfg["cup_model"]
-        if not pose_model_path:
-            pose_model_path = cfg["pose_model"]
 
         self._conf_threshold = conf_threshold if conf_threshold > 0 else cfg["conf_threshold"]
         self._required_stable = required_stable if required_stable > 0 else cfg["required_stable"]
         self._dist_factor = dist_factor if dist_factor > 0 else cfg["dist_factor"]
         self._depth_tolerance = depth_tolerance if depth_tolerance > 0 else cfg["depth_tolerance"]
+        self._bbox_margin = cfg["bbox_margin"]
+        self._curled_threshold = cfg["curled_threshold"]
+        self._curled_min_fingers = cfg["curled_min_fingers"]
+        self._cup_roi_fallback = cfg.get("cup_roi_fallback")
         self._stable_count = 0
         self._on_cup = False
 
-        # 模型
+        # Cup: YOLOv8m
         print(f"[HandInCup] Cup: {cup_model_path}")
         self._cup_model = YOLO(cup_model_path)
         self._cup_model.to(device)
 
-        print(f"[HandInCup] Pose: {pose_model_path}")
-        self._pose_model = YOLO(pose_model_path)
-        self._pose_model.to(device)
+        # Hand: MediaPipe Hands
+        hand_model_path = cfg["hand_model"]
+        print(f"[HandInCup] Hand: {hand_model_path}")
+        _options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=hand_model_path),
+            running_mode=RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=cfg["hand_min_detection_conf"],
+            min_tracking_confidence=cfg["hand_min_tracking_conf"],
+        )
+        self._hand_landmarker = HandLandmarker.create_from_options(_options)
+        self._mp_timestamp = 0
 
         # 可视化用
         self._last_cup_bbox = None
         self._last_cup_center = None
-        self._last_wrists = []
-        self._last_distances = []       # 各手腕到杯心的像素距离
-        self._last_depth_ok = False     # 深度是否匹配
+        self._last_hands = []           # 每手 {handedness, conf, wrist, mcps, tips, finger_dists}
+        self._last_best_hand = None     # 最近手 (同上)
+        self._last_score = 0
+        self._last_curled = 0           # 弯曲手指数
+        self._last_depth_ok = False
+
+    def close(self):
+        """释放 MediaPipe 资源."""
+        if hasattr(self, "_hand_landmarker") and self._hand_landmarker is not None:
+            try:
+                self._hand_landmarker.close()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------
+    #  核心逻辑
+    # ------------------------------------------------------------
 
     # ------------------------------------------------------------
     #  核心逻辑
     # ------------------------------------------------------------
 
     def update(self, color_image: np.ndarray, depth_frame=None):
-        """每帧调用.
+        """每帧调用 — landmarks-in-bbox 计分制.
 
         Args:
             color_image: BGR 图像 (H, W, 3).
@@ -142,109 +193,158 @@ class HandInCupDetector:
         # 1. 检测杯 bbox
         cup_bbox = self._detect_cup(color_image)
         self._last_cup_bbox = cup_bbox
-
-        # 2. 检测手腕
-        wrists = self._detect_wrists(color_image)
-        self._last_wrists = wrists
-
-        # 3. 邻近判定
-        hit = False
+        self._last_hands = []
+        self._last_best_hand = None
+        self._last_score = 0
+        self._last_depth_ok = False
         cup_center = None
-        distances = []
-        depth_ok = False
+        hit = False
 
-        if cup_bbox is not None and len(wrists) > 0:
-            # 杯心
-            cx = (cup_bbox[0] + cup_bbox[2]) // 2
-            cy = (cup_bbox[1] + cup_bbox[3]) // 2
+        if cup_bbox is not None:
+            x1, y1, x2, y2 = cup_bbox
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
             cup_center = (cx, cy)
 
-            # 阈值 = bbox 对角线 × dist_factor
-            w = cup_bbox[2] - cup_bbox[0]
-            h = cup_bbox[3] - cup_bbox[1]
-            dist_thresh = ((w ** 2 + h ** 2) ** 0.5) * self._dist_factor
+            # 2. 检测手部 landmarks
+            hands = self._detect_hands(color_image)
+            self._last_hands = hands
 
-            for wx, wy in wrists:
-                d = ((wx - cx) ** 2 + (wy - cy) ** 2) ** 0.5
-                distances.append(d)
-                if d < dist_thresh:
-                    hit = True
+            if hands:
+                # 3. 找最近手 (按 wrist 到杯心 2D 距离)
+                best_hand = min(hands, key=lambda h: (
+                    (h["wrist"][0] - cx) ** 2 + (h["wrist"][1] - cy) ** 2
+                ) ** 0.5)
+                self._last_best_hand = best_hand
 
-            # 深度辅助 (可选): 手腕与杯心深度差 < tolerance
-            if hit and depth_frame is not None:
-                # 取杯心深度 (中值 5x5)
-                cup_depths = []
-                for dy in range(-2, 3):
-                    for dx in range(-2, 3):
-                        py, px = cy + dy, cx + dx
-                        if 0 <= py < color_image.shape[0] and 0 <= px < color_image.shape[1]:
-                            d = depth_frame.get_distance(px, py)
-                            if 0 < d < 2.0:
-                                cup_depths.append(d)
-                if cup_depths:
-                    cup_z = np.median(cup_depths)
-                    # 检查每个手腕的深度
-                    for wx, wy in wrists:
+                # 4. 计分: 统计落在杯 bbox (外扩 margin) 内的 landmarks
+                mx1 = max(0, x1 - self._bbox_margin)
+                my1 = max(0, y1 - self._bbox_margin)
+                mx2 = min(color_image.shape[1], x2 + self._bbox_margin)
+                my2 = min(color_image.shape[0], y2 + self._bbox_margin)
+
+                score = 0
+                wx, wy = best_hand["wrist"]
+                if mx1 <= wx <= mx2 and my1 <= wy <= my2:
+                    score += 2  # wrist 权重 ×2
+                for (px, py) in best_hand["mcps"]:
+                    if mx1 <= px <= mx2 and my1 <= py <= my2:
+                        score += 1
+                for (px, py) in best_hand["tips"]:
+                    if mx1 <= px <= mx2 and my1 <= py <= my2:
+                        score += 1
+
+                # 握拳检测: 几根手指弯曲 (MCP→TIP 距离 < 阈值)?
+                curled_count = sum(1 for d in best_hand.get("finger_dists", []) if d < self._curled_threshold)
+                is_gripping = (curled_count >= self._curled_min_fingers)
+
+                self._last_score = score
+                self._last_curled = curled_count
+                hit = (score >= 2) and is_gripping
+
+                # 5. 深度辅助: 最近手手腕深度 vs 杯深度
+                if hit and depth_frame is not None:
+                    cup_depths = []
+                    for dy in range(-2, 3):
+                        for dx in range(-2, 3):
+                            py, px = cy + dy, cx + dx
+                            if 0 <= py < color_image.shape[0] and 0 <= px < color_image.shape[1]:
+                                dd = depth_frame.get_distance(px, py)
+                                if 0 < dd < 2.0:
+                                    cup_depths.append(dd)
+                    if cup_depths:
+                        cup_z = np.median(cup_depths)
                         wz = depth_frame.get_distance(wx, wy)
                         if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance:
-                            depth_ok = True
-                            break
-                    if not depth_ok:  # 深度差异大 → 手在杯前/后, 非抓取
-                        hit = False
+                            self._last_depth_ok = True
+                        else:
+                            hit = False
 
         self._last_cup_center = cup_center
-        self._last_distances = distances
-        self._last_depth_ok = depth_ok
 
-        # 4. 累积
+        # 6. 累积
         if hit:
             self._stable_count += 1
         else:
             self._stable_count = 0
-
         self._on_cup = self._stable_count >= self._required_stable
 
+    # ------------------------------------------------------------
+
     def _detect_cup(self, color_image):
-        """YOLOv8m 检测水杯, 返回最高置信度 bbox [x1,y1,x2,y2] 或 None."""
+        """YOLOv8m 检测水杯, 失败时回退到固定 ROI (cup_roi_fallback).
+
+        Returns:
+            [x1,y1,x2,y2] 或 None.
+        """
         results = self._cup_model(color_image, classes=[41], verbose=False)
-        if not results or len(results[0].boxes) == 0:
-            return None
-        boxes = results[0].boxes
-        confs = boxes.conf.cpu().numpy()
-        best_idx = confs.argmax()
-        if confs[best_idx] < self._conf_threshold:
-            return None
-        xyxy = boxes.xyxy.cpu().numpy()[best_idx]
-        return [int(x) for x in xyxy]
+        if results and len(results[0].boxes) > 0:
+            boxes = results[0].boxes
+            confs = boxes.conf.cpu().numpy()
+            best_idx = confs.argmax()
+            if confs[best_idx] >= self._conf_threshold:
+                xyxy = boxes.xyxy.cpu().numpy()[best_idx]
+                return [int(x) for x in xyxy]
 
-    def _detect_wrists(self, color_image):
-        """YOLOv8n-Pose 检测, 返回可见手腕像素坐标列表 [(x, y), ...]."""
-        results = self._pose_model(color_image, verbose=False)
-        if not results or results[0].keypoints is None:
+        # YOLO 未检测到 → 回退到固定 ROI
+        if self._cup_roi_fallback is not None:
+            return list(self._cup_roi_fallback)
+        return None
+
+    # ------------------------------------------------------------
+
+    def _detect_hands(self, color_image):
+        """MediaPipe Hands 检测 → 返回每只手的 key landmarks.
+
+        Returns:
+            list of dict: [
+              {"handedness": "Right", "conf": 1.0, "wrist": (x,y),
+               "mcps": [(x,y),...], "tips": [(x,y),...], "landmark_count": 17},
+              ...
+            ], 按 conf 降序.
+        """
+        h, w = color_image.shape[:2]
+        rgb = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        self._mp_timestamp += 33  # ~30fps 帧间隔
+
+        result = self._hand_landmarker.detect_for_video(mp_image, self._mp_timestamp)
+        if not result.hand_landmarks:
             return []
 
-        kpts = results[0].keypoints
-        if kpts.xy is None or kpts.conf is None:
-            return []
+        hands = []
+        for i, hand_lms in enumerate(result.hand_landmarks):
+            handedness = result.handedness[i][0].category_name if result.handedness else "?"
+            conf = result.handedness[i][0].score if result.handedness else 0.0
 
-        n_people = kpts.conf.shape[0]
-        n_kpts = kpts.conf.shape[1]
-        if n_people == 0 or n_kpts == 0:
-            return []
+            def _to_px(lm):
+                return (int(lm.x * w), int(lm.y * h))
 
-        wrist_indices = [self.LEFT_WRIST, self.RIGHT_WRIST]
-        wrists = []
-        for idx in wrist_indices:
-            if idx >= n_kpts:
-                continue
-            confs = kpts.conf[:, idx].cpu().numpy()
-            if len(confs) == 0:
-                continue
-            best_person = confs.argmax()
-            if confs[best_person] >= self._conf_threshold:
-                xy = kpts.xy[best_person, idx].cpu().numpy()
-                wrists.append((int(xy[0]), int(xy[1])))
-        return wrists
+            wrist = _to_px(hand_lms[MP_WRIST])
+            mcps = [_to_px(hand_lms[idx]) for idx in MP_MCP]
+            tips = [_to_px(hand_lms[idx]) for idx in MP_TIP]
+            # MCP→TIP 像素距离 (4 根手指: INDEX, MIDDLE, RING, PINKY)
+            _mcp_ids = list(MP_MCP.keys())   # [5, 9, 13, 17]
+            _tip_ids = list(MP_TIP.keys())   # [4, 8, 12, 16, 20]
+            # finger pairs: INDEX(5→8), MIDDLE(9→12), RING(13→16), PINKY(17→20)
+            finger_dists = []
+            for mcp_id, tip_id in [(_mcp_ids[0], _tip_ids[1]), (_mcp_ids[1], _tip_ids[2]),
+                                    (_mcp_ids[2], _tip_ids[3]), (_mcp_ids[3], _tip_ids[4])]:
+                mx, my = _to_px(hand_lms[mcp_id])
+                tx, ty = _to_px(hand_lms[tip_id])
+                d = ((mx - tx) ** 2 + (my - ty) ** 2) ** 0.5
+                finger_dists.append(d)
+
+            hands.append({
+                "handedness": handedness,
+                "conf": conf,
+                "wrist": wrist,
+                "mcps": mcps,
+                "tips": tips,
+                "finger_dists": finger_dists,  # [d_index, d_middle, d_ring, d_pinky]
+            })
+        hands.sort(key=lambda h: -h["conf"])
+        return hands
 
     # ------------------------------------------------------------
     #  公开属性
@@ -263,8 +363,10 @@ class HandInCupDetector:
         self._on_cup = False
         self._last_cup_bbox = None
         self._last_cup_center = None
-        self._last_wrists = []
-        self._last_distances = []
+        self._last_hands = []
+        self._last_best_hand = None
+        self._last_score = 0
+        self._last_curled = 0
         self._last_depth_ok = False
 
     # ------------------------------------------------------------
@@ -272,7 +374,7 @@ class HandInCupDetector:
     # ------------------------------------------------------------
 
     def draw_visualization(self, color_image: np.ndarray) -> np.ndarray:
-        """在图像上绘制检测结果可视化.
+        """在图像上绘制检测结果可视化 (MediaPipe landmarks + cup bbox).
 
         Returns:
             带标注的 BGR 图像副本.
@@ -282,38 +384,69 @@ class HandInCupDetector:
         # ---- 状态行 ----
         status = "ON CUP" if self._on_cup else f"wait... ({self._stable_count}/{self._required_stable})"
         status_color = (0, 255, 0) if self._on_cup else (0, 165, 255)
-        cv2.putText(display, f"HandInCup: {status}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+        cv2.putText(display, f"HandInCup: {status}  score={self._last_score} curled={self._last_curled}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
 
-        # ---- 杯 bbox (紫) ----
+        # ---- 杯 bbox (紫) + expanded bbox (紫虚线) ----
         bbox = self._last_cup_bbox
         if bbox is not None:
             x1, y1, x2, y2 = bbox
-            w, h = x2 - x1, y2 - y1
             cv2.rectangle(display, (x1, y1), (x2, y2), (255, 0, 255), 2)
             cv2.putText(display, "cup", (x1, y1 - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+            # expanded bbox
+            m = self._bbox_margin
+            ex1, ey1 = max(0, x1 - m), max(0, y1 - m)
+            ex2 = min(color_image.shape[1], x2 + m)
+            ey2 = min(color_image.shape[0], y2 + m)
+            cv2.rectangle(display, (ex1, ey1), (ex2, ey2), (255, 128, 255), 1, cv2.LINE_AA)
 
-            # 杯心 + 距离圆
+            # 杯心
             cx, cy = self._last_cup_center or ((x1 + x2) // 2, (y1 + y2) // 2)
-            dist_thresh = ((w ** 2 + h ** 2) ** 0.5) * self._dist_factor
-            cv2.circle(display, (cx, cy), int(dist_thresh), (255, 128, 255), 1, cv2.LINE_AA)
             cv2.drawMarker(display, (cx, cy), (255, 0, 255), cv2.MARKER_CROSS, 10, 1)
 
-        # ---- 手腕 + 连线 (黄) ----
-        for i, (wx, wy) in enumerate(self._last_wrists):
-            cv2.drawMarker(display, (wx, wy), (0, 255, 255), cv2.MARKER_CROSS, 15, 2)
-            cv2.putText(display, "wrist", (wx + 5, wy - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+        # ---- 最近手 landmarks (MediaPipe) ----
+        best = self._last_best_hand
+        if best is not None:
+            # 骨架连线 (绿)
+            for a, b in HAND_BONES:
+                pts = {
+                    MP_WRIST: best["wrist"],
+                    **{k: best["mcps"][i] for i, k in enumerate(MP_MCP)},
+                    **{k: best["tips"][i] for i, k in enumerate(MP_TIP)},
+                }
+                if a in pts and b in pts:
+                    cv2.line(display, pts[a], pts[b], (0, 255, 0), 1, cv2.LINE_AA)
 
-            # 到杯心的连线 + 距离值
-            if self._last_cup_center and i < len(self._last_distances):
-                cx, cy = self._last_cup_center
-                d = self._last_distances[i]
-                cv2.line(display, (wx, wy), (cx, cy), (0, 255, 255), 1, cv2.LINE_AA)
-                mid_x, mid_y = (wx + cx) // 2, (wy + cy) // 2
-                cv2.putText(display, f"{d:.0f}px", (mid_x, mid_y - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            # 手腕 (大红点)
+            wx, wy = best["wrist"]
+            cv2.circle(display, (wx, wy), 7, (0, 0, 255), -1)
+            cv2.putText(display, "wrist", (wx + 5, wy - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+
+            # MCPs (黄/灰 — 在 bbox 内=绿)
+            def _in_expanded(px, py):
+                if bbox is None:
+                    return False
+                m = self._bbox_margin
+                return (bbox[0]-m) <= px <= (bbox[2]+m) and (bbox[1]-m) <= py <= (bbox[3]+m)
+
+            for px, py in best["mcps"]:
+                in_bbox = _in_expanded(px, py) if bbox else False
+                color = (0, 255, 0) if in_bbox else (128, 128, 128)
+                cv2.circle(display, (px, py), 4, color, -1)
+
+            # TIPs (绿/灰)
+            for px, py in best["tips"]:
+                in_bbox = _in_expanded(px, py) if bbox else False
+                color = (0, 255, 0) if in_bbox else (128, 128, 128)
+                cv2.circle(display, (px, py), 3, color, -1)
+
+            # handedness + conf + finger dists
+            fd = best.get("finger_dists", [])
+            fd_str = " ".join(f"{d:.0f}" for d in fd)
+            cv2.putText(display, f"{best['handedness']}({best['conf']:.2f}) fingers:[{fd_str}]px",
+                        (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 2)
 
         return display
 
@@ -403,48 +536,51 @@ class HandInCupDetector:
                 for n, cid, conf, xyxy in sorted(found, key=lambda x: -x[2]):
                     lines.append(f"  class={cid}({n}) conf={conf:.3f}  bbox={xyxy}")
 
-        # Pose 模型
-        lines.append("\n--- Pose ---")
-        ks_names = {5:"L_SHOU",6:"R_SHOU",7:"L_ELBOW",8:"R_ELBOW",9:"L_WRIST",10:"R_WRIST"}
-        results = self._pose_model(color_image, verbose=False)
-        pose_kpts = None
-        if results and results[0].keypoints is not None:
-            kpts = results[0].keypoints
-            if kpts.conf is not None:
-                pose_kpts = kpts
-                n_p, n_k = kpts.conf.shape[0], kpts.conf.shape[1]
-                lines.append(f"  检测到 {n_p} 人, {n_k} 关键点")
-                for p in range(n_p):
-                    pconf = kpts.conf[p].cpu().numpy()
-                    best_k = pconf.argmax()
-                    lines.append(f"\n  Person {p}: best={ks_names.get(best_k,str(best_k))} conf={pconf[best_k]:.3f}")
-                    for idx in [5,6,7,8,9,10]:
-                        if idx < n_k:
-                            xy = kpts.xy[p,idx].cpu().numpy()
-                            lines.append(f"    {ks_names.get(idx,str(idx)):8s} conf={pconf[idx]:.3f}  xy=({int(xy[0]):4d},{int(xy[1]):4d})")
-        if pose_kpts is None:
+        # Hand 模型 (MediaPipe)
+        lines.append("\n--- MediaPipe Hands ---")
+        hands = self._detect_hands(color_image)
+        if hands:
+            for i, h in enumerate(hands):
+                wx, wy = h["wrist"]
+                lines.append(f"  [{i}] {h['handedness']}({h['conf']:.2f}) "
+                             f"wrist=({wx},{wy})  mcps={len(h['mcps'])} tips={len(h['tips'])}")
+        else:
             lines.append("  (无)")
 
         # ---- HandInCup 判定分析 ----
         lines.append("\n--- HandInCup 判定 ---")
-        if cup_bboxes and pose_kpts is not None:
-            best_cup_conf, (x1,y1,x2,y2) = max(cup_bboxes, key=lambda x: x[0])
+        if cup_bboxes and hands:
+            best_cup = max(cup_bboxes, key=lambda x: x[0])
+            best_cup_conf, (x1,y1,x2,y2) = best_cup
             cx, cy = (x1+x2)//2, (y1+y2)//2
             bbox_diag = ((x2-x1)**2 + (y2-y1)**2) ** 0.5
-            dist_thresh = bbox_diag * self._dist_factor
-            lines.append(f"  杯心=({cx},{cy})  bbox={x2-x1}x{y2-y1}  对角线={bbox_diag:.0f}px  阈值={dist_thresh:.0f}px")
+            lines.append(f"  杯心=({cx},{cy})  bbox={x2-x1}x{y2-y1}  对角线={bbox_diag:.0f}px")
+            lines.append(f"  bbox_margin={self._bbox_margin}  score_thresh=2")
 
-            wrists = []
-            for p in range(pose_kpts.conf.shape[0]):
-                for idx in [9, 10]:
-                    if float(pose_kpts.conf[p,idx]) >= self._conf_threshold:
-                        xy = pose_kpts.xy[p,idx].cpu().numpy()
-                        d = ((xy[0]-cx)**2 + (xy[1]-cy)**2) ** 0.5
-                        wrists.append((p, idx, int(xy[0]), int(xy[1]), d))
-            if wrists:
-                for p, idx, wx, wy, d in wrists:
-                    hit = "✓ HIT" if d < dist_thresh else "✗ MISS"
-                    lines.append(f"  Person{p} {'L_WRIST' if idx==9 else 'R_WRIST'} ({wx},{wy}) → {d:.0f}px  [{hit}]")
+            # 找最近手并计分
+            best_hand = min(hands, key=lambda h: (
+                (h["wrist"][0]-cx)**2 + (h["wrist"][1]-cy)**2)**0.5)
+            wx, wy = best_hand["wrist"]
+            m = self._bbox_margin
+            mx1, my1 = max(0, x1-m), max(0, y1-m)
+            mx2, my2 = min(w, x2+m), min(h, y2+m)
+
+            score = 0
+            if mx1 <= wx <= mx2 and my1 <= wy <= my2:
+                score += 2
+                lines.append(f"  wrist({wx},{wy}) in bbox → +2")
+            else:
+                lines.append(f"  wrist({wx},{wy}) OUT")
+            for (px, py) in best_hand["mcps"]:
+                if mx1 <= px <= mx2 and my1 <= py <= my2:
+                    score += 1
+                    lines.append(f"  mcp({px},{py}) in bbox → +1")
+            for (px, py) in best_hand["tips"]:
+                if mx1 <= px <= mx2 and my1 <= py <= my2:
+                    score += 1
+                    lines.append(f"  tip({px},{py}) in bbox → +1")
+            hit = score >= 2
+            lines.append(f"  score={score} → {'✓ HIT' if hit else '✗ MISS'}")
 
             if depth_frame is not None:
                 cup_depths = []
@@ -457,17 +593,15 @@ class HandInCupDetector:
                                 cup_depths.append(d)
                 if cup_depths:
                     cup_z = np.median(cup_depths)
-                    lines.append(f"  杯深度: {cup_z:.3f}m (中值 {len(cup_depths)} 点)")
-                    for p, idx, wx, wy, _ in wrists:
-                        wz = depth_frame.get_distance(wx, wy)
-                        ok = "OK" if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance else "FAIL"
-                        lines.append(f"  手腕深度: {wz:.3f}m  diff={abs(wz-cup_z):.3f}m  [{ok}]")
+                    wz = depth_frame.get_distance(wx, wy)
+                    ok = "OK" if 0 < wz < 2.0 and abs(wz-cup_z) < self._depth_tolerance else "FAIL"
+                    lines.append(f"  杯深度={cup_z:.3f}m  手腕深度={wz:.3f}m  diff={abs(wz-cup_z):.3f}m  [{ok}]")
                 else:
-                    lines.append("  ⚠️ 杯深度无效 (杯心 5x5 区域无有效深度值)")
+                    lines.append("  ⚠️ 杯深度无效")
             else:
                 lines.append("  depth_frame=None (仅2D判定)")
         else:
-            lines.append(f"  cup={'✓' if cup_bboxes else '✗'}  pose={'✓' if pose_kpts else '✗'} — 无法判定")
+            lines.append(f"  cup={'✓' if cup_bboxes else '✗'}  hands={'✓' if hands else '✗'} — 无法判定")
 
         # 写入日志
         text = "\n".join(lines)
@@ -475,23 +609,14 @@ class HandInCupDetector:
             f.write(text + "\n")
         print(f"[DIAG] 诊断结果 → {log_file}")
 
-        # 可视化
-        display = color_image.copy()
+        # 可视化: 复用 draw_visualization + 添加 YOLO cup 标注
+        display = self.draw_visualization(color_image)
         if cup_bboxes:
             best = max(cup_bboxes, key=lambda x: x[0])
-            x1,y1,x2,y2 = best[1]
-            cv2.rectangle(display, (x1,y1), (x2,y2), (255,0,255), 3)
-            cv2.putText(display, f"cup {best[0]:.2f}", (x1,y1-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,255), 1)
-        if pose_kpts is not None:
-            for p in range(pose_kpts.conf.shape[0]):
-                for idx in range(min(pose_kpts.conf.shape[1], 17)):
-                    if float(pose_kpts.conf[p,idx]) >= 0.3:
-                        xy = pose_kpts.xy[p,idx].cpu().numpy()
-                        cv2.drawMarker(display, (int(xy[0]),int(xy[1])),
-                                     (0,255,255), cv2.MARKER_CROSS, 8, 1)
-                        cv2.putText(display, str(idx), (int(xy[0])+3,int(xy[1])-3),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0,255,255), 1)
+            x1, y1, x2, y2 = best[1]
+            cv2.putText(display, f"cup {best[0]:.2f}", (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+            cv2.rectangle(display, (x1, y1), (x2, y2), (255, 0, 255), 3)
         return display
 
     # ------------------------------------------------------------
@@ -601,8 +726,10 @@ class HandInCupDetector:
         verdict = "TRUE  (人手在杯上)" if self._on_cup else "FALSE (无人手/不在杯上)"
         print(f"[RESULT] HandInCup = {verdict}")
         print(f"         cup_bbox={self._last_cup_bbox}")
-        print(f"         wrists={self._last_wrists}")
-        print(f"         distances={[f'{d:.0f}px' for d in self._last_distances]}")
+        print(f"         score={self._last_score}")
+        if self._last_best_hand:
+            h = self._last_best_hand
+            print(f"         best_hand={h['handedness']}({h['conf']:.2f}) wrist={h['wrist']} mcps={len(h['mcps'])} tips={len(h['tips'])}")
 
         # 恢复
         self._required_stable = original_stable
@@ -648,8 +775,8 @@ class HandInCupDetector:
         runner = _TestRunner(config_dict=_cfg)
         print("=" * 55)
         print("  Hand-in-cup 检测测试")
-        print("  YOLOv8m (cup) + YOLOv8n-Pose (wrist)")
-        print("  邻近判定 + 深度辅助")
+        print("  YOLOv8m (cup) + MediaPipe Hands (21 landmarks)")
+        print("  landmarks-in-bbox 计分制 + 深度辅助")
         print("  按 'q' 退出")
         print("=" * 55)
 

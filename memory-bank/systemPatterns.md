@@ -27,7 +27,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 | 深度对齐 | rs.align (新相机) / 手动像素映射 (旧相机) | 旧相机内参损坏无法使用 rs.align |
 | 通信协议 | TCP 单 Session 全流程 | 简单可靠, 与 ESTUN 兼容; 避免多连接状态同步 |
 | 配置管理 | YAML 文件 (模块级 config.yaml) | 不改代码可调参数 |
-| HandInCup | YOLOv8m(cup bbox) + YOLOv8n-Pose(wrist) | 2D 判定, 零额外依赖, 独立可测试 |
+| HandInCup | YOLOv8m(cup) + MediaPipe Hands(21 landmarks) | landmarks-in-bbox 计分 + 握拳 gate; 遮挡时杯ROI回退 |
 | Cup P3 递送 | X 动态 (Camera B) + YZ/ABC 固定 (示教) | 安全: YZ/ABC 预教避免碰撞, X 自适应人体位置 |
 
 ## 设计模式
@@ -76,9 +76,12 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 
 ### HandInCup 检测模式
 
-- 双模型 2D 判定: YOLOv8m (杯 bbox class=41) + YOLOv8n-Pose (手腕 kpt 9/10)
-- 连续 N 帧手腕在杯 bbox 扩展区内 → `is_hand_on_cup = True`
-- 独立文件 `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试
+- **杯检测**: YOLOv8m (class=41) → 失败回退固定 ROI (`cup_roi_fallback`)
+- **手检测**: MediaPipe Hands (21 landmarks, 帧间跟踪, RunningMode.VIDEO)
+- **判定**: landmarks-in-bbox 计分制 — 最近手的 wrist(×2) + MCP(×1) + TIP(×1) 落在杯 bbox 扩展区内 ≥ 2 分
+- **握拳 gate**: MCP→TIP 距离 < `curled_threshold`(25px) ≥ `curled_min_fingers`(2) 根才判定握杯，防止开掌划过误触发
+- **深度辅助**: 最近手手腕深度 vs 杯心深度 < `depth_tolerance`(0.10m)
+- 独立文件 `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试 (`--calibrate-roi` 标定工具)
 
 ### PersonDetector / HandInCup 共用 Camera B Pipeline
 
@@ -119,7 +122,7 @@ RealSense/  (新相机, rs.align)       ← Camera B 基类
 
 EyeToHand/                           ← 眼在手外模块
   ├── person_detector.py             ← PersonDetector (人体 X)
-  ├── hand_in_cup.py                 ← HandInCupDetector (YOLOv8m+YOLOv8n-Pose)
+  ├── hand_in_cup.py                 ← HandInCupDetector (YOLOv8m+MediaPipe Hands)
   ├── detector.py                    ← load_calibration / person_to_base_x
   ├── config.yaml                    ← Person + 递送(全示教) + HandInCup 配置
   └── calibration/
