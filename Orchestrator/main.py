@@ -37,6 +37,7 @@ from Orchestrator.state_machine import (
     StateMachine,
     OrchestratorState,
     IdleHandler,
+    GreetingHandler,
     HandleGraspAndPourHandler,
 )
 from EyeToHand.hand_in_cup import HandInCupDetector
@@ -88,6 +89,7 @@ def main():
     # ---- [4] 注册状态机 ----
     sm = StateMachine()
     sm.register(OrchestratorState.IDLE, IdleHandler())
+    sm.register(OrchestratorState.GREETING, GreetingHandler())
     sm.register(OrchestratorState.HANDLE_GRASP_AND_POUR, HandleGraspAndPourHandler())
     sm.transition_to(ctx, OrchestratorState.IDLE)
 
@@ -112,15 +114,8 @@ def main():
             else:
                 ctx.frames_b = None
 
-            # ---- Person 检测 (IDLE & HANDLE_GRASP_AND_POUR 初期) ----
-            if pd is not None and not ctx.stop_person_detector:
-                if ctx.frames_b is not None:
-                    color_b, depth_b, _, depth_frame_b = ctx.frames_b
-                    if color_b is not None and depth_frame_b is not None:
-                        result = pd.detect_person_stable(color_b, depth_frame_b)
-                        if result is not None and result["pos_3d_cam"] is not None:
-                            ctx.latest_person_3d = result["pos_3d_cam"]
-                            ctx.person_stable_x_cam = float(result["pos_3d_cam"][0])
+            # ---- Camera B 持续运行 (椅子标定 + 人就位 由状态机内部驱动) ----
+            # 主循环仅保持帧获取, 具体逻辑由各状态的 on_update 处理
 
             # ---- Hand-in-cup 检测 (READY → RELEASE) ----
             if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
@@ -154,18 +149,21 @@ def main():
                     cv2.putText(vis_b, f"State: {state_name}", (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                    # Person 检测状态
-                    if not ctx.stop_person_detector:
-                        if ctx.latest_person_3d is not None:
-                            px, py, pz = ctx.latest_person_3d
-                            cv2.putText(vis_b, f"Person: ({px:.3f},{py:.3f},{pz:.3f})",
-                                        (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                        else:
-                            cv2.putText(vis_b, "Person: detecting...", (10, 55),
+                    # Person / 椅子 / 就位 状态
+                    pd2 = ctx.person_detector
+                    if pd2 is not None:
+                        if not pd2.is_chair_calibrated:
+                            cv2.putText(vis_b, "Chair: calibrating...", (10, 55),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
-                    else:
-                        cv2.putText(vis_b, "Person: STOPPED", (10, 55),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
+                        elif not ctx.stop_person_detector:
+                            sc = pd2.seated_stable_count
+                            status = "SEATED" if pd2.is_person_seated else "waiting"
+                            s_color = (0, 255, 0) if pd2.is_person_seated else (0, 165, 255)
+                            cv2.putText(vis_b, f"Person: {status} ({sc})", (10, 55),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, s_color, 2)
+                        else:
+                            cv2.putText(vis_b, "Person: STOPPED", (10, 55),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
 
                     # Hand-in-cup 状态
                     h_status = f"HandInCup: {'ON_CUP' if ctx.hand_on_cup else 'idle'}"

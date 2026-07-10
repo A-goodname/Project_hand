@@ -153,6 +153,7 @@ class PoseStabilizer:
 
 class OrchestratorState(Enum):
     IDLE = auto()
+    GREETING = auto()              # Phase 0 打招呼 (Camera A 独立 pipeline + TCP 8600)
     HANDLE_GRASP_AND_POUR = auto()
 
 
@@ -187,14 +188,16 @@ class SharedContext:
     stop_event: threading.Event = field(default_factory=threading.Event)
 
     # Person 检测 (main loop 写入, TCP handler 读取)
-    latest_person_3d: Optional[tuple] = None       # (x, y, z) Camera B 系
+    latest_person_3d: Optional[tuple] = None       # (x, y, z) Camera B 系 (可视化用)
     stop_person_detector: bool = False              # CUP 时置 True
-    person_stable_x_cam: Optional[float] = None     # CUP 时缓存: 最新稳定 X_cam
 
     # Hand-in-cup 检测 (TCP handler 控制开关, main loop 更新结果)
     hand_in_cup_active: bool = False
     hand_on_cup: Optional[bool] = None              # True/False/None(未就绪)
     hand_in_cup_detector: Optional["HandInCupDetector"] = None  # 共享实例, main.py 创建
+
+    # GREETING 完成标志
+    greeting_complete: threading.Event = field(default_factory=threading.Event)
 
     # HANDLE_GRASP_AND_POUR 完成标志
     handle_cup_complete: threading.Event = field(default_factory=threading.Event)
@@ -291,7 +294,7 @@ class StateMachine:
 # ============================================================
 
 class IdleHandler(StateHandler):
-    """IDLE: Camera B PersonDetector 等待检测到人 → 触发."""
+    """IDLE: Camera B 椅子标定 → 人就位检测 → 触发 GREETING."""
 
     def __init__(self):
         super().__init__("IDLE")
@@ -310,31 +313,394 @@ class IdleHandler(StateHandler):
         ctx.hand_in_cup_active = False
         ctx.hand_on_cup = None
         ctx.latest_person_3d = None
-        ctx.person_stable_x_cam = None
         ctx.handle_cup_complete.clear()
-        print("[IDLE] 等待检测到人体...")
+        ctx.greeting_complete.clear()
+        print("[IDLE] 等待椅子标定 + 人就位...")
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        if ctx.person_detector is None:
+        pd = ctx.person_detector
+        if pd is None:
             return None
         if ctx.frames_b is None:
             return None
         color, depth, _, depth_frame = ctx.frames_b
-        if color is None or depth_frame is None:
+        if color is None:
             return None
 
-        result = ctx.person_detector.detect_person_stable(color, depth_frame)
-        if result is not None and result["pos_3d_cam"] is not None:
-            pos = result["pos_3d_cam"]
-            ctx.latest_person_3d = pos
-            ctx.person_stable_x_cam = float(pos[2])
-            print(f"[IDLE] 检测到人体 ✅ Z_cam={pos[2]:.3f} (深度), X={pos[0]:.3f}, Y={pos[1]:.3f}")
+        # Step 1: 椅子标定 (仅一次, 椅子空时最佳)
+        if not pd.is_chair_calibrated:
+            pd.calibrate_chair(color)
+            return None
+
+        # Step 2: 人就位检测
+        seated = pd.detect_person_seated(color)
+        if seated is not None:
+            ctx.latest_person_3d = None  # 3D 位置不再用于 P3, 仅保留占位
+            if seated["is_seated"]:
+                print(f"[IDLE] 人就位 ✅ overlap={seated['overlap_ratio']:.2f} "
+                      f"stable={seated['seated_stable']}/{seated['seated_required']}")
+                return OrchestratorState.GREETING
+        return None
+
+    def on_exit(self, ctx: SharedContext):
+        # PersonDetector pipeline 保持运行, Camera B 继续用于后续状态
+        pass
+
+
+# ============================================================
+# GREETING 处理器 (Phase 0 打招呼)
+# ============================================================
+
+class GreetingHandler(StateHandler):
+    """GREETING: Phase 0 打招呼 — 独立 Camera A pipeline + TCP 8600.
+
+    4 步协议 (单连接, 移植自 estun_greeting_handle_cup_run.py):
+      Step 1: recv 机器人位姿 → reply ZHAOSHOU1
+      Step 2: recv 确认 → Camera A 等人 → close camera → reply ZHAOSHOU2
+      Step 3: recv 确认 → 挥手 → reply WOSHOU
+      Step 4: recv 确认 → 握手 → reply "Home"
+    """
+
+    def __init__(self):
+        super().__init__("GREETING")
+        self._server: Optional[socket.socket] = None
+        self._pipeline = None        # Camera A 独立 pipeline (仅 color)
+        self._yolo_model = None
+        self._person_stable = 0
+        self._person_required = 3    # 人进门检测连续帧数
+        self._greeting_started = False
+
+        # 打招呼位姿 (mm → m, start 时从 config 加载)
+        self._zhaoshou1 = None
+        self._zhaoshou2 = None
+        self._woshou = None
+        self._wave_cycles = 3
+        self._wave_interval = 0.6
+
+    # ================================================================
+    # 生命周期
+    # ================================================================
+
+    def on_enter(self, ctx: SharedContext):
+        self._start(ctx)
+        ctx.greeting_complete.clear()
+
+    def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
+        # 非阻塞 accept + 预览
+        self._accept_tcp(ctx)
+
+        if ctx.greeting_complete.is_set():
+            print(f"[GREETING] Phase 0 完成 ✅")
             return OrchestratorState.HANDLE_GRASP_AND_POUR
         return None
 
     def on_exit(self, ctx: SharedContext):
-        # PersonDetector pipeline 保持运行, 由 main loop 继续取帧
-        pass
+        self._stop()
+
+    # ================================================================
+    # 初始化 / 清理
+    # ================================================================
+
+    def _start(self, ctx: SharedContext):
+        estun = ctx.estun_config
+        greeting_cfg = estun.get("greeting", {})
+
+        # 加载打招呼位姿 (mm → m)
+        self._zhaoshou1 = [v / 1000.0 for v in greeting_cfg.get("zhaoshou1_pose", [0]*6)]
+        self._zhaoshou2 = [v / 1000.0 for v in greeting_cfg.get("zhaoshou2_pose", [0]*6)]
+        self._woshou = [v / 1000.0 for v in greeting_cfg.get("woshou_pose", [0]*6)]
+        self._wave_cycles = int(greeting_cfg.get("wave_cycles", 3))
+        self._wave_interval = float(greeting_cfg.get("wave_interval", 0.6))
+        print(f"[GREETING] 位姿已加载: Z1={self._zhaoshou1} Z2={self._zhaoshou2} WS={self._woshou}")
+
+        # 打开 Camera A 独立 pipeline (仅 color, Phase 0 专用)
+        self._open_camera(ctx.eye_to_hand_serial)  # 注意: Phase 0 用 Camera A (眼在手上)
+        # 实际用 Camera A serial: 来自 RealSense_R 旧相机
+        # TODO: Phase 0 人检测应该用 Camera A (眼在手上), 当前暂用独立 pipeline
+
+        # TCP 服务器 8600
+        port = int(greeting_cfg.get("port", 8600))
+        host = estun["tcp_server"]["host"]
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.setblocking(False)
+        self._server.bind((host, port))
+        self._server.listen(1)
+        print(f"[GREETING] TCP 服务器: {host}:{port}")
+
+        self._greeting_started = False
+
+    def _stop(self):
+        """清理资源."""
+        if self._server:
+            try:
+                self._server.close()
+            except Exception:
+                pass
+            self._server = None
+        self._close_camera()
+
+    # ================================================================
+    # Camera A 独立 pipeline (Phase 0 专用, 仅 color)
+    # ================================================================
+
+    def _open_camera(self, serial):
+        """打开 Camera A 彩色流 (Phase 0 专用)."""
+        import pyrealsense2 as rs
+        self._pipeline = rs.pipeline()
+        config = rs.config()
+        if serial:
+            config.enable_device(serial)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        self._pipeline.start(config)
+        print("[GREETING] Camera A 彩色流已启动 (Phase 0)")
+
+    def _get_camera_frame(self):
+        """获取一帧 Camera A 彩色图像."""
+        if self._pipeline is None:
+            return None
+        try:
+            frames = self._pipeline.wait_for_frames(5000)
+            color = frames.get_color_frame()
+            if not color:
+                return None
+            return np.asanyarray(color.get_data())
+        except Exception:
+            return None
+
+    def _close_camera(self):
+        """关闭 Phase 0 Camera pipeline."""
+        if self._pipeline is not None:
+            try:
+                self._pipeline.stop()
+                print("[GREETING] Camera A 已关闭")
+            except Exception:
+                pass
+            self._pipeline = None
+
+    # ================================================================
+    # YOLO 人检测 (进门)
+    # ================================================================
+
+    def _ensure_yolo(self):
+        if self._yolo_model is not None:
+            return self._yolo_model
+        from ultralytics import YOLO
+        model_path = os.path.join(_project_root, "model", "yolov8n.pt")
+        self._yolo_model = YOLO(model_path)
+        print("[GREETING] YOLOv8n 人检测模型已加载")
+        return self._yolo_model
+
+    def _person_detected(self, frame):
+        """检测画面中是否有人 (class=0, 面积 ≥ 2%)."""
+        model = self._ensure_yolo()
+        result = model.predict(
+            frame, classes=[0], conf=0.45, iou=0.45, imgsz=640, verbose=False,
+        )[0]
+        boxes = getattr(result, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return False
+        h, w = frame.shape[:2]
+        min_area = h * w * 0.02
+        for box in boxes:
+            xyxy = box.xyxy[0].detach().cpu().numpy()
+            x0, y0, x1, y1 = [float(v) for v in xyxy]
+            if (x1 - x0) * (y1 - y0) >= min_area:
+                return True
+        return False
+
+    def _wait_for_person(self, timeout=120.0):
+        """YOLO 人检测, 连续 N 帧稳定则返回."""
+        print("[GREETING] 等待人进门...")
+        self._person_stable = 0
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            frame = self._get_camera_frame()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            detected = self._person_detected(frame)
+            self._person_stable = self._person_stable + 1 if detected else 0
+            print(f"\r[GREETING] 等人: stable={self._person_stable}/{self._person_required}", end="")
+            if self._person_stable >= self._person_required:
+                print("\n[GREETING] 检测到人进门!")
+                return True
+            time.sleep(0.03)
+        print(f"\n[GREETING] 人检测超时 ({timeout}s)")
+        return False
+
+    # ================================================================
+    # 挥手 + 握手 (复用 estun_greeting_handle_cup_run.py 逻辑)
+    # ================================================================
+
+    def _execute_wave(self):
+        """Hello_1 ↔ Hello_2 ×N, 结束后 RESET."""
+        from Estun.utils_shared import _hand as _h
+        from Omnihand.omnihand_gesture import Gesture
+        if _h is not None:
+            print(f"[GREETING] 挥手 {self._wave_cycles} 次...")
+            for i in range(self._wave_cycles):
+                print(f"  {i+1}/{self._wave_cycles}")
+                _h.do_gesture(Gesture.HELLO_1, delay=self._wave_interval)
+                _h.do_gesture(Gesture.HELLO_2, delay=self._wave_interval)
+            _h.do_gesture(Gesture.RESET, delay=0.5)
+            print("[GREETING] RESET — 挥手结束")
+        else:
+            print("[GREETING] 模拟挥手")
+            time.sleep(self._wave_cycles * self._wave_interval * 2)
+
+    def _read_hand_back_pressure(self):
+        from Estun.utils_shared import _hand as _h
+        if _h is None:
+            return 0
+        sensors = _h.serial.read_all_sensor_group_3()
+        return int(np.asarray(sensors.get("back", []), dtype=np.int32).sum())
+
+    def _wait_for_handshake_force(self, timeout=30.0):
+        """等待手背压力 (基线+增量双阈值)."""
+        baseline_samples = []
+        for _ in range(5):
+            baseline_samples.append(self._read_hand_back_pressure())
+            time.sleep(0.05)
+        baseline = float(np.median(np.asarray(baseline_samples, dtype=np.float64)))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            value = self._read_hand_back_pressure()
+            delta = value - baseline
+            if (baseline < 50 and value >= 100) or (delta >= 100):
+                print(f"[GREETING] 检测到抓握! (value={value}, delta={delta:.0f})")
+                return True
+            time.sleep(0.15)
+        print(f"[GREETING] 压力超时")
+        return False
+
+    def _wait_for_handshake_release(self, timeout=60.0):
+        """等待松手: 连续 2s delta < 50."""
+        baseline_samples = []
+        for _ in range(5):
+            baseline_samples.append(self._read_hand_back_pressure())
+            time.sleep(0.05)
+        baseline = float(np.median(np.asarray(baseline_samples, dtype=np.float64)))
+        released_since = None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            value = self._read_hand_back_pressure()
+            delta = value - baseline
+            released = (delta <= 50)
+            if released:
+                if released_since is None:
+                    released_since = time.time()
+                if time.time() - released_since >= 2.0:
+                    print(f"[GREETING] 已松手!")
+                    return True
+            else:
+                released_since = None
+            time.sleep(0.15)
+        print(f"[GREETING] 松手超时")
+        return False
+
+    def _execute_handshake(self):
+        """RESET → 等压力 → HAND_SHAKE → 等松手 → RESET."""
+        from Estun.utils_shared import _hand as _h
+        from Omnihand.omnihand_gesture import Gesture
+        if _h is not None:
+            _h.do_gesture(Gesture.RESET, delay=0.5)
+            print("[GREETING] RESET — 等待握手...")
+            self._wait_for_handshake_force()
+            _h.do_gesture(Gesture.HAND_SHAKE, delay=1.0)
+            print("[GREETING] HAND_SHAKE")
+            self._wait_for_handshake_release()
+            _h.do_gesture(Gesture.RESET, delay=0.5)
+            print("[GREETING] RESET — 握手结束")
+        else:
+            print("[GREETING] 模拟握手")
+            time.sleep(3.0)
+
+    # ================================================================
+    # TCP
+    # ================================================================
+
+    def _accept_tcp(self, ctx: SharedContext):
+        """非阻塞 accept + 预览."""
+        if self._server is None or self._greeting_started:
+            return
+        try:
+            conn, addr = self._server.accept()
+            print(f"[GREETING] 机器人已连接: {addr}")
+            self._greeting_started = True
+            t = threading.Thread(
+                target=self._handle_session,
+                args=(conn, addr, ctx),
+                daemon=True,
+            )
+            t.start()
+        except BlockingIOError:
+            pass
+
+    def _handle_session(self, conn: socket.socket, addr, ctx: SharedContext):
+        """4 步协议 (daemon 线程)."""
+        print(f"[GREETING] 客户端: {addr}")
+        try:
+            # ---- Step 1: recv → reply ZHAOSHOU1 ----
+            conn.settimeout(5.0)
+            data = conn.recv(4096)
+            if not data:
+                print("[GREETING] Step 1: 未收到数据")
+                return
+            msg = data.decode("utf-8", errors="replace").strip()
+            print(f"[GREETING] Step 1 recv: {msg}")
+            r = fmt_pose(self._zhaoshou1[:3], self._zhaoshou1[3:])
+            conn.sendall(r.encode("utf-8"))
+            print(f"[GREETING] Step 1 reply ZHAOSHOU1: {r}")
+
+            # ---- Step 2: recv → 等人 → close camera → reply ZHAOSHOU2 ----
+            conn.settimeout(130.0)
+            data = conn.recv(4096)
+            if not data:
+                print("[GREETING] Step 2: 未收到数据")
+                return
+            print(f"[GREETING] Step 2 recv: {data.decode('utf-8', errors='replace').strip()}")
+            self._wait_for_person(timeout=120.0)
+            self._close_camera()
+            r = fmt_pose(self._zhaoshou2[:3], self._zhaoshou2[3:])
+            conn.sendall(r.encode("utf-8"))
+            print(f"[GREETING] Step 2 reply ZHAOSHOU2: {r}")
+
+            # ---- Step 3: recv → 挥手 → reply WOSHOU ----
+            conn.settimeout(30.0)
+            data = conn.recv(4096)
+            if not data:
+                print("[GREETING] Step 3: 未收到数据")
+                return
+            print(f"[GREETING] Step 3 recv: {data.decode('utf-8', errors='replace').strip()}")
+            self._execute_wave()
+            r = fmt_pose(self._woshou[:3], self._woshou[3:])
+            conn.sendall(r.encode("utf-8"))
+            print(f"[GREETING] Step 3 reply WOSHOU: {r}")
+
+            # ---- Step 4: recv → 握手 → reply "Home" ----
+            conn.settimeout(90.0)
+            data = conn.recv(4096)
+            if not data:
+                print("[GREETING] Step 4: 未收到数据")
+                return
+            print(f"[GREETING] Step 4 recv: {data.decode('utf-8', errors='replace').strip()}")
+            self._execute_handshake()
+            conn.sendall(b"Home")
+            print("[GREETING] Step 4 reply: Home")
+
+        except socket.timeout:
+            print(f"[GREETING] Step 超时")
+        except Exception as e:
+            print(f"[GREETING] 异常: {e}")
+        finally:
+            self._close_camera()
+            try:
+                conn.close()
+            except Exception:
+                pass
+            ctx.greeting_complete.set()
+            print(f"[GREETING] 客户端已断开: {addr}")
 
 
 # ============================================================
