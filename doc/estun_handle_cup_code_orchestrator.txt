@@ -2,37 +2,55 @@ ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程:
 ============================================================
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
+=== v5 相比 v4 的关键变化 ===
+1. Phase 0 (Greeting 打招呼) 已集成到 Orchestrator 状态机, 作为独立 GREETING 状态运行:
+   IDLE → GREETING (Phase 0, 端口 8600, Camera A 独立pipeline, 挥手/握手/YOLO人检测)
+        → HANDLE_GRASP_AND_POUR (Phase A-C-D, 端口 8080, 本 CRP 的 Phase A-D 段) → IDLE
+   CRP 文件包含 Phase 0 + Phase A-D 两个阶段 (同一个 .crp 文件连续执行).
+   PC 端分两个独立 TCP Server 响应: GREETING 状态监听 8600, HANDLE_GRASP_AND_POUR 状态监听 8080.
+2. Cup P3 XYZ/ABC 全示教固定 (来自 EyeToHand/config.yaml delivery 段), 不再使用 Camera B 人体检测 X
+3. HandInCup: YOLOv8m+MediaPipe Hands (21 landmarks, landmarks-in-bbox 计分制 + curled gate), 替代 v4 的 YOLOv8n-Pose
+4. 新增 GRIP 指令处理 (抓杯), PC 端 grip_object() 响应
+5. READY→RELEASE Wait: 2000ms (给人抓杯+HandInCup 稳定时间)
+6. RELEASE 指令区分: READY 之前 → release_object() 松把手; READY 之后 → HandInCup 判定 (hand_in_cup_active 标志)
+
 === v4 相比 v3 的关键变化 ===
-1. Cup P3 X 坐标由 Camera B (眼在手外) 人体检测动态生成, YZ/ABC 为预示教固定值
-2. Phase D 新增 READY 指令: 机械臂到 P3 后通知 PC 启动 HandInCup 检测
-3. 松手判定: PC 通过 YOLOv8m+YOLOv8n-Pose 判定人手是否在杯把手附近
-4. 双分支:
+1. Phase D 新增 READY/CONTINUE/ABORT 协议: 机械臂到 P3 后通知 PC 启动 HandInCup 检测
+2. 松手判定: PC 通过 YOLOv8m+YOLOv8n-Pose 判定人手是否在杯把手附近
+3. 双分支:
    - CONTINUE (TRUE, 有人接杯) → 松手 → P4 安全退避 → RESET → Home
    - ABORT   (FALSE,无人接杯) → (不松) → 回 P1 放回 → RELEASE → P2 → RESET → Home
-5. Cup P4 安全退避点: 同 Handle P4 算法 (P1.XY + P3.Z + P1.ABC)
+4. Cup P4 安全退避点: 同 Handle P4 算法 (P1.XY + P3.Z + P1.ABC)
 
 === 协议总览 ===
 Phase A: Robot → PC  [x,y,z,A,B,C]       初始末端位姿
 Phase B: PC → Robot  <H_P1>[H_P2]{H_P3}   Handle 三组位姿
 Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP
          PC → Robot  <C_P1>[C_P2]{P3}    Cup 位姿 (P3=递送)
-Phase D: READY → (HandInCup 检测 2s) → RELEASE
-         PC → Robot  CONTINUE / ABORT
+         灵巧手: RELEASE(松把手, hand_in_cup_active=False) → GRIP(抓杯)
+Phase D: READY → (PC 启动 HandInCup, hand_in_cup_active=True) → Wait 2s → RELEASE
+         PC 根据 HandInCup 判定结果发送 CONTINUE 或 ABORT
+         PC → Robot  CONTINUE(<0,0,0,0,0,0>) / ABORT([0,0,0,0,0,0])   ← 无换行, 括号定界
          TRUE:  (松手) P4 退避 → RESET → Home → SocketClose
-         FALSE: (不松) P1 放回 → RELEASE → P2 退避 → RESET → Home → SocketClose
+         FALSE: (不松) P1 放回 → RELEASE(放回后松杯) → P2 退避 → RESET → Home → SocketClose
 
 === 信号变量 ===
   str1 = "PREGRIP"    — 预抓取 (Handle 用)
   str2 = "GRIPDONE"   — 抓取完成 (Handle 用)
   str3 = "RESET"      — 手复位
   str4 = "CUP"        — 请求 Cup 位姿
-  str5 = "RELEASE"    — 张开/释放
-  str6 = "GRIP"       — 夹紧
-  str7 = "READY"      — [v4] 到达 P3, 启动 HandInCup 检测
+  str5 = "RELEASE"    — 双语义: READY之前→松把手 / READY之后→HandInCup判定触发
+  str6 = "GRIP"       — 夹紧 (抓杯)
+  str7 = "READY"      — [v4] 到达 P3, 启动 HandInCup 检测 (PC: hand_in_cup_active=True)
+
+PC 端 RELEASE 处理逻辑 (state_machine.py):
+  hand_in_cup_active == False → release_object() 松把手 (Phase C)
+  hand_in_cup_active == True  → HandInCup 判定 → CONTINUE/ABORT (Phase D)
+  ABORT 路径第二次 RELEASE    → release_object() 放回后松杯
 
 响应字符串:
-  "CONTINUE"          — [v4] PC→Robot, HandInCup=TRUE,  松手退避
-  "ABORT"             — [v4] PC→Robot, HandInCup=FALSE, 放回杯子
+  CONTINUE = "<0,0,0,0,0,0>"  — [v4] PC→Robot, HandInCup=TRUE,  松手退避 (<> 定界)
+  ABORT    = "[0,0,0,0,0,0]"  — [v4] PC→Robot, HandInCup=FALSE, 放回杯子 ([] 定界)
 
 === 位姿标记 ===
   Handle: H_P1 <...>, H_P2 [...], H_P3 {...}, H_P4 (计算)
@@ -135,18 +153,19 @@ Wait 1s
 MovL C_P1                       // 到抓取点
 SocketSendStr('GRIP')           // → PC: 灵巧手 GRIP (夹紧)
 Wait 1s
-MovL C_P3                       // 到递杯位置
+MovJ C_P3                       // 到递杯位置
 Wait 3s
 
 // ================================================================
 // [6] Phase D: HandInCup 判定 (v4 新增)
-//    机械臂到达 P3 → READY → wait 2s (同时 PC 运行 HandInCup 检测)
+//    机械臂到达 P3 → READY (PC 启动 HandInCup, hand_in_cup_active=True)
+//    → wait 2s (给人抓杯+PC HandInCup 检测稳定)
 //    → RELEASE → PC 判定 → CONTINUE / ABORT
 // ================================================================
 
 // --- [6a] 发送 READY → PC 启动 HandInCup 检测 ---
-SocketSendStr('READY')          // → PC: 到达递送点, 启动 HandInCup
-Wait 2s                         // 留给 PC 运行 HandInCup 检测的时间
+SocketSendStr('READY')          // → PC: 到达递送点, 启动 HandInCup (hand_in_cup_active=True)
+Wait 2s                         // 留给 PC 运行 HandInCup 检测的时间 (给人抓杯+检测稳定时间)
 
 // --- [6b] 发送 RELEASE → PC 判定 ---
 SocketSendStr('RELEASE')        // → PC: 请求判定 HandInCup

@@ -41,11 +41,14 @@
 
 ### 通信协议
 - [x] pack_three / Orchestrator CRP / 同事 CRP
+- [x] READY/CONTINUE/ABORT 协议 + TranStrToCpos 括号约定
+- [x] RELEASE 双语义修复: hand_in_cup_active 标志区分 Phase C 松把手 vs Phase D 判定
 
 ### 双相机体系
 - [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)
 - [x] EyeToHand: PersonDetector + HandInCup + 3D→1D 标定工具
-- [x] Orchestrator 状态机 + HandInCup 无遮挡实测
+- [x] Orchestrator 3 状态状态机: IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE
+- [x] CRP/TXT/状态机 TCP 协议一致性验证 + 修复
 
 ### HandInCup MediaPipe 重构
 - [x] YOLOv8n-Pose → MediaPipe Hands (21 landmarks, 帧间跟踪)
@@ -60,10 +63,9 @@
 ### 人就位检测 (Camera B)
 - [x] `calibrate_chair()`: YOLO chair class=56 → 中心偏好 + 稳定窗口
 - [x] `detect_person_seated()`: person∩chair/chair_area ≥ 0.4 → 累积10帧
-- [x] `eyeToHand/config.yaml`: 新增 `chair` 配置段
+- [x] `EyeToHand/config.yaml`: 新增 `chair` 配置段
 - [x] 独立测试模式 `run()`: 椅子标定 + 就位状态可视化
-- [ ] 实机测试: 椅子标定 + 人就位判定效果
-- [ ] 集成到 Orchestrator 状态机 (3 状态: IDLE→GREETING→HANDLE_GRASP_AND_POUR)
+- [x] 实机测试: 椅子标定 + 人就位判定效果 ✅ (2026-07-10)
 
 ### EyeToHand 标定
 - [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
@@ -80,6 +82,5 @@
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)
 - EyeToHand result.yaml a,b,c,d 默认占位
-- HandInCup 灵巧手遮挡杯 → YOLO 杯检测失效 → 固定 ROI 回退已解决
 - P4 Y 后退 15/20° 线性插值未实测验证
-- 新打招呼 CRP 待联调验证
+- 新打招呼 CRP + 3 状态全流程待联调验证

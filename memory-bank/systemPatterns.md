@@ -89,7 +89,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 - main loop 通过标志位 (`stop_person_detector` / `hand_in_cup_active`) 切换检测逻辑
 - Pipeline 始终保持运行, 帧来源不变
 
-### 状态机 — 3 状态闭环 (设计中, 待集成)
+### 状态机 — 3 状态闭环
 
 ```text
 IDLE ──(人就位)──→ GREETING ──(Phase 0 完成)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
@@ -103,6 +103,8 @@ IDLE ──(人就位)──→ GREETING ──(Phase 0 完成)──→ HANDLE_
 
 - `HandInCupDetector` 由 main.py 创建, 通过 `SharedContext.hand_in_cup_detector` 共享给状态机 (避免双实例 reset() 失效)
 - `PersonDetector` 新增椅子标定 + 人就位检测: `calibrate_chair()` + `detect_person_seated()`
+- **RELEASE 双语义**: `hand_in_cup_active` 标志区分 Phase C 松把手 vs Phase D HandInCup 判定
+- **Phase D 时序**: READY (启动 HandInCup) → Wait 2s (检测稳定) → RELEASE (判定) → CONTINUE/ABORT
 
 ## 模块关系
 

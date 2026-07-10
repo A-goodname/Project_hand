@@ -2,15 +2,17 @@
 """
 Orchestrator 状态机
 ===================
-双相机全流程: IDLE → HANDLE_GRASP_AND_POUR → IDLE
+双相机 3 状态全流程: IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE
 
 状态说明:
-  - IDLE:                   Camera B 等待检测到人 → 触发
-  - HANDLE_GRASP_AND_POUR:  单 TCP Session 全流程 (抓壶倒水 → 抓杯递送 → 松手退避)
+  - IDLE:                   Camera B 椅子标定 → 人就位检测 → 触发
+  - GREETING:               Camera A 独立 pipeline + TCP 8600 Phase 0 (招手→挥手→握手)
+  - HANDLE_GRASP_AND_POUR:  单 TCP Session 8080 全流程 (抓壶倒水 → 抓杯递送 → HandInCup 判定)
 
 与 estun_handle_cup_run.py 的关键差异:
-  - Cup P3 的 X 来自 Camera B 人体检测 + EyeToHand 标定 (非固定相机偏移)
+  - Cup P3 XYZ/ABC 全示教固定 (EyeToHand/config.yaml delivery 段)
   - 递送后增加 Hand-in-cup 判定 (TRUE→CONTINUE / FALSE→ABORT)
+  - Phase 0 打招呼集成到 GREETING 状态 (TCP 8600)
   - 全程单 TCP 连接, SocketClose 后回 IDLE
 """
 
@@ -181,7 +183,8 @@ class SharedContext:
     eye_to_hand_config: dict
     estun_config: dict
     realsense_config: dict
-    eye_to_hand_serial: str
+    eye_to_hand_serial: str         # Camera B serial
+    camera_a_serial: str = ""       # Camera A serial (Phase 0 人进门检测)
 
     # ---- 运行时 ----
     person_detector: Optional[PersonDetector] = None
@@ -405,18 +408,23 @@ class GreetingHandler(StateHandler):
         estun = ctx.estun_config
         greeting_cfg = estun.get("greeting", {})
 
-        # 加载打招呼位姿 (mm → m)
-        self._zhaoshou1 = [v / 1000.0 for v in greeting_cfg.get("zhaoshou1_pose", [0]*6)]
-        self._zhaoshou2 = [v / 1000.0 for v in greeting_cfg.get("zhaoshou2_pose", [0]*6)]
-        self._woshou = [v / 1000.0 for v in greeting_cfg.get("woshou_pose", [0]*6)]
+        # 加载打招呼位姿 (保持 mm, CRP TranStrToCpos lengthunit=mm)
+        self._zhaoshou1 = [float(v) for v in greeting_cfg.get("zhaoshou1_pose", [0]*6)]
+        self._zhaoshou2 = [float(v) for v in greeting_cfg.get("zhaoshou2_pose", [0]*6)]
+        self._woshou = [float(v) for v in greeting_cfg.get("woshou_pose", [0]*6)]
         self._wave_cycles = int(greeting_cfg.get("wave_cycles", 3))
         self._wave_interval = float(greeting_cfg.get("wave_interval", 0.6))
         print(f"[GREETING] 位姿已加载: Z1={self._zhaoshou1} Z2={self._zhaoshou2} WS={self._woshou}")
 
+        # ---- 灵巧手 (必须在 Phase 0 挥手/握手前初始化) ----
+        hand_port = estun.get("hand", {}).get("port", "COM5")
+        init_hand(hand_port=hand_port, initial_gesture="RESET")
+        print("[GREETING] 灵巧手已初始化")
+
         # 打开 Camera A 独立 pipeline (仅 color, Phase 0 专用)
-        self._open_camera(ctx.eye_to_hand_serial)  # 注意: Phase 0 用 Camera A (眼在手上)
-        # 实际用 Camera A serial: 来自 RealSense_R 旧相机
-        # TODO: Phase 0 人检测应该用 Camera A (眼在手上), 当前暂用独立 pipeline
+        # 注意: 必须用 Camera A serial (眼在手上), 不是 Camera B
+        cam_a_serial = ctx.camera_a_serial or "342222071364"
+        self._open_camera(cam_a_serial)
 
         # TCP 服务器 8600
         port = int(greeting_cfg.get("port", 8600))
@@ -487,6 +495,8 @@ class GreetingHandler(StateHandler):
             return self._yolo_model
         from ultralytics import YOLO
         model_path = os.path.join(_project_root, "model", "yolov8n.pt")
+        if not os.path.exists(model_path):
+            print("[GREETING] yolov8n.pt 未找到, 尝试自动下载...")
         self._yolo_model = YOLO(model_path)
         print("[GREETING] YOLOv8n 人检测模型已加载")
         return self._yolo_model
@@ -509,12 +519,12 @@ class GreetingHandler(StateHandler):
                 return True
         return False
 
-    def _wait_for_person(self, timeout=120.0):
+    def _wait_for_person(self, ctx: SharedContext, timeout=120.0):
         """YOLO 人检测, 连续 N 帧稳定则返回."""
         print("[GREETING] 等待人进门...")
         self._person_stable = 0
         deadline = time.time() + timeout
-        while time.time() < deadline:
+        while time.time() < deadline and not ctx.stop_event.is_set():
             frame = self._get_camera_frame()
             if frame is None:
                 time.sleep(0.05)
@@ -556,7 +566,7 @@ class GreetingHandler(StateHandler):
         sensors = _h.serial.read_all_sensor_group_3()
         return int(np.asarray(sensors.get("back", []), dtype=np.int32).sum())
 
-    def _wait_for_handshake_force(self, timeout=30.0):
+    def _wait_for_handshake_force(self, ctx: SharedContext, timeout=30.0):
         """等待手背压力 (基线+增量双阈值)."""
         baseline_samples = []
         for _ in range(5):
@@ -564,7 +574,7 @@ class GreetingHandler(StateHandler):
             time.sleep(0.05)
         baseline = float(np.median(np.asarray(baseline_samples, dtype=np.float64)))
         deadline = time.time() + timeout
-        while time.time() < deadline:
+        while time.time() < deadline and not ctx.stop_event.is_set():
             value = self._read_hand_back_pressure()
             delta = value - baseline
             if (baseline < 50 and value >= 100) or (delta >= 100):
@@ -574,7 +584,7 @@ class GreetingHandler(StateHandler):
         print(f"[GREETING] 压力超时")
         return False
 
-    def _wait_for_handshake_release(self, timeout=60.0):
+    def _wait_for_handshake_release(self, ctx: SharedContext, timeout=60.0):
         """等待松手: 连续 2s delta < 50."""
         baseline_samples = []
         for _ in range(5):
@@ -583,7 +593,7 @@ class GreetingHandler(StateHandler):
         baseline = float(np.median(np.asarray(baseline_samples, dtype=np.float64)))
         released_since = None
         deadline = time.time() + timeout
-        while time.time() < deadline:
+        while time.time() < deadline and not ctx.stop_event.is_set():
             value = self._read_hand_back_pressure()
             delta = value - baseline
             released = (delta <= 50)
@@ -599,17 +609,17 @@ class GreetingHandler(StateHandler):
         print(f"[GREETING] 松手超时")
         return False
 
-    def _execute_handshake(self):
+    def _execute_handshake(self, ctx: SharedContext):
         """RESET → 等压力 → HAND_SHAKE → 等松手 → RESET."""
         from Estun.utils_shared import _hand as _h
         from Omnihand.omnihand_gesture import Gesture
         if _h is not None:
             _h.do_gesture(Gesture.RESET, delay=0.5)
             print("[GREETING] RESET — 等待握手...")
-            self._wait_for_handshake_force()
+            self._wait_for_handshake_force(ctx)
             _h.do_gesture(Gesture.HAND_SHAKE, delay=1.0)
             print("[GREETING] HAND_SHAKE")
-            self._wait_for_handshake_release()
+            self._wait_for_handshake_release(ctx)
             _h.do_gesture(Gesture.RESET, delay=0.5)
             print("[GREETING] RESET — 握手结束")
         else:
@@ -637,6 +647,11 @@ class GreetingHandler(StateHandler):
         except BlockingIOError:
             pass
 
+    @staticmethod
+    def _fmt_pose6(pose6):
+        """6元素位姿 → "x,y,z,A,B,C" (mm, deg) — CRP TranStrToCpos lengthunit=mm."""
+        return f"{pose6[0]:.1f},{pose6[1]:.1f},{pose6[2]:.1f},{pose6[3]:.2f},{pose6[4]:.2f},{pose6[5]:.2f}"
+
     def _handle_session(self, conn: socket.socket, addr, ctx: SharedContext):
         """4 步协议 (daemon 线程)."""
         print(f"[GREETING] 客户端: {addr}")
@@ -649,9 +664,9 @@ class GreetingHandler(StateHandler):
                 return
             msg = data.decode("utf-8", errors="replace").strip()
             print(f"[GREETING] Step 1 recv: {msg}")
-            r = fmt_pose(self._zhaoshou1[:3], self._zhaoshou1[3:])
+            r = self._fmt_pose6(self._zhaoshou1) + "\n"
             conn.sendall(r.encode("utf-8"))
-            print(f"[GREETING] Step 1 reply ZHAOSHOU1: {r}")
+            print(f"[GREETING] Step 1 reply ZHAOSHOU1: {r.strip()}")
 
             # ---- Step 2: recv → 等人 → close camera → reply ZHAOSHOU2 ----
             conn.settimeout(130.0)
@@ -660,11 +675,11 @@ class GreetingHandler(StateHandler):
                 print("[GREETING] Step 2: 未收到数据")
                 return
             print(f"[GREETING] Step 2 recv: {data.decode('utf-8', errors='replace').strip()}")
-            self._wait_for_person(timeout=120.0)
+            self._wait_for_person(ctx, timeout=120.0)
             self._close_camera()
-            r = fmt_pose(self._zhaoshou2[:3], self._zhaoshou2[3:])
+            r = self._fmt_pose6(self._zhaoshou2) + "\n"
             conn.sendall(r.encode("utf-8"))
-            print(f"[GREETING] Step 2 reply ZHAOSHOU2: {r}")
+            print(f"[GREETING] Step 2 reply ZHAOSHOU2: {r.strip()}")
 
             # ---- Step 3: recv → 挥手 → reply WOSHOU ----
             conn.settimeout(30.0)
@@ -674,9 +689,9 @@ class GreetingHandler(StateHandler):
                 return
             print(f"[GREETING] Step 3 recv: {data.decode('utf-8', errors='replace').strip()}")
             self._execute_wave()
-            r = fmt_pose(self._woshou[:3], self._woshou[3:])
+            r = self._fmt_pose6(self._woshou) + "\n"
             conn.sendall(r.encode("utf-8"))
-            print(f"[GREETING] Step 3 reply WOSHOU: {r}")
+            print(f"[GREETING] Step 3 reply WOSHOU: {r.strip()}")
 
             # ---- Step 4: recv → 握手 → reply "Home" ----
             conn.settimeout(90.0)
@@ -685,8 +700,8 @@ class GreetingHandler(StateHandler):
                 print("[GREETING] Step 4: 未收到数据")
                 return
             print(f"[GREETING] Step 4 recv: {data.decode('utf-8', errors='replace').strip()}")
-            self._execute_handshake()
-            conn.sendall(b"Home")
+            self._execute_handshake(ctx)
+            conn.sendall(b"Home\n")
             print("[GREETING] Step 4 reply: Home")
 
         except socket.timeout:
@@ -830,9 +845,10 @@ class HandleGraspAndPourHandler(StateHandler):
         self._c_teach = delivery.get("C_TEACH", 0.0)
         print(f"[INFO] 递送位姿 (全示教): X={self._x_teach:.3f} Y={self._y_teach:.3f} Z={self._z_teach:.3f} ABC=({self._a_teach:.1f},{self._b_teach:.1f},{self._c_teach:.1f})")
 
-        # ---- 灵巧手 ----
-        hand_port = estun.get("hand", {}).get("port", "COM5")
-        init_hand(hand_port=hand_port, initial_gesture="RESET")
+        # ---- 灵巧手 (若 GREETING 已初始化则跳过) ----
+        if not is_hand_available():
+            hand_port = estun.get("hand", {}).get("port", "COM5")
+            init_hand(hand_port=hand_port, initial_gesture="RESET")
         self._hand_available = is_hand_available()
 
         # ---- Handle 6D 检测器 (Camera A) ----
@@ -1412,6 +1428,11 @@ class HandleGraspAndPourHandler(StateHandler):
                         hand_reset()
                     print("[INFO] RESET")
 
+                elif cmd == "GRIP":
+                    if self._hand_available:
+                        grip_object()
+                    print("[INFO] GRIP")
+
                 elif cmd == "CUP":
                     if not cup_p3_sent and cup_pose_data is not None:
                         ctx.stop_person_detector = True
@@ -1433,8 +1454,13 @@ class HandleGraspAndPourHandler(StateHandler):
                     print("[INFO] Hand-in-cup 启动")
 
                 elif cmd == "RELEASE":
-                    if not hand_judged:
-                        # ---- 第一次 RELEASE: Hand-in-cup 判定 ----
+                    if not ctx.hand_in_cup_active:
+                        # ---- Phase C: 松把手 (READY 之前的 RELEASE) ----
+                        if self._hand_available:
+                            release_object()
+                        print("[INFO] RELEASE (松把手)")
+                    elif not hand_judged:
+                        # ---- Phase D 第一次 RELEASE: Hand-in-cup 判定 ----
                         hand_ok = ctx.hand_on_cup if ctx.hand_on_cup is not None else False
                         print(f"[INFO] Hand-in-cup 判定: {'TRUE' if hand_ok else 'FALSE'}")
                         hand_judged = True
@@ -1467,7 +1493,7 @@ class HandleGraspAndPourHandler(StateHandler):
                             # 机器人: P1 → RELEASE → P2 → RESET → Home → SocketClose
                             # 循环继续, 等待后续 RELEASE + RESET
                     else:
-                        # ---- FALSE 路径: 第二次 RELEASE (放回后松杯) ----
+                        # ---- ABORT 路径第二次 RELEASE (放回后松杯) ----
                         if abort_mode:
                             if self._hand_available:
                                 release_object()

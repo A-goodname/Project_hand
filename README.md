@@ -50,7 +50,7 @@ pip install -r requirements.txt
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
 | `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、3D→1D 人体标定工具、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+MediaPipe Hands) |
-| `Orchestrator/` | **双相机流程编排**：2 状态状态机 (IDLE ↔ HANDLE_GRASP_AND_POUR)、单 TCP Session 全流程 (抓壶倒水→抓杯递送→HandInCup判定→松手退避)、双相机主循环 |
+| `Orchestrator/` | **双相机流程编排**：3 状态状态机 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)、Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)、HandInCup 判定、双相机主循环 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
 | `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
@@ -190,29 +190,42 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
 ### 双相机全流程 (Orchestrator)
 
 ```text
-       ┌─────────────────────────────────────────────┐
-       │                                             │
-       ▼                                             │
-     IDLE ──(Camera B 检测到人)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
-       ▲                                                                   │
-       └───────────────────────────────────────────────────────────────────┘
+Camera A (眼在手上)                  Camera B (眼在手外)
+      ↓                                    ↓
+Handle+Cup 6D 检测                  PersonDetector (人体X + 椅子标定 + 人就位)
+      ↓                                    ↓
+手眼标定 (cam→ee)                    HandInCup (YOLOv8m+MediaPipe Hands)
+      ↓                                    ↓
+TCP 8080 pack_three                 TCP 8600 Phase 0 打招呼
+      ↓                                    ↓
+      └────────────┬───────────────────────┘
+                   ↓
+          ESTUN 机器人 + Omnihand 灵巧手
 
-单 TCP Session 全流程:
-  Phase A: Robot → PC  [x,y,z,A,B,C]       初始末端位姿
-  Phase B: PC → Robot  <Handle_P1>[P2]{P3}  发送 Handle 三组位姿
-  Phase C: 指令循环 PREGRIP → GRIPDONE → RESET → CUP
-           PC → Robot  <Cup_P1>[Cup_P2]{P3}  回复 Cup 位姿 (P3=递送)
-  Phase D: READY → RELEASE → HandInCup 判定 → CONTINUE/ABORT
-           TRUE:  P4退避 → RESET → Home
-           FALSE: 放回P1 → RELEASE → P2退避 → RESET → Home
+
+3 状态闭环:
+  IDLE ──(人就位)──→ GREETING ──(Phase 0 完成)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
+
+各状态职责:
+  IDLE:                   Camera B 椅子标定 → 人就位检测 → 触发 GREETING
+  GREETING:               Camera A 独立 pipeline + TCP 8600 Phase 0 (4步: 招手→挥手→握手→Home)
+  HANDLE_GRASP_AND_POUR:  单 TCP Session 8080 全流程:
+    Phase A: Robot → PC  [x,y,z,A,B,C]       初始末端位姿 (m/deg)
+    Phase B: PC → Robot  <H_P1>[H_P2]{H_P3}  Handle 三组位姿
+    Phase C: 指令循环 PREGRIP → GRIPDONE → RESET → CUP
+             PC → Robot  <C_P1>[C_P2]{P3}    Cup 位姿 (P3=递送, 全示教)
+             灵巧手: RELEASE(松把手) → GRIP(抓杯)
+    Phase D: READY (启动 HandInCup) → Wait 2s → RELEASE (判定)
+             TRUE:  release_object() + CONTINUE → P4退避 → RESET → Home
+             FALSE: ABORT → P1放回 → RELEASE → P2退避 → RESET → Home
 ```
 
 - **Camera A** (眼在手上, serial `342222071364`, `RealSense_R/` 手动像素映射): Handle+Cup 6D 检测
-- **Camera B** (眼在手外, serial `819612071851`, `RealSense/` rs.align): 人体检测 + HandInCup 检测
-- **Cup P3**: XYZ/ABC 全示教固定值 (暂废弃 Camera B 动态检测 X, 3D→1D 人体标定工具就绪待接入)
-- **HandInCup**: YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪), landmarks-in-bbox 计分制 + curled gate, 连续 N 帧判定
-- **松手**: Robot wait 2s → RELEASE → HandInCup 判定后才松
-- 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py`
+- **Camera B** (眼在手外, serial `819612071851`, `RealSense/` rs.align): 人体检测 + 椅子标定 + 人就位 + HandInCup 检测
+- **Cup P3**: XYZ/ABC 全示教固定值 (3D→1D 人体标定工具就绪, 暂未接入)
+- **HandInCup**: YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪), landmarks-in-bbox 计分制 + curled gate
+- **RELEASE 双语义**: READY 之前 → 松把手; READY 之后 → HandInCup 判定触发 (hand_in_cup_active 标志区分)
+- 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py` + `EyeToHand/person_detector.py`
 
 ## 关键概念
 
@@ -227,7 +240,8 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
 - **Cup handle_side 模式**：`RealSense_R/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + 角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left
 - **P3 多角度示教**：`estun_config.yaml` 中 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30)，`pour_angle` 切换当前使用角度，加载自动转字符串键防整数键 bug
 - **双相机体系**：两台 RealSense D435i，Camera A (眼在手上, serial 342222071364, `RealSense_R/` 手动像素映射) + Camera B (眼在手外, serial 819612071851, `RealSense/` rs.align)
-- **Orchestrator 状态机**：2 状态 (IDLE ↔ HANDLE_GRASP_AND_POUR)，单 TCP Session 全流程，Handle+Cup 流程封装在 `HandleGraspAndPourHandler` 中
+- **Orchestrator 状态机**：3 状态闭环 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)，Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)，人就位触发 + 椅子标定
 - **Cup P3 递送位姿**：XYZ/ABC 来自 `EyeToHand/config.yaml` delivery 段全示教 (3D→1D 人体标定工具就绪, 暂未接入)
-- **HandInCup 检测**：YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点)，2D 判定人手是否在杯把手附近，连续 N 帧确认；独立模块 `EyeToHand/hand_in_cup.py`
-- **新协议指令**：`READY` (Robot→PC, 到达 P3 等待)、`CONTINUE` (PC→Robot, HandInCup=True 继续退避)、`ABORT` (PC→Robot, HandInCup=False 放回杯子)
+- **HandInCup 检测**：YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪)，landmarks-in-bbox 计分制 + curled gate；独立模块 `EyeToHand/hand_in_cup.py`
+- **RELEASE 双语义**：`hand_in_cup_active` 标志区分 — Phase C 松把手 vs Phase D HandInCup 判定
+- **新协议指令**：`READY` (Robot→PC, 到达 P3 启动 HandInCup)、`CONTINUE` `<0,0,0,0,0,0>` (PC→Robot, TRUE 松手退避)、`ABORT` `[0,0,0,0,0,0]` (PC→Robot, FALSE 放回杯子)

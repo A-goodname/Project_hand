@@ -32,6 +32,7 @@ if _project_root not in sys.path:
 
 # ---- 导入 ----
 from RealSense.realsense_shared import load_camera_serial  # Camera B (新相机, rs.align)
+from RealSense_R.realsense_shared import load_camera_serial as load_camera_a_serial  # Camera A (旧相机)
 from Orchestrator.state_machine import (
     SharedContext,
     StateMachine,
@@ -76,11 +77,17 @@ def main():
     print(f"[INFO] Camera B serial: {eye_to_hand_serial}")
 
     # ---- [2] 构建共享上下文 ----
+    camera_a_serial = load_camera_a_serial(
+        os.path.join(_project_root, "RealSense_R/D435i_info.yaml")
+    )
+    print(f"[INFO] Camera A serial: {camera_a_serial}")
+
     ctx = SharedContext(
         eye_to_hand_config=eye_to_hand_cfg,
         estun_config=estun_cfg,
         realsense_config=realsense_cfg,
         eye_to_hand_serial=eye_to_hand_serial,
+        camera_a_serial=camera_a_serial,
     )
 
     # ---- [3] Hand-in-cup 检测器 (全生命周期共享, Camera B pipeline 复用) ----
@@ -214,6 +221,12 @@ def main():
         print("[INFO] 正在清理资源...")
         ctx.stop_event.set()
         cv2.destroyAllWindows()
+
+        # 清理当前状态资源 (GreetingHandler Camera A pipeline / TCP server 等)
+        try:
+            sm._handlers.get(sm.state).on_exit(ctx)  # type: ignore[union-attr]
+        except Exception:
+            pass
 
         if ctx.person_detector is not None:
             try:
