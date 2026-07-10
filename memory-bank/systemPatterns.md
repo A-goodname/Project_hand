@@ -28,7 +28,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 | 通信协议 | TCP 单 Session 全流程 | 简单可靠, 与 ESTUN 兼容; 避免多连接状态同步 |
 | 配置管理 | YAML 文件 (模块级 config.yaml) | 不改代码可调参数 |
 | HandInCup | YOLOv8m(cup) + MediaPipe Hands(21 landmarks) | landmarks-in-bbox 计分 + 握拳 gate; 遮挡时杯ROI回退 |
-| Cup P3 递送 | X 动态 (Camera B) + YZ/ABC 固定 (示教) | 安全: YZ/ABC 预教避免碰撞, X 自适应人体位置 |
+| Cup P3 递送 | XYZ/ABC 全示教固定 (delivery.X_TEACH) | 3D→1D 人体标定工具就绪但暂未接入, X 暂用示教值 |
 
 ## 设计模式
 

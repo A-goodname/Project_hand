@@ -1,6 +1,6 @@
 # 机械臂+灵巧手抓取系统 — 项目流程文档
 
-## 上次更新: 2026-07-08
+## 上次更新: 2026-07-10
 
 ---
 
@@ -34,7 +34,7 @@ Project_hand/
 │   └── realsense_shared.py← BaseRealSenseDetector 基类
 ├── EyeToHand/             ← 眼在手外模块
 │   ├── person_detector.py ← 人体位置检测 (YOLOv8m COCO person)
-│   ├── hand_in_cup.py     ← 人手-杯把手重合检测 (YOLOv8m + YOLOv8n-Pose)
+│   ├── hand_in_cup.py     ← 人手-杯把手重合检测 (YOLOv8m + MediaPipe Hands)
 │   ├── detector.py        ← load_calibration / person_to_base_x
 │   ├── config.yaml        ← Person + Delivery(全示教) + HandInCup 配置
 │   └── calibration/
@@ -102,7 +102,7 @@ profile = pipeline.start(config)
 
 **检测功能**:
 - 人体位置: YOLOv8m COCO person (class_id=0) → bbox 中心深度 → 相机系 3D → T_cam_base → 基系 X 坐标
-- HandInCup: YOLOv8m (杯 bbox class=41) + YOLOv8n-Pose (手腕关键点 9/10) → 2D+深度判定
+- HandInCup: YOLOv8m (杯 bbox class=41) + MediaPipe Hands (21 landmarks 帧间跟踪) → landmarks-in-bbox 计分制 + 深度判定
 - 人体稳定: PersonStabilizer (window=10, pos_thresh=0.03m)
 
 **初始化流程**:
@@ -247,11 +247,12 @@ CUP 指令触发:
         FALSE → ABORT    → 放回 P1 → P2 退避 → Home_2
 
 HandInCup 检测逻辑:
-  1. YOLOv8m 检测杯 bbox (COCO class 41)
-  2. YOLOv8n-Pose 检测手腕关键点 (kpt 9=左腕, 10=右腕)
-  3. 判定: 连续 5 帧手腕在杯 bbox 扩展区内 → True
-  4. 距离阈值 = bbox 对角线 × dist_factor (当前 1.2)
-  5. (可选) 深度一致性: |手腕深度 - 杯心深度| < depth_tolerance (0.08m)
+  1. YOLOv8m 检测杯 bbox (COCO class 41) → 失败回退固定 ROI
+  2. MediaPipe Hands 检测手部 21 landmarks (帧间跟踪)
+  3. landmarks-in-bbox 计分制: wrist(×2) + MCP(×1) + TIP(×1) ≥ 2 (bbox_margin=20px)
+  4. curled gate: wrist 在 bbox 内→跳过; wrist 不在→curled≥2 (防开掌划过)
+  5. 深度辅助: YOLO→画面采样; fallback→cup_depth_expected 预标定值; diff<0.10m
+  6. 连续 5 帧满足 → hand_on_cup = True
 ```
 
 ---
@@ -420,10 +421,10 @@ delivery:
 # 注: 标定暂废弃, 递送位姿全部由示教确定
 hand_in_cup:
   cup_model: "model/yolov8m.pt"
-  pose_model: "model/yolov8n-pose.pt"
+  hand_model: "model/hand_landmarker.task"
   required_stable: 5
-  dist_factor: 1.2             # 手腕-杯心距离因子
-  depth_tolerance: 0.08        # 深度容差 (m)
+  bbox_margin: 20              # bbox 外扩像素
+  depth_tolerance: 0.10        # 深度容差 (m)
 ```
 
 ---
@@ -475,8 +476,7 @@ hand_in_cup:
 |------|------|------|------|
 | YOLOv8n | `model/yolov8n.pt` | 6.5 MB | 水壶检测 (微调基模型) |
 | YOLOv8m | `model/yolov8m.pt` | 52 MB | 杯检测 (COCO class 41), 人体检测 |
-| YOLOv8n-Pose | `model/yolov8n-pose.pt` | 6.8 MB | 手腕关键点 (HandInCup) |
-| YOLOv8m-Pose | `model/yolov8m-pose.pt` | 53 MB | 备用 (HandInCup 高精度) |
+| MediaPipe Hands | `model/hand_landmarker.task` | ~16 MB | 手部 21 landmarks 帧间跟踪 (HandInCup) |
 | 微调水壶 | `model/kettle_yolov8n_finetune.pt` | 6.2 MB | 水壶检测 (Camera A) |
 | SAM2 | `model/sam2_b.pt` | 162 MB | 把手分割 |
 | YOLO-World v2 | `model/yolov8s-worldv2.pt` | 26 MB | 零样本检测 (备用) |
@@ -513,10 +513,11 @@ hand_in_cup:
 
 | 状态 | 问题 |
 |:---:|------|
-| ⚠️ | **递送参数未填入**: `delivery.X_TEACH/Y_TEACH/Z_TEACH/A_TEACH/B_TEACH/C_TEACH` 需示教 |
+| ✅ | **递送参数已填入**: `delivery.X_TEACH/Y_TEACH/Z_TEACH` (0.2295/0.4427/0.3837m) |
 | ℹ️ | **EyeToHand 标定暂废弃**: 递送 XYZ/ABC 全部改用示教固定值, 不再动态检测 X |
-| ⚠️ | **HandInCup 有遮挡未实测**: 灵巧手握住杯子后遮挡手腕+杯 bbox |
-| ⚠️ | **打招呼 .crp 接口未对接**: 等同事完成 .crp 后接入 PC 端手势+压力检测 |
+| ✅ | **HandInCup 遮挡已解决**: cup_roi_fallback 固定 ROI 回退 + MediaPipe Hands |
+| ✅ | **打招呼 Phase 0 已实现** (`e1cafbd`): 位姿单位 mm, PAPER→RESET, TCP 8080 提前启动 |
+| ⚠️ | **打招呼全流程联调**: CRP+PC 待实测验证 |
 | ⚠️ | **P4 Y 后退 15°/20° 为线性插值**: 待实测验证 |
 | ℹ️ | RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏) |
 | ℹ️ | `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓) |

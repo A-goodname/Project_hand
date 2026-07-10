@@ -49,7 +49,7 @@ pip install -r requirements.txt
 | `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
-| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、3D→1D 人体标定工具、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+YOLOv8n-Pose) |
+| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、3D→1D 人体标定工具、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+MediaPipe Hands) |
 | `Orchestrator/` | **双相机流程编排**：2 状态状态机 (IDLE ↔ HANDLE_GRASP_AND_POUR)、单 TCP Session 全流程 (抓壶倒水→抓杯递送→HandInCup判定→松手退避)、双相机主循环 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
@@ -210,7 +210,7 @@ Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GR
 - **Camera A** (眼在手上, serial `342222071364`, `RealSense_R/` 手动像素映射): Handle+Cup 6D 检测
 - **Camera B** (眼在手外, serial `819612071851`, `RealSense/` rs.align): 人体检测 + HandInCup 检测
 - **Cup P3**: XYZ/ABC 全示教固定值 (暂废弃 Camera B 动态检测 X, 3D→1D 人体标定工具就绪待接入)
-- **HandInCup**: YOLOv8m (杯 bbox) + YOLOv8n-Pose (手腕关键点), 连续 N 帧判定
+- **HandInCup**: YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪), landmarks-in-bbox 计分制 + curled gate, 连续 N 帧判定
 - **松手**: Robot wait 2s → RELEASE → HandInCup 判定后才松
 - 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py`
 

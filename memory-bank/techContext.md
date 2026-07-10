@@ -45,5 +45,5 @@
 - 水壶微调模型路径: `model/kettle_yolov8n_finetune.pt`
 - 手眼标定结果存储在 YAML 文件, 各模块独立读取
 - YOLO-World 零样本检测通过 text prompt 指定目标类别
-- HandInCup 使用 YOLOv8-Pose 检测手腕关键点: `model/yolov8n-pose.pt` (需单独下载)
+- HandInCup: YOLOv8m (杯检测, class=41) + MediaPipe Hands (手部 21 landmarks, hand_landmarker.task)
 - HandInCup 模型路径可配置: `EyeToHand/config.yaml` → `hand_in_cup` 段

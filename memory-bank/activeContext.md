@@ -6,11 +6,12 @@
 
 ## 最近变更
 
-1. **HandInCup 状态机联调修复** (2026-07-10):
+1. **HandInCup 状态机联调修复** (2026-07-10, `e571a3f`):
    - **修复双实例 bug**: main.py 和 state_machine.py 各自创建 `HandInCupDetector` → 统一为 `ctx.hand_in_cup_detector` 共享实例
    - **修复 reset() 失效**: TCP READY 时的 `reset()` 现在作用于 main loop `update()` 的同一实例
    - **可视化集成**: Camera B 激活时使用 `draw_visualization()` (MediaPipe landmarks + cup bbox + 计分)
-   - **TODO 清理**: 移除 `# TODO: 实现完整的 MediaPipe Hand-in-cup 检测` (已在上次提交完成)
+   - **清理路径修复**: 嵌套 `_cleanup()` 函数, 9 处退出路径 (6 early return + 3 assert) 全部执行清理
+   - **配置化**: `phase_b_timeout` 入 config; CONTINUE/ABORT 移除末尾 `\n`
 
 2. **HandInCup MediaPipe 重构** (2026-07-10):
    - **手检测**: YOLOv8n-Pose → MediaPipe Hands (21 landmarks, 帧间跟踪)
@@ -20,7 +21,7 @@
    - **杯 ROI 回退**: YOLO 失败 → cup_roi_fallback; --calibrate-roi 标定工具 (同时写入深度)
    - **递送位姿 P3**: 已填入 config (0.2295/0.4427/0.3837m)
 
-3. **打招呼 Phase 0 修复** (2026-07-09, 工作区待提交):
+3. **打招呼 Phase 0 修复** (2026-07-10, `e1cafbd`):
    - 位姿单位 mm; PAPER→RESET; TCP 8080 提前启动
 
 ## 未解决问题

@@ -34,10 +34,10 @@
 - [x] CRP greeting 段重建: 30 widget, 全部 MovL
 - [x] Phase A-C 与 estun_handle_cup_run.py 完全一致
 - [x] Phase 0 协议 PC 端验证通过
-- [ ] 位姿单位修复 (工作区, 待提交)
-- [ ] PAPER→RESET
-- [ ] Phase 0→A-C socket 断连修复
-- [ ] 全流程联调
+- [x] 位姿单位修复: PC 直接发 mm (`e1cafbd`)
+- [x] PAPER→RESET (`e1cafbd`)
+- [x] Phase 0→A-C TCP 8080 提前启动 (`e1cafbd`)
+- [ ] 全流程联调 (CRP + PC)
 
 ### 通信协议
 - [x] pack_three / Orchestrator CRP / 同事 CRP
