@@ -1,6 +1,6 @@
 # 机械臂+灵巧手抓取系统 — 项目流程文档
 
-## 上次更新: 2026-07-10
+## 上次更新: 2026-07-10 (v3: 人就位检测 + 3 状态设计)
 
 ---
 
@@ -137,27 +137,29 @@ Serial 从各自的 `D435i_info.yaml` 读取, 由 `load_camera_serial()` 工具�
 
 ## 3. 完整工作流程
 
-### 3.0 阶段 0 — 打招呼 (Greeting) [新增, 待实现]
+### 3.0 阶段 0 — 打招呼 (Greeting) [Phase 0, 独立 TCP 8600]
 
+```text
+状态: IDLE — Camera B 椅子标定 + 人就位检测
+
+Camera B: 椅子空, 标定 chair_bbox (YOLO class=56, 中心偏好, 稳定10帧)
+Camera B: detect_person_seated() → 人就位 → 触发状态切换
+
+GREETING 状态:
+  Camera A 独立 pipeline
+  Robot 发当前位姿 → PC 回复 ZHAOSHOU_1
+  Robot MovL ZHAOSHOU_1 → Camera A 检测人进门 → PC 回复 ZHAOSHOU_2
+  Robot MovL ZHAOSHOU_2 → 灵巧手 Hello_1↔Hello_2×3→PAPER
+  Robot 发 ZHAOSHOU_2 → PC 回复 WOSHOU
+  Robot MovL WOSHOU → 灵巧手 PAPER→等压力→HAND_SHAKE→等松手→PAPER
+  PC 回复 "Home" → Robot MovL Home → SocketClose 8600
+  Camera A pipeline 关闭, 释放给 Phase A-C
+
+  → 进入 HANDLE_GRASP_AND_POUR
 ```
-状态: 双相机启动, 机械臂在 Home_1 (观察位姿)
 
-Camera B 检测到人进门
-  → 机械臂移动到打招呼位姿 (预示教)
-  → 灵巧手: Hello_1 → Hello_2 挥手 ×2~3 次
-  → 机械臂移动到握手位姿 (预示教)
-  → 灵巧手: Paper (伸手)
-  → 等待手背压力 > 100 → Handshake (握住)
-  → 保持 2s
-  → 等待手背压力 < 20 → Paper (松手)
-  → 机械臂回 Home_2 (抓取就绪位姿)
-  → 进入阶段 A
-
-实现分工:
-  - 机械臂运动 (.crp) 由同事完成
-  - PC 侧: 手势控制 + 压力检测, 通过协议信号与 .crp 交互
-  - Camera B 持续检测人是否在椅子上 → 触发后续流程
-```
+**实现状态**: 打招呼协议已实现 (`estun_greeting_handle_cup_run.py`),
+**待集成**到 Orchestrator 的 `GreetingHandler` 状态中.
 
 **灵巧手接口 (已就绪)**:
 ```python
@@ -483,29 +485,34 @@ hand_in_cup:
 
 ---
 
-## 9. 状态机 (Orchestrator)
+## 9. 状态机 (Orchestrator) — 3 状态闭环 [设计中]
 
 ```
-       ┌─────────────────────────────────────────────┐
-       │                                             │
-       ▼                                             │
-     IDLE ──(Camera B 检测到人)──→ HANDLE_GRASP_AND_POUR
-       ▲                              │
-       │                   单 TCP Session 全流程:
-       │                   Phase A: 收初始位姿
-       │                   Phase B: 发 Handle <P1>[P2]{P3}
-       │                   Phase C: PREGRIP/GRIPDONE/RESET/CUP
-       │                           发 Cup <P1>[P2]{P3}
-       │                   Phase D: READY/RELEASE/HandInCup
-       │                            CONTINUE or ABORT
-       │                              │
-       └──────────────────────────────┘
-                      (SocketClose)
+       Camera B: 椅子标定 + 人就位检测
+                ↓ (is_person_seated)
+  ┌─────────────────────────────────────────────────────┐
+  │  IDLE ──→ GREETING ──→ HANDLE_GRASP_AND_POUR       │
+  │    ↑         ↓              │                       │
+  │    └── Camera A 独立pipeline │                       │
+  │         Camera B 闲置       │                       │
+  │         TCP 8600 Phase 0    │                       │
+  │         (招呼→挥手→握手)     │                       │
+  │                             ↓                       │
+  │                  单 TCP Session 8080:               │
+  │                  Phase A: 收初始位姿                 │
+  │                  Phase B: 发 Handle <P1>[P2]{P3}    │
+  │                  Phase C: 指令循环 + Cup             │
+  │                  Phase D: READY/RELEASE/HandInCup    │
+  │                            │                        │
+  │                  (SocketClose)                      │
+  └────────────────────────────┘
 ```
 
-**状态转换**:
-- IDLE → HANDLE_GRASP_AND_POUR: PersonDetector 连续检测到人
-- HANDLE_GRASP_AND_POUR → IDLE: TCP SocketClose (正常结束或异常)
+| 状态 | Camera A | Camera B | 输出 |
+|------|----------|----------|------|
+| **IDLE** | 闲置 | 椅子标定 + 人就位 | → GREETING |
+| **GREETING** | 人进门检测 (独立 pipeline) | 闲置 | → HANDLE_GRASP_AND_POUR |
+| **HANDLE_GRASP_AND_POUR** | Handle+Cup 6D | HandInCup | → IDLE |
 
 ---
 
@@ -513,11 +520,12 @@ hand_in_cup:
 
 | 状态 | 问题 |
 |:---:|------|
+| ⚠️ | **3 状态状态机**: GREETING 状态待集成 (打招呼协议已实现于独立脚本) |
+| ⚠️ | **人就位检测**: person_detector.py 已实现, 待实机测试 chair+seated 效果 |
 | ✅ | **递送参数已填入**: `delivery.X_TEACH/Y_TEACH/Z_TEACH` (0.2295/0.4427/0.3837m) |
-| ℹ️ | **EyeToHand 标定暂废弃**: 递送 XYZ/ABC 全部改用示教固定值, 不再动态检测 X |
-| ✅ | **HandInCup 遮挡已解决**: cup_roi_fallback 固定 ROI 回退 + MediaPipe Hands |
-| ✅ | **打招呼 Phase 0 已实现** (`e1cafbd`): 位姿单位 mm, PAPER→RESET, TCP 8080 提前启动 |
-| ⚠️ | **打招呼全流程联调**: CRP+PC 待实测验证 |
+| ℹ️ | **EyeToHand 标定暂废弃**: Cup P3 全示教, 不再动态检测 X |
+| ✅ | **HandInCup 遮挡已解决**: cup_roi_fallback + MediaPipe Hands |
+| ✅ | **打招呼 Phase 0 已实现** (`e1cafbd`): 位姿单位 mm, PAPER→RESET, TCP 8080 提前 |
 | ⚠️ | **P4 Y 后退 15°/20° 为线性插值**: 待实测验证 |
 | ℹ️ | RealSense_R 旧相机的 rs.align 不可用 (硬件内参损坏) |
 | ℹ️ | `estun_handle_run.py` 通信协议未同步 handle-cup 版 v2 改进 (暂缓) |

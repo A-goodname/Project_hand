@@ -57,6 +57,14 @@
 - [x] 独立测试通过 (hand_in_cup.py)
 - [x] 状态机联调: 统一共享实例 + reset() 修复 + draw_visualization() 集成
 
+### 人就位检测 (Camera B)
+- [x] `calibrate_chair()`: YOLO chair class=56 → 中心偏好 + 稳定窗口
+- [x] `detect_person_seated()`: person∩chair/chair_area ≥ 0.4 → 累积10帧
+- [x] `eyeToHand/config.yaml`: 新增 `chair` 配置段
+- [x] 独立测试模式 `run()`: 椅子标定 + 就位状态可视化
+- [ ] 实机测试: 椅子标定 + 人就位判定效果
+- [ ] 集成到 Orchestrator 状态机 (3 状态: IDLE→GREETING→HANDLE_GRASP_AND_POUR)
+
 ### EyeToHand 标定
 - [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
 - [x] result.yaml: {a,b,c,d} + detector.py: person_to_base_x()

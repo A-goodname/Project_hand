@@ -2,11 +2,18 @@
 
 ## 当前焦点
 
-**HandInCup 状态机联调完成** — 双实例 bug 已修复 + 可视化集成.
+**人就位检测开发中** — `person_detector.py` 新增椅子标定 + 人就位检测, 为 3 状态状态机做准备.
 
 ## 最近变更
 
-1. **HandInCup 状态机联调修复** (2026-07-10, `e571a3f`):
+1. **人就位检测** (2026-07-10, 工作区):
+   - `person_detector.py`: 新增 `calibrate_chair()` (YOLO chair class=56, 中心偏好 + 稳定窗口)
+   - `person_detector.py`: 新增 `detect_person_seated()` (person∩chair/chair_area ≥ 0.4 → 累积10帧)
+   - `EyeToHand/config.yaml`: 新增 `chair` 配置段 (conf/stabilize/overlap/seated_stable)
+   - 独立测试模式 `run()` 已更新: 椅子标定进度 + 就位状态可视化
+   - 下一步: 测试通过后集成到 Orchestrator 状态机
+
+2. **HandInCup 状态机联调修复** (2026-07-10, `e571a3f`):
    - **修复双实例 bug**: main.py 和 state_machine.py 各自创建 `HandInCupDetector` → 统一为 `ctx.hand_in_cup_detector` 共享实例
    - **修复 reset() 失效**: TCP READY 时的 `reset()` 现在作用于 main loop `update()` 的同一实例
    - **可视化集成**: Camera B 激活时使用 `draw_visualization()` (MediaPipe landmarks + cup bbox + 计分)

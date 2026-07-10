@@ -39,7 +39,13 @@ hand_in_cup:
   bbox_margin: 20
   curled_threshold: 25
   curled_min_fingers: 2
-  cup_roi_fallback:
+  chair:
+  class_id: 56              # COCO chair
+  conf_threshold: 0.4       # 椅子检测置信度
+  stabilize_frames: 10      # 椅子 bbox 稳定帧数
+  overlap_threshold: 0.4    # person∩chair/chair_area 阈值
+  seated_stable_frames: 10  # 就位确认帧数 (~0.3s @30fps, 设备性能限制)
+cup_roi_fallback:
     enabled: true
     x1: 342
     y1: 171

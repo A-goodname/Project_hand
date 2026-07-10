@@ -129,6 +129,7 @@ class PersonDetector(BaseRealSenseDetector):
     USE_SAM = False
     LOG_NAME = "person_detect.log"
     TARGET_CLASS_ID = 0             # COCO person
+    CHAIR_CLASS_ID = 56             # COCO chair
 
     def __init__(self, config_dict=None, serial_number=None):
         super().__init__(config_dict=config_dict, serial_number=serial_number)
@@ -142,6 +143,19 @@ class PersonDetector(BaseRealSenseDetector):
             window=_stab_cfg.get("window", 10),
             pos_thresh=_stab_cfg.get("pos_thresh", 0.03),
         )
+
+        # ---- 椅子标定 + 人就位检测 ----
+        _chair_cfg = _MODULE_CFG.get("chair", {})
+        self._chair_conf_threshold = float(_chair_cfg.get("conf_threshold", 0.4))
+        self._chair_stabilize_frames = int(_chair_cfg.get("stabilize_frames", 10))
+        self._seated_overlap_threshold = float(_chair_cfg.get("overlap_threshold", 0.4))
+        self._seated_stable_required = int(_chair_cfg.get("seated_stable_frames", 10))
+
+        self._chair_bbox = None           # [x1, y1, x2, y2] 标定后固定
+        self._chair_calibrated = False
+        self._chair_buffer = []           # 椅子 bbox 稳定缓冲区
+        self._seated_stable_count = 0
+        self._is_seated = False
 
     # ------------------------------------------------------------
     def get_person_3d(self, bbox, depth_frame):
@@ -226,89 +240,286 @@ class PersonDetector(BaseRealSenseDetector):
         }
 
     # ------------------------------------------------------------
+    #  椅子检测 + 标定
+    # ------------------------------------------------------------
+
+    def _detect_chairs(self, color_image):
+        """YOLO 检测椅子 (COCO class 56).
+
+        Returns:
+            按 conf 降序的 bbox 列表 [[x1,y1,x2,y2], ...], 或 []
+        """
+        if self.model is None:
+            return []
+        results = self.model(color_image, classes=[self.CHAIR_CLASS_ID], verbose=False)
+        if not results or len(results[0].boxes) == 0:
+            return []
+        boxes = results[0].boxes
+        confs = boxes.conf.cpu().numpy()
+        xyxy = boxes.xyxy.cpu().numpy()
+        # 按置信度降序
+        idx = np.argsort(-confs)
+        out = []
+        for i in idx:
+            if float(confs[i]) >= self._chair_conf_threshold:
+                out.append([int(x) for x in xyxy[i]])
+        return out
+
+    def _pick_center_chair(self, bboxes, h, w):
+        """从 bbox 列表中选离画面中心最近的."""
+        if not bboxes:
+            return None
+        cx0, cy0 = w / 2.0, h / 2.0
+        best = min(bboxes, key=lambda b:
+            abs((b[0] + b[2]) / 2.0 - cx0) + abs((b[1] + b[3]) / 2.0 - cy0))
+        return list(best)
+
+    def calibrate_chair(self, color_image):
+        """每帧调用, 标定椅子 bbox. 稳定 N 帧后记录并锁定.
+
+        Returns:
+            bool: True = 标定完成 (后续调用直接返回 True)
+        """
+        if self._chair_calibrated:
+            return True
+
+        bboxes = self._detect_chairs(color_image)
+        if not bboxes:
+            self._chair_buffer = []
+            return False
+
+        h, w = color_image.shape[:2]
+        best = self._pick_center_chair(bboxes, h, w)
+        if best is None:
+            self._chair_buffer = []
+            return False
+
+        self._chair_buffer.append(best)
+        if len(self._chair_buffer) > self._chair_stabilize_frames + 5:
+            self._chair_buffer.pop(0)
+
+        if len(self._chair_buffer) >= self._chair_stabilize_frames:
+            arr = np.array(self._chair_buffer[-self._chair_stabilize_frames:], dtype=float)
+            # 各坐标波动 < 25px 即稳定
+            if np.ptp(arr, axis=0).max() < 25.0:
+                self._chair_bbox = arr.mean(axis=0).astype(int).tolist()
+                self._chair_calibrated = True
+                self._chair_buffer = []
+                print(f"[Chair] 标定完成: bbox={self._chair_bbox}")
+                return True
+
+        return False
+
+    # ------------------------------------------------------------
+    #  人就位检测
+    # ------------------------------------------------------------
+
+    def _compute_seated_overlap(self, person_bbox):
+        """计算 person ∩ chair / chair_area.
+
+        Returns:
+            float: 0.0 ~ 1.0
+        """
+        if self._chair_bbox is None:
+            return 0.0
+        ix1 = max(person_bbox[0], self._chair_bbox[0])
+        iy1 = max(person_bbox[1], self._chair_bbox[1])
+        ix2 = min(person_bbox[2], self._chair_bbox[2])
+        iy2 = min(person_bbox[3], self._chair_bbox[3])
+        if ix2 <= ix1 or iy2 <= iy1:
+            return 0.0
+        inter = (ix2 - ix1) * (iy2 - iy1)
+        chair_area = (self._chair_bbox[2] - self._chair_bbox[0]) * (self._chair_bbox[3] - self._chair_bbox[1])
+        if chair_area <= 0:
+            return 0.0
+        return inter / chair_area
+
+    def detect_person_seated(self, color_image):
+        """检测人体 + 判定是否就位 (需先 calibrate_chair).
+
+        每帧调用. 内部累积 seated_stable_count.
+
+        Returns:
+            dict 或 None:
+              {
+                  "bbox": [x1,y1,x2,y2],
+                  "conf": float,
+                  "overlap_ratio": float,   # person∩chair/chair_area
+                  "is_seated": bool,
+                  "seated_stable": int,     # 当前累积帧数
+                  "seated_required": int,   # 需要帧数
+              }
+        """
+        if not self._chair_calibrated:
+            return None
+
+        detection = self._detect_targets(color_image)
+        if detection is None:
+            # 无人 → 退避
+            self._seated_stable_count = max(0, self._seated_stable_count - 1)
+            self._is_seated = self._seated_stable_count >= self._seated_stable_required
+            return None
+
+        overlap = self._compute_seated_overlap(detection["bbox"])
+
+        if overlap >= self._seated_overlap_threshold:
+            self._seated_stable_count += 1
+        else:
+            self._seated_stable_count = max(0, self._seated_stable_count - 1)
+
+        self._is_seated = self._seated_stable_count >= self._seated_stable_required
+
+        return {
+            "bbox": detection["bbox"],
+            "conf": detection["conf"],
+            "overlap_ratio": round(overlap, 3),
+            "is_seated": self._is_seated,
+            "seated_stable": self._seated_stable_count,
+            "seated_required": self._seated_stable_required,
+        }
+
+    # ------------------------------------------------------------
+    #  属性
+    # ------------------------------------------------------------
+
     @property
     def is_person_stable(self):
         """人体位置是否已稳定."""
         return self._stabilizer.is_stable()
 
+    @property
+    def is_chair_calibrated(self):
+        """椅子 bbox 是否已标定."""
+        return self._chair_calibrated
+
+    @property
+    def chair_bbox(self):
+        """已标定的椅子 bbox [x1, y1, x2, y2] 或 None."""
+        return self._chair_bbox
+
+    @property
+    def is_person_seated(self):
+        """人是否已就位 (连续 N 帧满足)."""
+        return self._is_seated
+
+    @property
+    def seated_stable_count(self):
+        """就位累积帧数."""
+        return self._seated_stable_count
+
+    def reset_seated(self):
+        """清零就位累积 (状态转换时调用)."""
+        self._seated_stable_count = 0
+        self._is_seated = False
+
     # ------------------------------------------------------------
     def run(self):
-        """主循环: 实时检测人体并显示 bbox 中心 3D 位置 + 稳定状态."""
-        print("=" * 50)
-        print("  EyeToHand 人体位置检测 (窗口稳定: %d帧 / %.0fcm)" % (
-            self._stabilizer.window, self._stabilizer.pos_thresh * 100))
+        """主循环: 椅子标定 → 人就位检测 + 3D 位置显示."""
+        print("=" * 55)
+        print("  EyeToHand 椅子标定 + 人就位检测")
+        print("  椅子稳定: %d帧 / 人就位: %d帧 / overlap≥%.1f" % (
+            self._chair_stabilize_frames, self._seated_stable_required,
+            self._seated_overlap_threshold))
         print("  按 'q' 键退出")
-        print("=" * 50)
+        print("=" * 55)
 
         try:
             while True:
                 color_image, depth_image, depth_colormap, depth_frame = self.get_frames()
-                if color_image is None or depth_frame is None:
+                if color_image is None:
                     continue
+
+                # ---- 椅子标定 (仅一次) ----
+                chair_done = self.calibrate_chair(color_image)
 
                 # ---- 人体检测 (原始 + 稳定) ----
                 result = self.detect_person(color_image, depth_frame)
                 stable_result = self.detect_person_stable(color_image, depth_frame)
 
+                # ---- 人就位检测 (椅子标定完成后) ----
+                seated = self.detect_person_seated(color_image)
+
                 # ---- 可视化 ----
                 display_img = color_image.copy()
+                h, w = display_img.shape[:2]
+
+                # 椅子标定状态
+                if self._chair_calibrated and self._chair_bbox is not None:
+                    cb = self._chair_bbox
+                    cv2.rectangle(display_img, (cb[0], cb[1]), (cb[2], cb[3]),
+                                  (255, 200, 0), 2)
+                    cv2.putText(display_img, "chair", (cb[0], cb[1] - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
+                    cv2.putText(display_img, "Chair: OK",
+                                (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (0, 200, 0), 1)
+                else:
+                    cv2.putText(display_img,
+                                "Chair: calibrating... %d/%d" % (
+                                    len(self._chair_buffer), self._chair_stabilize_frames),
+                                (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (0, 165, 255), 1)
 
                 if result is not None:
                     bbox = result["bbox"]
                     conf = result["conf"]
                     pos_3d = result["pos_3d_cam"]
-
                     x1, y1, x2, y2 = [int(v) for v in bbox]
 
-                    # bbox 矩形框 + 中心十字 (稳定时绿色, 否则黄色)
-                    bbox_color = (0, 255, 0) if stable_result else (0, 255, 255)
+                    # bbox 颜色: 就位=绿, 稳定=黄, 否则=橙
+                    if seated and seated["is_seated"]:
+                        bbox_color = (0, 255, 0)
+                    elif stable_result:
+                        bbox_color = (0, 255, 255)
+                    else:
+                        bbox_color = (0, 165, 255)
                     cv2.rectangle(display_img, (x1, y1), (x2, y2), bbox_color, 2)
-                    cx = (x1 + x2) // 2
-                    cy = (y1 + y2) // 2
+                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
                     cv2.drawMarker(display_img, (cx, cy), (0, 0, 255),
                                    cv2.MARKER_CROSS, 12, 2)
-
-                    # 置信度标签
                     cv2.putText(display_img, "person %.2f" % conf, (x1, y1 - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, bbox_color, 2)
 
-                    # ---- 终端 + 画面输出 ----
-                    sc = self._stabilizer.count
+                    # 3D 位置
                     if pos_3d is not None and stable_result is not None:
                         sp = stable_result["pos_3d_cam"]
-                        # 画面: 左上角 live + stable
                         cv2.putText(display_img,
-                                    "live: (%.3f, %.3f, %.3f) m" % pos_3d,
-                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                                    "live: (%.3f,%.3f,%.3f)m" % pos_3d,
+                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 2)
                         cv2.putText(display_img,
-                                    "stable: (%.3f, %.3f, %.3f) m" % sp,
-                                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                        # 终端: 单行
-                        msg = "[Person] live=(%.3f,%.3f,%.3f)m  conf=%.2f  stable=(%.3f,%.3f,%.3f)m" % (
-                            pos_3d[0], pos_3d[1], pos_3d[2], conf, sp[0], sp[1], sp[2])
-                        self._log_write("[Person]", "stable=(%.3f,%.3f,%.3f)m conf=%.2f" % (
-                            sp[0], sp[1], sp[2], conf))
+                                    "stable: (%.3f,%.3f,%.3f)m" % sp,
+                                    (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
                     elif pos_3d is not None:
                         cv2.putText(display_img,
-                                    "live: (%.3f, %.3f, %.3f) m" % pos_3d,
-                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                                    "live: (%.3f,%.3f,%.3f)m" % pos_3d,
+                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 2)
+
+                    # 就位状态
+                    if seated is not None:
+                        ov = seated["overlap_ratio"]
+                        st = seated["seated_stable"]
+                        sr = seated["seated_required"]
+                        status = "SEATED" if seated["is_seated"] else "waiting"
+                        s_color = (0, 255, 0) if seated["is_seated"] else (0, 165, 255)
                         cv2.putText(display_img,
-                                    "stable: %d/%d" % (sc, self._stabilizer.window),
-                                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
-                        msg = "[Person] live=(%.3f,%.3f,%.3f)m  conf=%.2f  stable=%d/%d" % (
-                            pos_3d[0], pos_3d[1], pos_3d[2], conf, sc, self._stabilizer.window)
+                                    "Seated: %s  ov=%.2f  %d/%d" % (status, ov, st, sr),
+                                    (10, 74), cv2.FONT_HERSHEY_SIMPLEX, 0.5, s_color, 2)
                     else:
-                        cv2.putText(display_img, "person %.2f | depth: --" % conf,
-                                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                        msg = "[Person] conf=%.2f  depth: --" % conf
+                        cv2.putText(display_img, "Seated: n/a (no chair)",
+                                    (10, 74), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                    (128, 128, 128), 1)
                 else:
                     cv2.putText(display_img, "no person detected",
                                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                    msg = "[Person] 未检测到人体"
+                    # 就位退避显示
+                    if self._chair_calibrated:
+                        sc = self._seated_stable_count
+                        cv2.putText(display_img,
+                                    "Seated: counting down  %d/%d" % (sc, self._seated_stable_required),
+                                    (10, 74), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                    (0, 165, 255), 2)
 
-                print("\r%-90s" % msg, end="")
-
-                # ---- 并排显示: 彩色 | 深度热力图 ----
+                # ---- 并排显示 ----
                 if depth_colormap is not None and display_img.shape == depth_colormap.shape:
                     images = np.hstack((display_img, depth_colormap))
                 else:
@@ -324,6 +535,8 @@ class PersonDetector(BaseRealSenseDetector):
             print("\n[INFO] 键盘中断 (Ctrl+C)")
         except Exception as e:
             print("\n[ERROR] 运行异常: %s" % str(e))
+            import traceback
+            traceback.print_exc()
         finally:
             self.stop()
             cv2.destroyAllWindows()
