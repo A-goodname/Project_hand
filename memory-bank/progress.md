@@ -55,6 +55,7 @@
 - [x] 杯 ROI 回退: YOLO 失败 → cup_roi_fallback; --calibrate-roi 标定工具 (含深度)
 - [x] 递送位姿 P3 已填入 config
 - [x] 独立测试通过 (hand_in_cup.py)
+- [x] 状态机联调: 统一共享实例 + reset() 修复 + draw_visualization() 集成
 
 ### EyeToHand 标定
 - [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
@@ -65,7 +66,6 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 HandInCup 联调 | MediaPipe 判定在 Orchestrator 全流程实测 |
 | 🔴 打招呼联调 | CRP + PC 全流程实测 |
 | 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
 

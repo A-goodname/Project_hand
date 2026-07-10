@@ -6,6 +6,7 @@ estun:
   tcp_server:
     host: "192.168.101.2"       # 服务器 IP 地址(本机IP地址)
     port: 8080                   # 服务器端口
+    phase_b_timeout: 30.0        # Phase B 等待稳定位姿超时 (秒)
   hand:
     port: "COM5"                 # 灵巧手串口号
   calibration:

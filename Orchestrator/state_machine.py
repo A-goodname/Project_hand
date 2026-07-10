@@ -194,6 +194,7 @@ class SharedContext:
     # Hand-in-cup 检测 (TCP handler 控制开关, main loop 更新结果)
     hand_in_cup_active: bool = False
     hand_on_cup: Optional[bool] = None              # True/False/None(未就绪)
+    hand_in_cup_detector: Optional["HandInCupDetector"] = None  # 共享实例, main.py 创建
 
     # HANDLE_GRASP_AND_POUR 完成标志
     handle_cup_complete: threading.Event = field(default_factory=threading.Event)
@@ -353,7 +354,6 @@ class HandleGraspAndPourHandler(StateHandler):
         # ---- 运行时对象 ----
         self._server: Optional[socket.socket] = None
         self._hand_available = False
-        self._hand_in_cup: Optional[HandInCupDetector] = None
 
         # ---- 跳帧控制 ----
         self._frame_counter = 0
@@ -409,6 +409,9 @@ class HandleGraspAndPourHandler(StateHandler):
         self._a_teach = 0.0
         self._b_teach = 0.0
         self._c_teach = 0.0
+
+        # ---- TCP 超时参数 (start 时从 config 加载) ----
+        self._phase_b_timeout = 30.0
 
     # ================================================================
     # 生命周期
@@ -504,15 +507,13 @@ class HandleGraspAndPourHandler(StateHandler):
         # ---- TCP 服务器 ----
         host = estun["tcp_server"]["host"]
         port = estun["tcp_server"]["port"]
+        self._phase_b_timeout = float(estun["tcp_server"].get("phase_b_timeout", 30.0))
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.setblocking(False)
         self._server.bind((host, port))
         self._server.listen(5)
         print(f"[INFO] TCP 服务器: {host}:{port}")
-
-        # ---- Hand-in-cup 检测器 ----
-        self._hand_in_cup = HandInCupDetector()
 
         # ---- 重置运行时标志 ----
         ctx.stop_person_detector = False
@@ -758,6 +759,18 @@ class HandleGraspAndPourHandler(StateHandler):
         """
         print(f"[INFO] 客户端已连接: {addr}")
 
+        # ---- 嵌套清理函数 (确保任何退出路径都执行清理) ----
+        def _cleanup():
+            ctx.hand_in_cup_active = False
+            ctx.hand_on_cup = None
+            try:
+                conn.close()
+            except Exception:
+                pass
+            PoseStabilizer.on_disconnect()
+            ctx.handle_cup_complete.set()
+            print(f"[INFO] 客户端已断开: {addr}")
+
         # ---- 预计算工具偏移 ----
         _, t_handle_effective = compute_gripper_offset_transform(
             self._handle_t_offset, self._handle_r_offset)
@@ -773,6 +786,7 @@ class HandleGraspAndPourHandler(StateHandler):
             init_data = conn.recv(1024)
             if not init_data:
                 print("[WARN] 机器人未发送初始位姿, 断开连接")
+                _cleanup()
                 return
             pose_str = init_data.decode("utf-8").strip().strip("[]")
             parts = pose_str.split(",")
@@ -783,12 +797,15 @@ class HandleGraspAndPourHandler(StateHandler):
                       f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f})")
             else:
                 print(f"[WARN] 初始位姿格式错误: {pose_str}")
+                _cleanup()
                 return
         except socket.timeout:
             print("[WARN] 等待机器人初始位姿超时, 断开连接")
+            _cleanup()
             return
         except Exception as e:
             print(f"[WARN] 接收初始位姿异常: {e}")
+            _cleanup()
             return
 
         R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
@@ -799,13 +816,22 @@ class HandleGraspAndPourHandler(StateHandler):
         detector = ctx.handle_detector
         cup_detector = ctx.cup_detector
         T_cam2ee = ctx.T_cam2ee
-        assert detector is not None, "handle_detector 未初始化"
-        assert cup_detector is not None, "cup_detector 未初始化"
-        assert T_cam2ee is not None, "T_cam2ee 未加载"
+        if detector is None:
+            print("[ERROR] handle_detector 未初始化")
+            _cleanup()
+            return
+        if cup_detector is None:
+            print("[ERROR] cup_detector 未初始化")
+            _cleanup()
+            return
+        if T_cam2ee is None:
+            print("[ERROR] T_cam2ee 未加载")
+            _cleanup()
+            return
 
         target_sent = False
         wait_start = time.time()
-        while not target_sent and not ctx.stop_event.is_set() and (time.time() - wait_start) < 30.0:
+        while not target_sent and not ctx.stop_event.is_set() and (time.time() - wait_start) < self._phase_b_timeout:
             handle_pose = detector.last_known_pose
             cup_pose = cup_detector.last_known_pose
 
@@ -975,12 +1001,14 @@ class HandleGraspAndPourHandler(StateHandler):
                     target_sent = True
                 except (BrokenPipeError, ConnectionResetError) as e:
                     print(f"[WARN] 发送 Handle 失败: {e}")
+                    _cleanup()
                     return
             else:
                 time.sleep(0.1)
 
         if not target_sent:
             print("[WARN] 超时: 未获得稳定目标位姿, 断开连接")
+            _cleanup()
             return
 
         # ---- [Phase C & D] 指令循环 ----
@@ -1034,8 +1062,8 @@ class HandleGraspAndPourHandler(StateHandler):
 
                 elif cmd == "READY":
                     ctx.hand_in_cup_active = True
-                    if self._hand_in_cup is not None:
-                        self._hand_in_cup.reset()
+                    if ctx.hand_in_cup_detector is not None:
+                        ctx.hand_in_cup_detector.reset()
                     print("[INFO] Hand-in-cup 启动")
 
                 elif cmd == "RELEASE":
@@ -1052,7 +1080,7 @@ class HandleGraspAndPourHandler(StateHandler):
                             print("[INFO] RELEASE (松杯)")
                             try:
                                 # 发送格式与机器人端 TranStrToCpos("<",">") 配对
-                                conn.sendall(b"<0,0,0,0,0,0>\n")
+                                conn.sendall(b"<0,0,0,0,0,0>")
                                 print("[SEND] CONTINUE (<0,0,0,0,0,0>)")
                             except Exception as e:
                                 print(f"[WARN] 发送 CONTINUE 失败: {e}")
@@ -1065,7 +1093,7 @@ class HandleGraspAndPourHandler(StateHandler):
                             abort_mode = True
                             try:
                                 # 发送格式与机器人端 TranStrToCpos("[","]") 配对
-                                conn.sendall(b"[0,0,0,0,0,0]\n")
+                                conn.sendall(b"[0,0,0,0,0,0]")
                                 print("[SEND] ABORT ([0,0,0,0,0,0])")
                             except Exception as e:
                                 print(f"[WARN] 发送 ABORT 失败: {e}")

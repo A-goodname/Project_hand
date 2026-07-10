@@ -82,17 +82,16 @@ def main():
         eye_to_hand_serial=eye_to_hand_serial,
     )
 
-    # ---- [3] 注册状态机 ----
+    # ---- [3] Hand-in-cup 检测器 (全生命周期共享, Camera B pipeline 复用) ----
+    ctx.hand_in_cup_detector = HandInCupDetector()
+
+    # ---- [4] 注册状态机 ----
     sm = StateMachine()
     sm.register(OrchestratorState.IDLE, IdleHandler())
     sm.register(OrchestratorState.HANDLE_GRASP_AND_POUR, HandleGraspAndPourHandler())
     sm.transition_to(ctx, OrchestratorState.IDLE)
 
-    # ---- [4] Hand-in-cup 检测器 (Camera B, 与 PersonDetector 共用 pipeline) ----
-    hand_in_cup = HandInCupDetector()
-    # PersonDetector 在 IdleHandler.on_enter 中创建, pipeline 持续运行
-
-    # ---- [5] 主循环 ----
+    # ---- [5] 主循环 (Camera B 帧 + Person/HandInCup 检测 + 状态机驱动 + 可视化) ----
     cv2.namedWindow("Orchestrator - Camera B (Eye-to-Hand)", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Orchestrator - Camera A (Eye-in-Hand)", cv2.WINDOW_NORMAL)
 
@@ -124,13 +123,12 @@ def main():
                             ctx.person_stable_x_cam = float(result["pos_3d_cam"][0])
 
             # ---- Hand-in-cup 检测 (READY → RELEASE) ----
-            if ctx.hand_in_cup_active:
+            if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
                 if ctx.frames_b is not None:
                     color_b, depth_b, _, depth_frame_b = ctx.frames_b
                     if color_b is not None and depth_frame_b is not None:
-                        # TODO: 实现完整的 MediaPipe Hand-in-cup 检测
-                        hand_in_cup.update(color_b, depth_frame_b)
-                        ctx.hand_on_cup = hand_in_cup.is_hand_on_cup
+                        ctx.hand_in_cup_detector.update(color_b, depth_frame_b)
+                        ctx.hand_on_cup = ctx.hand_in_cup_detector.is_hand_on_cup
 
             # ============================================================
             # 驱动状态机
@@ -143,28 +141,35 @@ def main():
             if ctx.frames_b is not None and ctx.frames_b[0] is not None:
                 vis_b = ctx.frames_b[0].copy()
                 state_name = sm.state.name
+                h, w = vis_b.shape[:2]
 
-                # 状态
-                cv2.putText(vis_b, f"State: {state_name}", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-                # Person 检测状态
-                if not ctx.stop_person_detector:
-                    if ctx.latest_person_3d is not None:
-                        px, py, pz = ctx.latest_person_3d
-                        cv2.putText(vis_b, f"Person: ({px:.3f},{py:.3f},{pz:.3f})",
-                                    (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                    else:
-                        cv2.putText(vis_b, "Person: detecting...", (10, 55),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                # Hand-in-cup 激活 → 使用 draw_visualization() 全覆盖,
+                # state 名移到底部 (避免与 HandInCup 文字 (10,30)/(10,52) 重叠)
+                if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
+                    vis_b = ctx.hand_in_cup_detector.draw_visualization(vis_b)
+                    cv2.putText(vis_b, f"State: {state_name}", (10, h - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
                 else:
-                    cv2.putText(vis_b, "Person: STOPPED", (10, 55),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
+                    # 状态
+                    cv2.putText(vis_b, f"State: {state_name}", (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                # Hand-in-cup 状态
-                if ctx.hand_in_cup_active:
-                    h_status = f"HandInCup: {'ON_CUP' if ctx.hand_on_cup else 'waiting...'}"
-                    h_color = (0, 255, 0) if ctx.hand_on_cup else (0, 165, 255)
+                    # Person 检测状态
+                    if not ctx.stop_person_detector:
+                        if ctx.latest_person_3d is not None:
+                            px, py, pz = ctx.latest_person_3d
+                            cv2.putText(vis_b, f"Person: ({px:.3f},{py:.3f},{pz:.3f})",
+                                        (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        else:
+                            cv2.putText(vis_b, "Person: detecting...", (10, 55),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                    else:
+                        cv2.putText(vis_b, "Person: STOPPED", (10, 55),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
+
+                    # Hand-in-cup 状态
+                    h_status = f"HandInCup: {'ON_CUP' if ctx.hand_on_cup else 'idle'}"
+                    h_color = (0, 255, 0) if ctx.hand_on_cup else (128, 128, 128)
                     cv2.putText(vis_b, h_status, (10, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, h_color, 2)
 
@@ -231,6 +236,12 @@ def main():
                 print("[INFO] Cup 检测器已停止")
             except Exception as e:
                 print(f"[WARN] Cup 检测器停止异常: {e}")
+        if ctx.hand_in_cup_detector is not None:
+            try:
+                ctx.hand_in_cup_detector.close()
+                print("[INFO] HandInCup 检测器已关闭")
+            except Exception as e:
+                print(f"[WARN] HandInCup 检测器关闭异常: {e}")
 
         from Estun.utils_shared import is_hand_available, disable_hand
         if is_hand_available():

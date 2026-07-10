@@ -98,6 +98,7 @@ IDLE  ←──────────────────────→  
 
 - 全流程在单 TCP Session 内完成: Phase A (初始位姿) → B (Handle) → C (指令循环 + Cup) → D (HandInCup 判定)
 - 异常回 IDLE, 清理所有资源后重新等待
+- `HandInCupDetector` 由 main.py 创建, 通过 `SharedContext.hand_in_cup_detector` 共享给状态机 (避免双实例 reset() 失效)
 
 ## 模块关系
 
