@@ -49,31 +49,31 @@ estun:
     p3_teach_offset:                            # 示教 P3 偏移 (基系, Cup P1 法兰→P3 法兰), 按倒水角度索引
       enable: true                              # 默认启用
       pour_angle: 30                            # 当前使用的倒水角度 (B 角度数)
-      back:                                     # back 模式
+      back:                                     # back 模式 (X-1cm, Z+2cm 基系)
         10:                                     # 10° 倒水
-          t_offset: [0.0130, -0.1000, 0.2370]   # (x, y, z) m
+          t_offset: [0.0030, -0.1000, 0.2570]   # (x, y, z) m
           r_abc: [-90.0, 10.3, -90.0]           # (A, B, C) deg
         15:                                     # 15° 倒水
-          t_offset: [0.0130, -0.1120, 0.2320]
+          t_offset: [0.0030, -0.1120, 0.2520]
           r_abc: [-90.0, 15.3, -90.0]
         20:                                     # 20° 倒水
-          t_offset: [0.0130, -0.1120, 0.2220]
+          t_offset: [0.0030, -0.1120, 0.2420]
           r_abc: [-90.0, 20.3, -90.0]
         30:                                     # 30° 倒水 (默认)
-          t_offset: [0.0126, -0.1361, 0.2127]
+          t_offset: [0.0026, -0.1361, 0.2327]
           r_abc: [-90.0, 30.3, -90.0]
       left:                                     # left 模式 (全角度实测: 30°示教, 10°/15°/20° demo校正)
         10:
-          t_offset: [-0.0170, -0.0210, 0.2340]   # P3 Y=157
+          t_offset: [-0.0170, -0.0210, 0.2640]   # P3 Y=157, Z+3cm
           r_abc: [-90.0, 10.0, -90.0]
         15:
-          t_offset: [-0.0171, -0.0420, 0.2293]   # P3 Y=145
+          t_offset: [-0.0171, -0.0420, 0.2593]   # P3 Y=145, Z+3cm
           r_abc: [-90.0, 15.3, -90.0]
         20:
-          t_offset: [-0.0171, -0.0550, 0.2193]   # P3 Y=132
+          t_offset: [-0.0171, -0.0550, 0.2493]   # P3 Y=132, Z+3cm
           r_abc: [-90.0, 20.3, -90.0]
         30:
-          t_offset: [-0.0175, -0.0765, 0.2100]   # P3 Y=111
+          t_offset: [-0.0175, -0.0765, 0.2400]   # P3 Y=111, Z+3cm
           r_abc: [-90.0, 30.3, -90.0]
     pre_offset:
       t_offset: [0.0, -0.10, 0.03]      # 末端系下预抓取平移偏移 (x, y, z) m
@@ -94,9 +94,9 @@ estun:
       t_offset: [-0.06, 0.17, 0.0]          # (x, y, z) m, 需物理测量后填写
     gripper_offset:                         # 抓水杯的灵巧手偏移
       # t_cup_offset: [0.057, -0.010, 0.139] # back 模式偏移 (x, y, z) m, RealSense (rs.align)
-      t_cup_offset: [0.048, -0.009, 0.098] # back 模式偏移 (x, y, z) m, RealSense_R (手动像素映射); 2026-07-07 fine_tune 实测
+      t_cup_offset: [0.051, -0.008, 0.104] # back 模式偏移 (x, y, z) m, RealSense_R (手动像素映射); 2026-07-13 fine_tune 实测
       # t_cup_offset_left: [0.049, -0.070, 0.100] # left 模式偏移 (x, y, z) m, RealSense (rs.align)
-      t_cup_offset_left: [0.040, -0.060, 0.080] # left 模式偏移 (x, y, z) m, RealSense_R (手动像素映射); 2026-07-07 fine_tune 实测
+      t_cup_offset_left: [0.048, -0.050, 0.082] # left 模式偏移 (x, y, z) m, RealSense_R (手动像素映射); 2026-07-13 fine_tune 实测
       r_cup_offset: [0, 0, -90]             # (A, B, C) 度, 灵巧手安装角度
     pre_offset:                             # 末端系下预抓取偏移
       t_offset: [-0.05, 0.0, -0.05]          # (x, y, z) m
@@ -107,13 +107,20 @@ estun:
     pour_offset:                            # [新增] Handle P3 倒水前位置: 壶嘴基系 + 此偏移
       t_offset: [0, 0, 0.05]                # (x, y, z) m, 基系 Z 轴向上 5cm (防碰撞)
       r_offset: [0.0, 0.0, -55.0]           # (A, B, C) 度, 倒水姿态 (同 handle_grasp.target_offset.r_offset)
-  greeting:                                  # Phase 0 打招呼阶段 (同事 CRP 7步协议)
+  greeting:                                  # Phase 0 打招呼阶段
     port: 8600                               # Phase 0 TCP 端口
     wave_cycles: 3                           # 挥手循环次数 (Hello_1↔Hello_2)
-    wave_interval: 0.6                       # 挥手切换间隔 (秒)
-    handshake_hold: 2.0                      # 握手保持时间 (秒)
-    pressure_threshold: 100                  # 抓握压力阈值 (手背 25 触点原始值之和)
-    release_threshold: 20                    # 松手压力阈值
+    wave_speed: "very_fast"                  # 挥手速度: very_slow / medium / very_fast
+    wave_interval: 0.6                       # 挥手单帧保持时间 (秒)
+    # 握手压力检测
+    force_timeout: 30.0                      # 等待抓握超时 (秒)
+    force_abs_threshold: 100                 # 压力绝对阈值 (手背触点原始值之和)
+    force_delta_threshold: 100               # 压力增量阈值
+    force_baseline_samples: 5                # 基线采样次数
+    force_poll_interval: 0.15                # 压力轮询间隔 (秒)
+    force_release_timeout: 60.0              # 等待松手超时 (秒)
+    force_release_delta: 50                  # 松手压力 delta 阈值
+    force_release_hold: 2.0                  # 松手稳定保持时间 (秒)
     # 打招呼位姿 (mm, deg) — 同事示教值
     zhaoshou1_pose: [415.3, -19.6, 852.8, -89.0, 1.6, -116.8]
     zhaoshou2_pose: [281.7, 65.0, 928.2, -46.9, -3.1, -118.4]

@@ -402,10 +402,13 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
                     if not (-100 <= C1 <= -80):
                         print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
                         C1 = -90.0
-                    # B 角 clamp 到 [84, 86], 超出则赋中值 85 (右手抓取)
-                    if not (84 <= B1 <= 86):
-                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
-                        B1 = 85.0
+                    # B 角防跳变: <90→89, >90→91 (参考 Cup 约束)
+                    if B1 < 90:
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical)")
+                        B1 = 89.0
+                    elif B1 > 90:
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical)")
+                        B1 = 91.0
 
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                 R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected

@@ -82,7 +82,17 @@ ANGLE_THRESHOLD = _cfg_estun["stabilization"]["angle_threshold"]
 _greet_cfg = _cfg_estun.get("greeting", {})
 GREET_PORT = _greet_cfg.get("port", 8600)
 GREET_WAVE_CYCLES = _greet_cfg.get("wave_cycles", 3)
+GREET_WAVE_SPEED = _greet_cfg.get("wave_speed", "very_fast")
 GREET_WAVE_INTERVAL = _greet_cfg.get("wave_interval", 0.6)
+# 握手压力检测
+GREET_FORCE_TIMEOUT = _greet_cfg.get("force_timeout", 30.0)
+GREET_FORCE_ABS_THRESHOLD = _greet_cfg.get("force_abs_threshold", 100)
+GREET_FORCE_DELTA_THRESHOLD = _greet_cfg.get("force_delta_threshold", 100)
+GREET_FORCE_BASELINE_SAMPLES = _greet_cfg.get("force_baseline_samples", 5)
+GREET_FORCE_POLL_INTERVAL = _greet_cfg.get("force_poll_interval", 0.15)
+GREET_FORCE_RELEASE_TIMEOUT = _greet_cfg.get("force_release_timeout", 60.0)
+GREET_FORCE_RELEASE_DELTA = _greet_cfg.get("force_release_delta", 50)
+GREET_FORCE_RELEASE_HOLD = _greet_cfg.get("force_release_hold", 2.0)
 # 打招呼位姿 (mm, deg) — CRP TranStrToCpos lengthunit=mm, 直接发送 mm
 _z1 = _greet_cfg.get("zhaoshou1_pose", [0]*6)
 _z2 = _greet_cfg.get("zhaoshou2_pose", [0]*6)
@@ -312,67 +322,92 @@ class Phase0Server:
         sensors = _h.serial.read_all_sensor_group_3()
         return int(np.asarray(sensors.get("back", []), dtype=np.int32).sum())
 
-    def _wait_for_handshake_force(self, timeout=30.0):
-        """等待手背压力 (基线+增量双阈值)."""
+    def _wait_for_handshake_force(self):
+        """等待手背压力 (基线+增量双阈值, 参数从 config 读取)."""
         baseline_samples = []
-        for _ in range(5):
+        for _ in range(max(1, GREET_FORCE_BASELINE_SAMPLES)):
             baseline_samples.append(self._read_hand_back_pressure())
             time.sleep(0.05)
         baseline = float(np.median(np.asarray(baseline_samples, dtype=np.float64)))
-        deadline = time.time() + timeout
+        deadline = time.time() + GREET_FORCE_TIMEOUT
         while time.time() < deadline:
             value = self._read_hand_back_pressure()
             delta = value - baseline
-            abs_trigger = (baseline < 50 and value >= 100)
-            delta_trigger = (delta >= 100)
+            abs_trigger = (baseline < GREET_FORCE_ABS_THRESHOLD * 0.5
+                           and value >= GREET_FORCE_ABS_THRESHOLD)
+            delta_trigger = (delta >= GREET_FORCE_DELTA_THRESHOLD)
             print(f"  [压力] back={value} baseline={baseline:.0f} delta={delta:.0f} "
                   f"abs_trig={abs_trigger} delta_trig={delta_trigger}")
             if abs_trigger or delta_trigger:
                 print("  [压力] 检测到抓握!")
                 return True
-            time.sleep(0.15)
-        print(f"  [压力] 超时 ({timeout}s 内未检测到)")
+            time.sleep(GREET_FORCE_POLL_INTERVAL)
+        print(f"  [压力] 超时 ({GREET_FORCE_TIMEOUT}s 内未检测到)")
         return False
 
-    def _wait_for_handshake_release(self, timeout=60.0):
-        """等待松手: 连续 2s 内 delta < 50."""
+    def _wait_for_handshake_release(self):
+        """等待松手: 连续 hold 秒内 delta < threshold (参数从 config 读取)."""
         baseline_samples = []
-        for _ in range(5):
+        for _ in range(max(1, GREET_FORCE_BASELINE_SAMPLES)):
             baseline_samples.append(self._read_hand_back_pressure())
             time.sleep(0.05)
         baseline = float(np.median(np.asarray(baseline_samples, dtype=np.float64)))
         released_since = None
-        deadline = time.time() + timeout
+        deadline = time.time() + GREET_FORCE_RELEASE_TIMEOUT
         while time.time() < deadline:
             value = self._read_hand_back_pressure()
             delta = value - baseline
-            released = (delta <= 50)
+            released = (delta <= GREET_FORCE_RELEASE_DELTA)
             print(f"  [压力] back={value} baseline={baseline:.0f} delta={delta:.0f} "
                   f"released={released}")
             now = time.time()
             if released:
                 if released_since is None:
                     released_since = now
-                if now - released_since >= 2.0:
+                if now - released_since >= GREET_FORCE_RELEASE_HOLD:
                     print("  [压力] 已松手!")
                     return True
             else:
                 released_since = None
-            time.sleep(0.15)
-        print(f"  [压力] 松手超时 ({timeout}s)")
+            time.sleep(GREET_FORCE_POLL_INTERVAL)
+        print(f"  [压力] 松手超时 ({GREET_FORCE_RELEASE_TIMEOUT}s)")
         return False
 
     def _execute_wave(self):
-        """Hello_1 ↔ Hello_2 ×N 挥手, 结束后 RESET 复位."""
+        """Hello_1 ↔ Hello_2 ×N 挥手 (速度插值), 结束后 RESET 复位."""
         from Estun.utils_shared import _hand as _h
-        from Omnihand.omnihand_gesture import Gesture
+        from Omnihand.omnihand_gesture import Gesture, KinematicsConverter
+
+        # 速度配置: duration=总过渡时间, steps=插值步数
+        _speed_cfg = {
+            "very_slow": {"duration": 3.0, "steps": 60},
+            "medium":    {"duration": 1.0, "steps": 20},
+            "very_fast": {"duration": 0.3, "steps": 6},
+        }
+        cfg = _speed_cfg.get(GREET_WAVE_SPEED, _speed_cfg["very_fast"])
+        duration = cfg["duration"]
+        steps = cfg["steps"]
+
         if _h is not None:
-            print(f"[Phase 0] 挥手 {GREET_WAVE_CYCLES} 次...")
+            print(f"[Phase 0] 挥手 {GREET_WAVE_CYCLES} 次 (速度: {GREET_WAVE_SPEED}, "
+                  f"{duration}s/{steps}steps)...")
             for i in range(GREET_WAVE_CYCLES):
                 print(f"  {i+1}/{GREET_WAVE_CYCLES}")
-                _h.do_gesture(Gesture.HELLO_1, delay=GREET_WAVE_INTERVAL)
-                _h.do_gesture(Gesture.HELLO_2, delay=GREET_WAVE_INTERVAL)
-            # 挥手结束后复位, 机器人安全移动到 WOSHOU 位置
+                for gesture in (Gesture.HELLO_1, Gesture.HELLO_2):
+                    target = KinematicsConverter.get_gesture_positions(gesture, _h.is_right_hand)
+                    try:
+                        current = _h.read_positions()
+                    except Exception:
+                        current = target
+                    step_delay = duration / steps
+                    for s in range(1, steps + 1):
+                        t = s / steps
+                        interp = [int(round(c + (tg - c) * t)) for c, tg in zip(current, target)]
+                        interp = [max(0, min(4096, v)) for v in interp]
+                        _h.set_positions(interp, delay=0)
+                        time.sleep(step_delay)
+                    time.sleep(GREET_WAVE_INTERVAL)
+            # 挥手结束后复位
             print("[Phase 0] RESET — 挥手结束, 复位")
             _h.do_gesture(Gesture.RESET, delay=0.5)
         else:
@@ -720,10 +755,13 @@ def _handle_client_impl(conn, addr, detector, T_cam2ee, cup_detector):
                     if not (-100 <= C1 <= -80):
                         print(f"[CLAMP] Handle P1 C 角 {C1:.1f} -> -90.0 (vertical)")
                         C1 = -90.0
-                    # B 角 clamp 到 [84, 86], 超出则赋中值 85 (右手抓取)
-                    if not (84 <= B1 <= 86):
-                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 85.0")
-                        B1 = 85.0
+                    # B 角防跳变: <90→89, >90→91 (参考 Cup 约束)
+                    if B1 < 90:
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 89.0 (vertical)")
+                        B1 = 89.0
+                    elif B1 > 90:
+                        print(f"[CLAMP] Handle P1 B 角 {B1:.1f} -> 91.0 (vertical)")
+                        B1 = 91.0
 
                 rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                 R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected

@@ -783,7 +783,7 @@ class HandleGraspAndPourHandler(StateHandler):
         self._handle_side = "right"
         self._fixed_abc = None
 
-        # ---- EyeToHand 标定 + 递送参数 (start 时加载) ----
+        # ---- EyeToHand 递送参数 (全示教固定, start 时加载) ----
         self._x_teach = 0.0
         self._y_teach = 0.0
         self._z_teach = 0.0
@@ -835,7 +835,7 @@ class HandleGraspAndPourHandler(StateHandler):
         # ---- 加载偏移参数 (从 estun_config) ----
         self._load_offsets(cfg, estun)
 
-        # ---- 加载 EyeToHand 标定 + 递送参数 ----
+        # ---- 加载 EyeToHand 递送参数 (全示教固定) ----
         delivery = eye_cfg.get("delivery", {})
         self._x_teach = delivery.get("X_TEACH", 0.0)
         self._y_teach = delivery.get("Y_TEACH", 0.0)
@@ -1136,7 +1136,7 @@ class HandleGraspAndPourHandler(StateHandler):
         """单 TCP Session 全流程: 移植自 estun_handle_cup_run._handle_client_impl.
 
         关键差异:
-          - Cup P3 的 X 来自 Camera B 人体检测 + EyeToHand 标定
+          - Cup P3 XYZ/ABC 全示教固定 (EyeToHand/config.yaml delivery 段, 3D→1D 标定暂未接入)
           - Phase D: 递送确认 + Hand-in-cup 判定 (TRUE→CONTINUE / FALSE→ABORT)
         """
         print(f"[INFO] 客户端已连接: {addr}")
@@ -1257,9 +1257,12 @@ class HandleGraspAndPourHandler(StateHandler):
                         if not (-100 <= C1 <= -80):
                             print(f"[CLAMP] Handle P1 C {C1:.1f} → -90.0")
                             C1 = -90.0
-                        if not (84 <= B1 <= 86):
-                            print(f"[CLAMP] Handle P1 B {B1:.1f} → 85.0")
-                            B1 = 85.0
+                        if B1 < 90:
+                            print(f"[CLAMP] Handle P1 B {B1:.1f} → 89.0")
+                            B1 = 89.0
+                        elif B1 > 90:
+                            print(f"[CLAMP] Handle P1 B {B1:.1f} → 91.0")
+                            B1 = 91.0
 
                     rot_base_1_corrected = euler_to_rotation_matrix(A1, B1, C1, order="zyx")
                     R_grasp_ee_corrected = R_ee_base.T @ rot_base_1_corrected
@@ -1273,7 +1276,7 @@ class HandleGraspAndPourHandler(StateHandler):
                 # ============================================================
                 # Phase 2: Cup P1 / P2 / P3
                 #   P1, P2: Camera A 检测 (同原版)
-                #   P3:     delivery = (X_person, Y_TEACH, Z_TEACH, ABC_TEACH)
+                #   P3:     delivery = (X_TEACH, Y_TEACH, Z_TEACH, ABC_TEACH)  # 全示教固定
                 # ============================================================
                 c_pos_ee = T_cam2ee[:3, :3] @ np.array(cup_pos_cam) + T_cam2ee[:3, 3]
                 c_rot_ee = T_cam2ee[:3, :3] @ euler_to_rotation_matrix(*cup_euler_cam, order="zyx")
