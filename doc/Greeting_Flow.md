@@ -44,8 +44,8 @@ main()
   │  └─ 连接后 → _handle_session(conn) → 4步协议 (阻塞)
   │     ├─ Step 1: recv → reply ZHAOSHOU1
   │     ├─ Step 2: recv → YOLO人检测 → _close_camera() → reply ZHAOSHOU2
-  │     ├─ Step 3: recv → Hello_1↔Hello_2×3 → PAPER → reply WOSHOU
-  │     └─ Step 4: recv → PAPER→压力→HAND_SHAKE→松手→PAPER → reply "Home"
+  │     ├─ Step 3: recv → Hello_1↔Hello_2×3 (速度插值) → RESET → reply WOSHOU
+  │     └─ Step 4: recv → RESET→压力→HAND_SHAKE→松手→RESET → reply "Home"
   │
   ├─ [Init 3] RealSenseHandle6DDetector()  ← Camera A pipeline 启动 (Phase A-C)
   ├─ [Init 4] RealSenseCup6DDetector(start_pipeline=False) ← 复用 Camera A
@@ -118,10 +118,13 @@ Step 3 — 挥手 → WOSHOU
 [CPosToStr("ZHAOSHOU2|") → "ZHAOSHOU2|x,y,z,a,b,c"]
 [SocketSendStr] ─────── "ZHAOSHOU2|x,y,z..." ────→ 解析: cmd="ZHAOSHOU2"
 [SocketReadStr(30s)]                              │
-       │                                          ├─ Hello_1 (do_gesture, 0.6s)
-       │                                          ├─ Hello_2 (do_gesture, 0.6s)
+       │                                          ├─ Hello_1 (速度插值, very_fast: 0.15s/5步)
+       │                                          ├─ Hello_2 (速度插值, very_fast: 0.15s/5步)
+       │                                          │  每手势后保持 wave_interval (0.15s)
        │                                          │  ×3 循环
-       │                                          ├─ PAPER (手掌张开)
+       │                                          │  (KinematicsConverter.get_gesture_positions
+       │                                          │   → set_positions 逐帧插值)
+       │                                          ├─ RESET (复位)
        │                                          │
        ←─────────── "x,y,z,A,B,C" ──────────────── 回复 WOSHOU 位姿
 [TranStrToCpos → pt_WOSHOU]
@@ -135,14 +138,14 @@ Step 4 — 握手 → Home
 [CPosToStr("WOSHOU|") → "WOSHOU|x,y,z,a,b,c"]
 [SocketSendStr] ─────── "WOSHOU|x,y,z..." ───────→ 解析: cmd="WOSHOU"
 [SocketReadStr(90s)]                              │
-       │                                          ├─ PAPER (手掌张开)
+       │                                          ├─ RESET (复位, 等待握手)
        │                                          ├─ 等待手背压力
-       │                                          │  (基线+增量双阈值:
-       │                                          │   abs: baseline<50 && value≥100
-       │                                          │   delta: ≥100)
+       │                                          │  (参数从 estun_config.yaml 读取:
+       │                                          │   baseline_samples, abs_threshold,
+       │                                          │   delta_threshold, poll_interval, timeout)
        │                                          ├─ HAND_SHAKE (do_gesture, 1s)
-       │                                          ├─ 等待松手 (delta≤50 持续2s)
-       │                                          ├─ PAPER (手掌张开)
+       │                                          ├─ 等待松手 (release_delta 持续 release_hold 秒)
+       │                                          ├─ RESET (复位)
        │                                          │
        ←─────────────── "Home" ─────────────────── 回复 "Home" (字符串)
 

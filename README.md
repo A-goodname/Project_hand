@@ -45,12 +45,12 @@ pip install -r requirements.txt
 | `Estun/estun_cup_demo.py` | **演示脚本：水杯单检测位姿转换验证**，独立 pipeline，支持 back/left handle_side 多模式角度约束 |
 | `Estun/estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
 | `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令，支持 back/left 双模式 |
-| `Estun/estun_greeting_handle_cup_run.py` | **主入口 (打招呼+Handle+Cup 融合版)**，Phase 0 打招呼(4步协议, port 8600) + Phase A-C Handle+Cup 抓取(port 8080)，YOLO人检测+挥手+握手 |
+| `Estun/estun_greeting_handle_cup_run.py` | **主入口 (打招呼+Handle+Cup 融合版)**，Phase 0 打招呼(4步协议, port 8600) + Phase A-C Handle+Cup 抓取(port 8080)，YOLO人检测+挥手(速度插值 very_fast/medium/very_slow)+握手(压力检测配置化) |
 | `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
 | `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、3D→1D 人体标定工具、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+MediaPipe Hands) |
-| `Orchestrator/` | **双相机流程编排**：3 状态状态机 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)、Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)、HandInCup 判定、双相机主循环 |
+| `Orchestrator/` | **双相机流程编排**：3 状态状态机 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)、Phase 0 打招呼 (TCP 8600, 速度插值挥手+压力配置化) + Phase A-D 抓取递送 (TCP 8080)、HandInCup 判定、双相机主循环 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
 | `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
@@ -245,3 +245,4 @@ TCP 8080 pack_three                 TCP 8600 Phase 0 打招呼
 - **HandInCup 检测**：YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪)，landmarks-in-bbox 计分制 + curled gate；独立模块 `EyeToHand/hand_in_cup.py`
 - **RELEASE 双语义**：`hand_in_cup_active` 标志区分 — Phase C 松把手 vs Phase D HandInCup 判定
 - **新协议指令**：`READY` (Robot→PC, 到达 P3 启动 HandInCup)、`CONTINUE` `<0,0,0,0,0,0>` (PC→Robot, TRUE 松手退避)、`ABORT` `[0,0,0,0,0,0]` (PC→Robot, FALSE 放回杯子)
+- **CRP 已知限制**：MovJ widget 的 ZONE datavar 在机械臂 Lua 运行时无法正确解析 → 全部使用 MovL

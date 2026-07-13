@@ -382,7 +382,7 @@ class Phase0Server:
         _speed_cfg = {
             "very_slow": {"duration": 3.0, "steps": 60},
             "medium":    {"duration": 1.0, "steps": 20},
-            "very_fast": {"duration": 0.3, "steps": 6},
+            "very_fast": {"duration": 0.15, "steps": 5},
         }
         cfg = _speed_cfg.get(GREET_WAVE_SPEED, _speed_cfg["very_fast"])
         duration = cfg["duration"]

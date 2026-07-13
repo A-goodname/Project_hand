@@ -2,12 +2,27 @@
 
 ## 当前焦点
 
-**TCP 协议一致性验证完成** — CRP/TXT/状态机三方对比, 修复 RELEASE 语义冲突 bug, Wait 5s→2s.
-3 状态状态机代码就绪, 等待实机联调.
+**打招呼联调中** — CRP MovJ 报错已修复, 挥手速度已调优, 状态机 greeting 修改已同步.
+3 状态状态机代码就绪, 等待实机全流程联调.
 
 ## 最近变更
 
-1. **RELEASE 语义修复 + CRP/TXT 同步** (2026-07-10, 工作区):
+1. **CRP MovJ→MovL 修复 + 挥手速度调优 + 代码审阅** (2026-07-13, 工作区):
+   - `greeting_handlepluscup.crp`: 4 处 MovJ → MovL (机械臂端 `bad argument #4 to 'movJ'` 报错, MovJ widget 的 ZONE datavar 无法正确解析)
+   - 挥手速度: `very_fast` duration 0.3→0.15s, steps 3→5; `wave_interval` 0.6→0.15s
+   - `estun_config.yaml`: `wave_interval` 0.6→0.15
+   - `state_machine.py` GreetingHandler: 移植挥手速度插值 + 压力配置化 + `_execute_wave(ctx)` stop_event 检查
+   - 3 轮代码审阅通过, 无 Critical bug
+
+2. **CRP 运动优化 + 挥手速度插值 + 压力配置化** (2026-07-13, `c324bd2`):
+   - P3 倒水偏移 Z 轴统一上移: back +2cm, left +3cm (10°/15°/20°/30°)
+   - gripper_offset cup_offset back/left 微调 (7/13 fine_tune 实测)
+   - 挥手从 `do_gesture` 改为线性插值 (`KinematicsConverter.get_gesture_positions` → 逐帧 `set_positions`)
+   - `wave_speed` 配置: very_slow(3s/60步) / medium(1s/20步) / very_fast(0.15s/3步)
+   - 压力检测硬编码全部提取到 `estun_config.yaml` greeting 段
+   - Handle P1 B 角防跳变: clamp [84,86]→85 改为 <90→89, >90→91 (4 run + Demo + state_machine)
+
+3. **RELEASE 语义修复 + CRP/TXT 同步** (2026-07-10, 工作区):
    - `state_machine.py`: RELEASE handler 从 2 分支改为 3 分支, 用 `hand_in_cup_active` 标志区分:
      - Phase C (READY 之前) → `release_object()` 松把手
      - Phase D (READY 之后) → HandInCup 判定 → CONTINUE/ABORT
@@ -41,6 +56,5 @@
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
 | 🔴 P0 | **打招呼全流程联调** | CRP+PC 从头到尾验证 |
-| 🔴 P0 | **Handle B角移植** | Demo 确定 89/91 后移植到 4 个 run 文件 |
 | 🟡 P1 | **offset 微调** | 三个打招呼位姿偏移实测 |
 | 🟢 P2 | **EyeToHand 标定接入** | 3D→1D 人体标定替换 delivery.X_TEACH |

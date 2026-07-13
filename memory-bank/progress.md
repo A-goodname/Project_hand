@@ -13,12 +13,14 @@
 
 ### 水杯抓取
 - [x] 水杯 6D 检测 + 双检测器共享 Pipeline
-- [x] Cup offset fine_tune: back=[0.048,-0.009,0.098], left=[0.040,-0.060,0.080]
+- [x] Cup offset fine_tune: back=[0.051,-0.008,0.104], left=[0.048,-0.050,0.082]
 
 ### Handle+Cup 融合
 - [x] estun_handle_cup_run.py 全流程
 - [x] back/left 双模式 + P3 多角度示教 + P4 Y后退 CRP
+- [x] P3 倒水偏移 Z+2~3cm 运动优化 (10°/15°/20°/30°)
 - [x] Cup 检测修复 (PoseStabilizer 代际同步)
+- [x] Handle P1 B 角防跳变: <90→89, >90→91 (4 run + Demo + state_machine)
 
 ### 灵巧手控制
 - [x] USB 串口 / 手势 / 速度控制 / 使能
@@ -30,13 +32,19 @@
 - [x] Phase0Server 类: 4 步单连接协议
 - [x] YOLOv8n 人检测 (独立 Camera pipeline)
 - [x] 挥手: Hello_1↔Hello_2 ×3 → PAPER
+- [x] 挥手速度插值: very_slow/medium/very_fast (KinematicsConverter → set_positions)
 - [x] 握手: PAPER→压力→HAND_SHAKE→松手→PAPER
+- [x] 压力检测配置化: 全部阈值从 estun_config.yaml 读取
 - [x] CRP greeting 段重建: 30 widget, 全部 MovL
 - [x] Phase A-C 与 estun_handle_cup_run.py 完全一致
 - [x] Phase 0 协议 PC 端验证通过
 - [x] 位姿单位修复: PC 直接发 mm (`e1cafbd`)
 - [x] PAPER→RESET (`e1cafbd`)
 - [x] Phase 0→A-C TCP 8080 提前启动 (`e1cafbd`)
+- [x] CRP 4 MovJ→MovL 修复 (movJ bad argument #4 报错)
+- [x] 挥手速度调优: very_fast 0.15s/5步, wave_interval 0.15s
+- [x] Orchestrator GreetingHandler 同步移植 (速度插值 + 压力配置化 + stop_event)
+- [x] 3 轮代码审阅 (无 Critical bug)
 - [ ] 全流程联调 (CRP + PC)
 
 ### 通信协议
@@ -78,9 +86,11 @@
 |------|------|
 | 🔴 打招呼联调 | CRP + PC 全流程实测 |
 | 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
+| 🟢 state_machine greeting 移植验证 | 插值挥手 + 压力配置化实机验证 |
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)
 - EyeToHand result.yaml a,b,c,d 默认占位
 - P4 Y 后退 15/20° 线性插值未实测验证
 - 新打招呼 CRP + 3 状态全流程待联调验证
+- 机械臂端 MovJ widget ZONE datavar 无法正确解析 → 已全部改为 MovL
