@@ -3,17 +3,30 @@ ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程:
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
 === v6 相比 v5 的关键变化 (2026-07-13) ===
-1. CRP: 4 处 MovJ → MovL (机械臂 movJ ZONE datavar 无法正确解析, 全部改回 MovL)
-2. 挥手速度插值: 从 do_gesture 改为 KinematicsConverter.get_gesture_positions + set_positions 逐帧插值
-   - wave_speed: very_slow(3s/60步) / medium(1s/20步) / very_fast(0.15s/5步)
-   - wave_interval: 0.15s (每手势后保持)
-3. 压力检测配置化: 全部阈值从硬编码提取到 estun_config.yaml greeting 段
-   - force_timeout / force_abs_threshold / force_delta_threshold
-   - force_baseline_samples / force_poll_interval
-   - force_release_timeout / force_release_delta / force_release_hold
-4. Handle P1 B 角防跳变: <90→89, >90→91 (4 run + Demo + state_machine)
-5. P3 倒水偏移 Z+2~3cm (back/left 各角度)
-6. Orchestrator state_machine GreetingHandler 同步上述所有修改
+1. CRP: 全部 MovJ → MovL (机械臂 movJ ZONE datavar 无法正确解析)
+   - greeting_handlepluscup.crp: 4 处
+   - handlepluscup-orchestrator.crp: C_P3 1 处 (原为唯一 MovJ, 改为 MovL)
+2. 挥手回归 do_gesture 一步到位, 移除 KinematicsConverter / wave_speed / _speed_cfg
+   - wave_interval: 0.15s (每手势保持时间)
+3. Orchestrator CRP 速度 (20 widget):
+   - Phase 0 (4): GH_ZHAOSHOU1 / GH_ZHAOSHOU2 / GH_WOSHOU / Home — 全部 V100, label "MovL"
+   - Handle 进 (3): H_P2 → H_P1 → H_P4 — V100
+   - H_P3 倒水: sudu
+   - H_P4 退避: V100
+   - Handle 返 (3): H_P1 → H_P2 → Home — V100
+   - Cup 进 (2): C_P2 → C_P1 — V100
+   - C_P3 递水 (P1→P3): sudu
+   - CONTINUE (2): C_P4 → Home — V100
+   - ABORT C_P1 回退 (P3→P1): sudu
+   - ABORT 返 (2): C_P2 → Home — V100
+   = 3 处 sudu: H_P3(倒水) / C_P3(递水) / ABORT C_P1(回退)
+4. CRP Phase D 点位修正: 5 个 MovL 从错误引用 GH_ZHAOSHOU1 改为正确点位
+   (C_P4→ptmreq3cgnlah0bwcs, Home→ptmquqgw91h2026u, C_P1→ptmqur4rq7rech2h,
+    C_P2→ptmqur4s2ie5o53g, Home→ptmquqgw91h2026u)
+5. 压力检测配置化: 全部阈值从硬编码提取到 estun_config.yaml greeting 段
+6. Handle P1 B 角防跳变: <90→89, >90→91 (4 run + Demo + state_machine)
+7. P3 倒水偏移 Z+2~3cm (back/left 各角度)
+8. Orchestrator state_machine GreetingHandler 同步上述所有修改
 
 === v5 相比 v4 的关键变化 ===
 1. Phase 0 (Greeting 打招呼) 已集成到 Orchestrator 状态机, 作为独立 GREETING 状态运行:

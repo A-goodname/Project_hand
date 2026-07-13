@@ -31,21 +31,20 @@
 ### 打招呼 Phase 0
 - [x] Phase0Server 类: 4 步单连接协议
 - [x] YOLOv8n 人检测 (独立 Camera pipeline)
-- [x] 挥手: Hello_1↔Hello_2 ×3 → PAPER
-- [x] 挥手速度插值: very_slow/medium/very_fast (KinematicsConverter → set_positions)
-- [x] 握手: PAPER→压力→HAND_SHAKE→松手→PAPER
+- [x] 挥手: Hello_1↔Hello_2 ×3 → RESET (do_gesture 一步到位)
+- [x] 握手: RESET→压力→HAND_SHAKE→松手→RESET
 - [x] 压力检测配置化: 全部阈值从 estun_config.yaml 读取
-- [x] CRP greeting 段重建: 30 widget, 全部 MovL
-- [x] Phase A-C 与 estun_handle_cup_run.py 完全一致
+- [x] CRP greeting 段: 全 MovL, speed/label 对齐
+- [x] CRP orchestrator 段:
+  - Phase 0 speed/label 对齐 greeting CRP
+  - H_P3/H_P4→sudu, C_P3→sudu+MovJ→MovL
+  - Phase D 5 点位修正 (GH_ZHAOSHOU1→C_P4/Home/C_P1/C_P2/C_P2)
+  - ABORT C_P1→sudu, 其余 V100
+- [x] `state_machine.py` GreetingHandler: `_execute_wave(ctx)` do_gesture + stop_event + 压力配置化
+- [x] `estun_greeting_handle_cup_run.py`: 同回归 do_gesture
+- [x] `estun_config.yaml`: wave_speed 清除, wave_interval=0.15
 - [x] Phase 0 协议 PC 端验证通过
-- [x] 位姿单位修复: PC 直接发 mm (`e1cafbd`)
-- [x] PAPER→RESET (`e1cafbd`)
-- [x] Phase 0→A-C TCP 8080 提前启动 (`e1cafbd`)
-- [x] CRP 4 MovJ→MovL 修复 (movJ bad argument #4 报错)
-- [x] 挥手速度调优: very_fast 0.15s/5步, wave_interval 0.15s
-- [x] Orchestrator GreetingHandler 同步移植 (速度插值 + 压力配置化 + stop_event)
-- [x] 3 轮代码审阅 (无 Critical bug)
-- [ ] 全流程联调 (CRP + PC)
+- [ ] **实机测试**: greeting 单相机 + 状态机双相机
 
 ### 通信协议
 - [x] pack_three / Orchestrator CRP / 同事 CRP
@@ -84,13 +83,13 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 打招呼联调 | CRP + PC 全流程实测 |
+| 🔴 greeting 单相机测试 | `estun_greeting_handle_cup_run.py` + `greeting_handlepluscup.crp` |
+| 🔴 状态机双相机测试 | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
 | 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
-| 🟢 state_machine greeting 移植验证 | 插值挥手 + 压力配置化实机验证 |
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)
 - EyeToHand result.yaml a,b,c,d 默认占位
 - P4 Y 后退 15/20° 线性插值未实测验证
-- 新打招呼 CRP + 3 状态全流程待联调验证
 - 机械臂端 MovJ widget ZONE datavar 无法正确解析 → 已全部改为 MovL
+- greeting + 状态机 代码改动完成, 待实机验证

@@ -379,7 +379,6 @@ class GreetingHandler(StateHandler):
         self._woshou = None
         self._wave_cycles = 3
         self._wave_interval = 0.6
-        self._wave_speed = "very_fast"
         # 握手压力检测 (从 config 读取)
         self._force_timeout = 30.0
         self._force_abs_threshold = 100
@@ -424,7 +423,6 @@ class GreetingHandler(StateHandler):
         self._woshou = [float(v) for v in greeting_cfg.get("woshou_pose", [0]*6)]
         self._wave_cycles = int(greeting_cfg.get("wave_cycles", 3))
         self._wave_interval = float(greeting_cfg.get("wave_interval", 0.6))
-        self._wave_speed = str(greeting_cfg.get("wave_speed", "very_fast"))
         # 握手压力检测
         self._force_timeout = float(greeting_cfg.get("force_timeout", 30.0))
         self._force_abs_threshold = int(greeting_cfg.get("force_abs_threshold", 100))
@@ -564,47 +562,23 @@ class GreetingHandler(StateHandler):
     # ================================================================
 
     def _execute_wave(self, ctx: SharedContext):
-        """Hello_1 ↔ Hello_2 ×N 挥手 (速度插值), 结束后 RESET 复位."""
+        """Hello_1 ↔ Hello_2 ×N 挥手, 结束后 RESET 复位."""
         from Estun.utils_shared import _hand as _h
-        from Omnihand.omnihand_gesture import Gesture, KinematicsConverter
-
-        # 速度配置: duration=总过渡时间, steps=插值步数
-        _speed_cfg = {
-            "very_slow": {"duration": 3.0, "steps": 60},
-            "medium":    {"duration": 1.0, "steps": 20},
-            "very_fast": {"duration": 0.15, "steps": 5},
-        }
-        cfg = _speed_cfg.get(self._wave_speed, _speed_cfg["very_fast"])
-        duration = cfg["duration"]
-        steps = cfg["steps"]
+        from Omnihand.omnihand_gesture import Gesture
 
         if _h is not None:
-            print(f"[GREETING] 挥手 {self._wave_cycles} 次 (速度: {self._wave_speed}, "
-                  f"{duration}s/{steps}steps)...")
+            print(f"[GREETING] 挥手 {self._wave_cycles} 次 "
+                  f"(间隔: {self._wave_interval}s)...")
             for i in range(self._wave_cycles):
                 if ctx.stop_event.is_set():
                     print("[GREETING] 挥手被中断")
                     break
                 print(f"  {i+1}/{self._wave_cycles}")
-                for gesture in (Gesture.HELLO_1, Gesture.HELLO_2):
-                    if ctx.stop_event.is_set():
-                        break
-                    target = KinematicsConverter.get_gesture_positions(gesture, _h.is_right_hand)
-                    try:
-                        current = _h.read_positions()
-                    except Exception:
-                        current = target
-                    step_delay = duration / steps
-                    for s in range(1, steps + 1):
-                        if ctx.stop_event.is_set():
-                            break
-                        t = s / steps
-                        interp = [int(round(c + (tg - c) * t)) for c, tg in zip(current, target)]
-                        interp = [max(0, min(4096, v)) for v in interp]
-                        _h.set_positions(interp, delay=0)
-                        time.sleep(step_delay)
-                    time.sleep(self._wave_interval)
-            # 挥手结束后复位
+                _h.do_gesture(Gesture.HELLO_1, delay=self._wave_interval)
+                if ctx.stop_event.is_set():
+                    break
+                _h.do_gesture(Gesture.HELLO_2, delay=self._wave_interval)
+
             print("[GREETING] RESET — 挥手结束, 复位")
             _h.do_gesture(Gesture.RESET, delay=0.5)
         else:

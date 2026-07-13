@@ -44,7 +44,7 @@ main()
   │  └─ 连接后 → _handle_session(conn) → 4步协议 (阻塞)
   │     ├─ Step 1: recv → reply ZHAOSHOU1
   │     ├─ Step 2: recv → YOLO人检测 → _close_camera() → reply ZHAOSHOU2
-  │     ├─ Step 3: recv → Hello_1↔Hello_2×3 (速度插值) → RESET → reply WOSHOU
+  │     ├─ Step 3: recv → Hello_1↔Hello_2×3 → RESET → reply WOSHOU
   │     └─ Step 4: recv → RESET→压力→HAND_SHAKE→松手→RESET → reply "Home"
   │
   ├─ [Init 3] RealSenseHandle6DDetector()  ← Camera A pipeline 启动 (Phase A-C)
@@ -118,12 +118,9 @@ Step 3 — 挥手 → WOSHOU
 [CPosToStr("ZHAOSHOU2|") → "ZHAOSHOU2|x,y,z,a,b,c"]
 [SocketSendStr] ─────── "ZHAOSHOU2|x,y,z..." ────→ 解析: cmd="ZHAOSHOU2"
 [SocketReadStr(30s)]                              │
-       │                                          ├─ Hello_1 (速度插值, very_fast: 0.15s/5步)
-       │                                          ├─ Hello_2 (速度插值, very_fast: 0.15s/5步)
-       │                                          │  每手势后保持 wave_interval (0.15s)
+       │                                          ├─ Hello_1 (do_gesture, delay=wave_interval)
+       │                                          ├─ Hello_2 (do_gesture, delay=wave_interval)
        │                                          │  ×3 循环
-       │                                          │  (KinematicsConverter.get_gesture_positions
-       │                                          │   → set_positions 逐帧插值)
        │                                          ├─ RESET (复位)
        │                                          │
        ←─────────── "x,y,z,A,B,C" ──────────────── 回复 WOSHOU 位姿

@@ -110,7 +110,6 @@ estun:
   greeting:                                  # Phase 0 打招呼阶段
     port: 8600                               # Phase 0 TCP 端口
     wave_cycles: 3                           # 挥手循环次数 (Hello_1↔Hello_2)
-    wave_speed: "very_fast"                  # 挥手速度: very_slow / medium / very_fast
     wave_interval: 0.15                      # 挥手单帧保持时间 (秒)
     # 握手压力检测
     force_timeout: 30.0                      # 等待抓握超时 (秒)
