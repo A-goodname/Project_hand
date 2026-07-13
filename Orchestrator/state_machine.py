@@ -175,7 +175,6 @@ class SharedContext:
 
     运行时字段 (状态/主循环 写入):
       - person_detector, stop_event
-      - latest_person_3d, stop_person_detector
       - hand_in_cup_active, hand_on_cup
       - handle_cup_complete, frames_a, frames_b
     """
@@ -189,10 +188,6 @@ class SharedContext:
     # ---- 运行时 ----
     person_detector: Optional[PersonDetector] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
-
-    # Person 检测 (main loop 写入, TCP handler 读取)
-    latest_person_3d: Optional[tuple] = None       # (x, y, z) Camera B 系 (可视化用)
-    stop_person_detector: bool = False              # CUP 时置 True
 
     # Hand-in-cup 检测 (TCP handler 控制开关, main loop 更新结果)
     hand_in_cup_active: bool = False
@@ -209,6 +204,13 @@ class SharedContext:
     handle_detector: Optional[RealSenseHandle6DDetector] = None
     cup_detector: Optional[RealSenseCup6DDetector] = None
     T_cam2ee: Optional[np.ndarray] = None
+
+    # 人就位门控 (main loop 写入, TCP handler 读取)
+    run_seated_detection: bool = False       # 主循环门控: 是否运行人就位检测
+    is_person_seated: bool = False           # 每帧结果: 人是否就位
+
+    # HandInCup 计时 (main loop 管理, TCP handler 读取)
+    hand_in_cup_start_time: float = 0.0      # HandInCup 开始时间 (用于 ≤5s 超时)
 
     # 可视化帧缓存 (main loop 写入)
     frames_a: Optional[tuple] = None  # Camera A (Handle)
@@ -311,14 +313,14 @@ class IdleHandler(StateHandler):
                 config_dict=ctx.eye_to_hand_config,
                 serial_number=serial,
             )
-        # 重置所有运行时标志
-        ctx.stop_person_detector = False
+        # 重置运行时标志
         ctx.hand_in_cup_active = False
         ctx.hand_on_cup = None
-        ctx.latest_person_3d = None
         ctx.handle_cup_complete.clear()
         ctx.greeting_complete.clear()
-        print("[IDLE] 等待椅子标定 + 人就位...")
+        ctx.run_seated_detection = False
+        ctx.is_person_seated = False
+        print("[IDLE] 等待椅子标定...")
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
         pd = ctx.person_detector
@@ -326,24 +328,18 @@ class IdleHandler(StateHandler):
             return None
         if ctx.frames_b is None:
             return None
-        color, depth, _, depth_frame = ctx.frames_b
+        color, _, _, _ = ctx.frames_b
         if color is None:
             return None
 
-        # Step 1: 椅子标定 (仅一次, 椅子空时最佳)
+        # 椅子标定 (仅一次)
         if not pd.is_chair_calibrated:
             pd.calibrate_chair(color)
             return None
 
-        # Step 2: 人就位检测
-        seated = pd.detect_person_seated(color)
-        if seated is not None:
-            ctx.latest_person_3d = None  # 3D 位置不再用于 P3, 仅保留占位
-            if seated["is_seated"]:
-                print(f"[IDLE] 人就位 ✅ overlap={seated['overlap_ratio']:.2f} "
-                      f"stable={seated['seated_stable']}/{seated['seated_required']}")
-                return OrchestratorState.GREETING
-        return None
+        # 标定完成 → 下一状态
+        print("[IDLE] 椅子标定完成 ✅ → GREETING")
+        return OrchestratorState.GREETING
 
     def on_exit(self, ctx: SharedContext):
         # PersonDetector pipeline 保持运行, Camera B 继续用于后续状态
@@ -408,6 +404,9 @@ class GreetingHandler(StateHandler):
 
     def on_exit(self, ctx: SharedContext):
         self._stop()
+        # 启动人就位检测 (主循环每帧调用 detect_person_seated)
+        ctx.run_seated_detection = True
+        print("[GREETING] 人就位检测已启动")
 
     # ================================================================
     # 初始化 / 清理
@@ -837,20 +836,20 @@ class HandleGraspAndPourHandler(StateHandler):
         ctx.handle_cup_complete.clear()
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        # 获取 Camera A 帧
-        color, depth, depth_colormap, depth_frame = self._get_frames(ctx)
-        ctx.frames_a = (color, depth, depth_colormap, depth_frame)
-
-        # 检测 Handle+Cup
-        self._detect(ctx)
+        # 获取 Camera A 帧 (Phase B 期间有帧, 之后为 None)
+        if ctx.handle_detector is not None:
+            color, depth, depth_colormap, depth_frame = self._get_frames(ctx)
+            ctx.frames_a = (color, depth, depth_colormap, depth_frame)
+            self._detect(ctx)
+        else:
+            ctx.frames_a = None
 
         # 非阻塞 accept TCP
         self._accept_tcp(ctx)
 
-        # 完成?
-        if ctx.handle_cup_complete.is_set():
-            print(f"[HANDLE_GRASP_AND_POUR] 全流程完成 ✅")
-            return OrchestratorState.IDLE
+        # 完成时退出程序 (stop_event 由 _handle_client_impl 设置)
+        if ctx.stop_event.is_set():
+            return None
         return None
 
     def on_exit(self, ctx: SharedContext):
@@ -861,7 +860,7 @@ class HandleGraspAndPourHandler(StateHandler):
     # ================================================================
 
     def _start(self, ctx: SharedContext):
-        """初始化检测器 + 手 + TCP 服务器 + 加载全部偏移参数."""
+        """加载偏移参数 + 灵巧手 + TCP 8080. Camera A 检测器在 Phase B 按需打开."""
         cfg = ctx.realsense_config
         estun = ctx.estun_config
         eye_cfg = ctx.eye_to_hand_config
@@ -885,41 +884,6 @@ class HandleGraspAndPourHandler(StateHandler):
             init_hand(hand_port=hand_port, initial_gesture="RESET")
         self._hand_available = is_hand_available()
 
-        # ---- Handle 6D 检测器 (Camera A) ----
-        print("[INFO] 初始化 Handle 6D 检测器 (Camera A)...")
-        ctx.handle_detector = RealSenseHandle6DDetector(config_dict=cfg)
-        ctx.handle_detector.last_known_pose = None
-
-        # ---- Cup 6D 检测器 (复用 pipeline) ----
-        print("[INFO] 初始化 Cup 6D 检测器 (复用 pipeline)...")
-        ctx.cup_detector = RealSenseCup6DDetector(config_dict=cfg, start_pipeline=False)
-        detector = ctx.handle_detector
-        ctx.cup_detector.color_intrinsics = detector.color_intrinsics
-        ctx.cup_detector.depth_scale = detector.depth_scale
-        ctx.cup_detector.last_known_pose = None
-
-        # ---- 手眼标定 ----
-        calib_path = os.path.join(
-            _project_root,
-            estun.get("calibration", {}).get("result_path", "calib_data/calibration_result.yaml")
-        )
-        ctx.T_cam2ee = load_cam2ee(calib_path)
-
-        # ---- 位姿稳定器 ----
-        stab_cfg = estun.get("stabilization", {})
-        self._handle_stabilizer = PoseStabilizer(
-            window=stab_cfg.get("window", 3),
-            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
-            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
-        )
-        self._cup_stabilizer = PoseStabilizer(
-            window=stab_cfg.get("window", 3),
-            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
-            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
-        )
-        self._handle_stabilizer.capture_generation()
-        self._cup_stabilizer.capture_generation()
-
         # ---- TCP 服务器 ----
         host = estun["tcp_server"]["host"]
         port = estun["tcp_server"]["port"]
@@ -932,10 +896,11 @@ class HandleGraspAndPourHandler(StateHandler):
         print(f"[INFO] TCP 服务器: {host}:{port}")
 
         # ---- 重置运行时标志 ----
-        ctx.stop_person_detector = False
         ctx.hand_in_cup_active = False
         ctx.hand_on_cup = None
         self._frame_counter = 0
+
+        # Camera A / 稳定器 / 标定 在 _handle_client_impl Phase B 按需初始化
 
     def _load_offsets(self, cfg, estun):
         """加载全部偏移 / 几何参数 (移植自 estun_handle_cup_run.py 模块级)."""
@@ -1029,22 +994,23 @@ class HandleGraspAndPourHandler(StateHandler):
             except Exception:
                 pass
             self._server = None
-        if ctx.handle_detector:
+        # Camera A 已在 Phase B 关闭; 安全兜底
+        if ctx.handle_detector is not None:
             try:
                 ctx.handle_detector.pipeline.stop()
             except Exception:
                 pass
+        ctx.handle_detector = None
+        ctx.cup_detector = None
+        ctx.T_cam2ee = None
         if self._hand_available:
             try:
                 disable_hand()
             except Exception:
                 pass
-        ctx.stop_person_detector = False
         ctx.hand_in_cup_active = False
         ctx.hand_on_cup = None
-        ctx.handle_detector = None
-        ctx.cup_detector = None
-        ctx.T_cam2ee = None
+        ctx.run_seated_detection = False
 
     # ================================================================
     # Camera A 帧获取 & 检测
@@ -1227,7 +1193,37 @@ class HandleGraspAndPourHandler(StateHandler):
         R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
         t_ee_base = np.array(robot_xyz, dtype=float)
 
-        # ---- [Phase B] 等待稳定 → 计算位姿 → 发送 Handle ----
+        # ---- [Phase B] 打开 Camera A, 检测 Handle+Cup, 发送后关闭 ----
+        print("[INFO] 打开 Camera A (Handle+Cup 检测)...")
+        cfg = ctx.realsense_config
+        estun = ctx.estun_config
+        ctx.handle_detector = RealSenseHandle6DDetector(config_dict=cfg)
+        ctx.handle_detector.last_known_pose = None
+        ctx.cup_detector = RealSenseCup6DDetector(config_dict=cfg, start_pipeline=False)
+        ctx.cup_detector.color_intrinsics = ctx.handle_detector.color_intrinsics
+        ctx.cup_detector.depth_scale = ctx.handle_detector.depth_scale
+        ctx.cup_detector.last_known_pose = None
+
+        calib_path = os.path.join(
+            _project_root,
+            estun.get("calibration", {}).get("result_path", "calib_data/calibration_result.yaml")
+        )
+        ctx.T_cam2ee = load_cam2ee(calib_path)
+
+        stab_cfg = estun.get("stabilization", {})
+        self._handle_stabilizer = PoseStabilizer(
+            window=stab_cfg.get("window", 3),
+            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
+            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
+        )
+        self._cup_stabilizer = PoseStabilizer(
+            window=stab_cfg.get("window", 3),
+            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
+            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
+        )
+        self._handle_stabilizer.capture_generation()
+        self._cup_stabilizer.capture_generation()
+
         print("[INFO] 等待稳定目标位姿 (Handle + Cup)...")
         detector = ctx.handle_detector
         cup_detector = ctx.cup_detector
@@ -1430,6 +1426,17 @@ class HandleGraspAndPourHandler(StateHandler):
             _cleanup()
             return
 
+        # ---- Camera A 已不再需要, 关闭 pipeline ----
+        if ctx.handle_detector is not None:
+            try:
+                ctx.handle_detector.pipeline.stop()
+                print("[INFO] Camera A pipeline 已关闭 (位姿已发送)")
+            except Exception:
+                pass
+            ctx.handle_detector = None
+            ctx.cup_detector = None
+            ctx.T_cam2ee = None
+
         # ---- [Phase C & D] 指令循环 ----
         conn.settimeout(2.0)
         cup_p3_sent = False        # CUP 触发后置 True
@@ -1472,8 +1479,6 @@ class HandleGraspAndPourHandler(StateHandler):
 
                 elif cmd == "CUP":
                     if not cup_p3_sent and cup_pose_data is not None:
-                        ctx.stop_person_detector = True
-                        print("[INFO] PersonDetector 检测已停止")
                         try:
                             conn.sendall(cup_pose_data.encode("utf-8"))
                             print(f"[SEND] Cup: {cup_pose_data}")
@@ -1485,10 +1490,40 @@ class HandleGraspAndPourHandler(StateHandler):
                         print("[WARN] CUP: cup_pose_data 未就绪或已发送")
 
                 elif cmd == "READY":
-                    ctx.hand_in_cup_active = True
-                    if ctx.hand_in_cup_detector is not None:
-                        ctx.hand_in_cup_detector.reset()
-                    print("[INFO] Hand-in-cup 启动")
+                    # 停止人就位检测
+                    ctx.run_seated_detection = False
+
+                    if not ctx.is_person_seated:
+                        # 无人就位 → 跳过 HandInCup, 直接 ABORT
+                        print("[INFO] READY: 人未就位 → HandInCup=false, ABORT")
+                        hand_judged = True
+                        abort_mode = True
+                        try:
+                            conn.sendall(b"[0,0,0,0,0,0]")
+                            print("[SEND] ABORT ([0,0,0,0,0,0])")
+                        except Exception as e:
+                            print(f"[WARN] 发送 ABORT 失败: {e}")
+                            break
+                    else:
+                        # 人就位 → 启动 HandInCup, 最长检测 5s
+                        print("[INFO] READY: 人就位 → 启动 HandInCup (≤5s)")
+                        ctx.hand_in_cup_active = True
+                        ctx.hand_in_cup_start_time = time.time()
+                        if ctx.hand_in_cup_detector is not None:
+                            ctx.hand_in_cup_detector.reset()
+                        # 等待 main loop 完成检测 (≤5s, TRUE 提前结束)
+                        HAND_IN_CUP_TIMEOUT = 5.0
+                        while not ctx.stop_event.is_set():
+                            if ctx.hand_on_cup:
+                                print("[INFO] HandInCup: TRUE (提前检测到)")
+                                break
+                            if time.time() - ctx.hand_in_cup_start_time > HAND_IN_CUP_TIMEOUT:
+                                ctx.hand_on_cup = False
+                                print("[INFO] HandInCup: 超时 → FALSE")
+                                break
+                            time.sleep(0.05)
+                        ctx.hand_in_cup_active = False
+                        print(f"[INFO] HandInCup 结束: {'TRUE' if ctx.hand_on_cup else 'FALSE'}")
 
                 elif cmd == "RELEASE":
                     if not ctx.hand_in_cup_active:
@@ -1553,6 +1588,8 @@ class HandleGraspAndPourHandler(StateHandler):
                 pass
             print(f"[INFO] 客户端已断开: {addr}")
 
-        # ---- 通知状态机完成 ----
+        # ---- 全流程完成, 退出程序 ----
         PoseStabilizer.on_disconnect()
         ctx.handle_cup_complete.set()
+        print("[INFO] 全流程完成, 退出程序")
+        ctx.stop_event.set()

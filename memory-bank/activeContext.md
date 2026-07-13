@@ -2,20 +2,23 @@
 
 ## 当前焦点
 
-**代码改动完成，待实机测试** — 挥手回归 `do_gesture`，CRP 速度/点位/label 全部对齐。
+**相机生命周期重构完成，待实机测试** — Camera A 按需开闭，Camera B 全生命周期共享，
+人就位门控 HandInCup，单次执行不回 IDLE.
 greeting (单相机) 和状态机 (双相机) 均需实机验证.
 
 ## 最近变更
 
-1. **挥手重构 + CRP 全面修复** (2026-07-13, 工作区):
-   - 挥手回归 `do_gesture` 一步到位 (移除 KinematicsConverter / wave_speed / _speed_cfg)
-   - `greeting_handlepluscup.crp`: 4 MovJ→MovL, 速度/label 与 greeting CRP 对齐
-   - `handlepluscup-orchestrator.crp`:
-     - Phase 0: label/speed 对齐 greeting CRP (全部 V100, "MovL")
-     - Phase A-C: H_P3/H_P4→sudu, C_P3→sudu+MovJ→MovL
-     - Phase D: 5 个 widget 点位修正 (GH_ZHAOSHOU1→正确 C_P4/Home/C_P1/C_P2), ABORT C_P1→sudu, 其余 V100
-   - `state_machine.py` GreetingHandler: `_execute_wave(ctx)` do_gesture + stop_event
-   - `estun_greeting_handle_cup_run.py`: 同回归 do_gesture
+1. **相机 Pipeline 生命周期重构** (2026-07-13, 工作区):
+   - Camera A: GREETING 独立 open→close; HANDLE Phase B 按需 open→pack_three→close
+   - Camera B: PersonDetector 全生命周期 (main.py 创建); 人就位 + HandInCup 复用 pipeline
+   - 人就位: GREETING 后启动, 持续运行到 READY; 结果写 ctx.is_person_seated
+   - HandInCup: READY 时先查人就位, 未就位→直接 ABORT; 就位→启动 ≤5s 检测
+   - HANDLE 完成→exit(0) 单次执行, 不回 IDLE
+   - 废弃: stop_person_detector, latest_person_3d
+
+2. **挥手回归 do_gesture + CRP 全面修复** (2026-07-13, 工作区):
+   - 挥手回归 `do_gesture` (移除 KinematicsConverter / wave_speed / _speed_cfg)
+   - CRP: MovJ→MovL, sudu 仅 3 处, Phase D 点位修正, label 统一 "MovL"
    - `estun_config.yaml`: wave_speed 清除
 
 2. **CRP 运动优化 + 压力配置化 + B 角防跳变** (2026-07-13, `c324bd2`):

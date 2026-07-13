@@ -54,7 +54,11 @@
 ### 双相机体系
 - [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)
 - [x] EyeToHand: PersonDetector + HandInCup + 3D→1D 标定工具
-- [x] Orchestrator 3 状态状态机: IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE
+- [x] Orchestrator 3 状态: IDLE → GREETING → HANDLE (单次, exit(0))
+- [x] Camera A 按需开闭: GREETING 独立 pipeline, HANDLE Phase B 开→发送后关
+- [x] Camera B 全生命周期共享: PersonDetector pipeline, 人就位+HandInCup 复用帧
+- [x] 人就位门控 HandInCup: READY 时查 is_person_seated, 未就位→ABORT
+- [x] HandInCup ≤5s 超时检测, TRUE 提前结束
 - [x] CRP/TXT/状态机 TCP 协议一致性验证 + 修复
 
 ### HandInCup MediaPipe 重构
@@ -84,7 +88,7 @@
 | 任务 | 说明 |
 |------|------|
 | 🔴 greeting 单相机测试 | `estun_greeting_handle_cup_run.py` + `greeting_handlepluscup.crp` |
-| 🔴 状态机双相机测试 | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
+| 🔴 状态机双相机测试 | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` (生命周期重构验证) |
 | 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
 
 ## 已知问题
@@ -92,4 +96,3 @@
 - EyeToHand result.yaml a,b,c,d 默认占位
 - P4 Y 后退 15/20° 线性插值未实测验证
 - 机械臂端 MovJ widget ZONE datavar 无法正确解析 → 已全部改为 MovL
-- greeting + 状态机 代码改动完成, 待实机验证

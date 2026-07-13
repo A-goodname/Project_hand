@@ -2,6 +2,16 @@ ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程:
 ============================================================
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
+=== v7 相比 v6 的关键变化 (2026-07-13) ===
+1. 相机 Pipeline 生命周期重构:
+   - Camera A: GREETING 独立 open→close; HANDLE Phase B 按需 open→pack_three→close
+   - Camera B: PersonDetector 全生命周期 (main.py 创建); 人就位+HandInCup 复用同一 pipeline
+2. 人就位门控 HandInCup:
+   - GREETING 后启动, 持续运行到 READY
+   - READY 时查 is_person_seated: 未就位→直接 ABORT; 就位→启动 HandInCup ≤5s
+3. 单次执行: HANDLE 完成→exit(0), 不回 IDLE 循环
+4. 废弃字段: stop_person_detector, latest_person_3d
+
 === v6 相比 v5 的关键变化 (2026-07-13) ===
 1. CRP: 全部 MovJ → MovL (机械臂 movJ ZONE datavar 无法正确解析)
    - greeting_handlepluscup.crp: 4 处

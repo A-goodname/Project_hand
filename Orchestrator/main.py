@@ -42,6 +42,7 @@ from Orchestrator.state_machine import (
     HandleGraspAndPourHandler,
 )
 from EyeToHand.hand_in_cup import HandInCupDetector
+from EyeToHand.person_detector import PersonDetector
 
 
 def load_yaml(path):
@@ -90,25 +91,31 @@ def main():
         camera_a_serial=camera_a_serial,
     )
 
-    # ---- [3] Hand-in-cup 检测器 (全生命周期共享, Camera B pipeline 复用) ----
+    # ---- [3] Hand-in-cup 检测器 (全生命周期共享, Camera B 帧注入) ----
     ctx.hand_in_cup_detector = HandInCupDetector()
 
-    # ---- [4] 注册状态机 ----
+    # ---- [4] Camera B PersonDetector (全生命周期, 主循环统一管理) ----
+    print("[INFO] 启动 PersonDetector (Camera B)...")
+    ctx.person_detector = PersonDetector(
+        config_dict=eye_to_hand_cfg,
+        serial_number=eye_to_hand_serial,
+    )
+
+    # ---- [5] 注册状态机 ----
     sm = StateMachine()
     sm.register(OrchestratorState.IDLE, IdleHandler())
     sm.register(OrchestratorState.GREETING, GreetingHandler())
     sm.register(OrchestratorState.HANDLE_GRASP_AND_POUR, HandleGraspAndPourHandler())
     sm.transition_to(ctx, OrchestratorState.IDLE)
 
-    # ---- [5] 主循环 (Camera B 帧 + Person/HandInCup 检测 + 状态机驱动 + 可视化) ----
+    # ---- [6] 主循环 (Camera B 帧 + 人就位 + HandInCup + 状态机驱动 + 可视化) ----
     cv2.namedWindow("Orchestrator - Camera B (Eye-to-Hand)", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Orchestrator - Camera A (Eye-in-Hand)", cv2.WINDOW_NORMAL)
 
-    running = True
     try:
-        while running and not ctx.stop_event.is_set():
+        while not ctx.stop_event.is_set():
             # ============================================================
-            # Camera B: 帧采集 (pipeline 始终运行, 由 PersonDetector 管理)
+            # Camera B: 帧采集 (PersonDetector pipeline, 全生命周期)
             # ============================================================
             pd = ctx.person_detector
             if pd is not None:
@@ -121,13 +128,21 @@ def main():
             else:
                 ctx.frames_b = None
 
-            # ---- Camera B 持续运行 (椅子标定 + 人就位 由状态机内部驱动) ----
-            # 主循环仅保持帧获取, 具体逻辑由各状态的 on_update 处理
+            # ---- 人就位检测 (GREETING 完成后启动, READY 时停止) ----
+            if ctx.run_seated_detection and ctx.frames_b is not None:
+                color_b = ctx.frames_b[0]
+                if color_b is not None and pd is not None and pd.is_chair_calibrated:
+                    seated = pd.detect_person_seated(color_b)
+                    if seated is not None:
+                        ctx.is_person_seated = seated["is_seated"]
 
-            # ---- Hand-in-cup 检测 (READY → RELEASE) ----
+            # ---- Hand-in-cup 检测 (READY 后 ≤5s, TRUE 提前结束) ----
             if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
-                if ctx.frames_b is not None:
-                    color_b, depth_b, _, depth_frame_b = ctx.frames_b
+                if time.time() - ctx.hand_in_cup_start_time > 5.0:
+                    ctx.hand_on_cup = False
+                    print("[INFO] HandInCup 超时 5s")
+                elif ctx.frames_b is not None:
+                    color_b, _, _, depth_frame_b = ctx.frames_b
                     if color_b is not None and depth_frame_b is not None:
                         ctx.hand_in_cup_detector.update(color_b, depth_frame_b)
                         ctx.hand_on_cup = ctx.hand_in_cup_detector.is_hand_on_cup
@@ -145,35 +160,32 @@ def main():
                 state_name = sm.state.name
                 h, w = vis_b.shape[:2]
 
-                # Hand-in-cup 激活 → 使用 draw_visualization() 全覆盖,
-                # state 名移到底部 (避免与 HandInCup 文字 (10,30)/(10,52) 重叠)
                 if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
                     vis_b = ctx.hand_in_cup_detector.draw_visualization(vis_b)
                     cv2.putText(vis_b, f"State: {state_name}", (10, h - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
                 else:
-                    # 状态
                     cv2.putText(vis_b, f"State: {state_name}", (10, 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                    # Person / 椅子 / 就位 状态
                     pd2 = ctx.person_detector
                     if pd2 is not None:
                         if not pd2.is_chair_calibrated:
                             cv2.putText(vis_b, "Chair: calibrating...", (10, 55),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
-                        elif not ctx.stop_person_detector:
-                            sc = pd2.seated_stable_count
-                            status = "SEATED" if pd2.is_person_seated else "waiting"
-                            s_color = (0, 255, 0) if pd2.is_person_seated else (0, 165, 255)
-                            cv2.putText(vis_b, f"Person: {status} ({sc})", (10, 55),
+                        elif ctx.run_seated_detection:
+                            status = "SEATED" if ctx.is_person_seated else "waiting"
+                            s_color = (0, 255, 0) if ctx.is_person_seated else (0, 165, 255)
+                            cv2.putText(vis_b, f"Person: {status}", (10, 55),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, s_color, 2)
                         else:
                             cv2.putText(vis_b, "Person: STOPPED", (10, 55),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
 
-                    # Hand-in-cup 状态
                     h_status = f"HandInCup: {'ON_CUP' if ctx.hand_on_cup else 'idle'}"
+                    elapsed = time.time() - ctx.hand_in_cup_start_time if ctx.hand_in_cup_active else 0
+                    if ctx.hand_in_cup_active and elapsed > 0:
+                        h_status += f" ({elapsed:.1f}s)"
                     h_color = (0, 255, 0) if ctx.hand_on_cup else (128, 128, 128)
                     cv2.putText(vis_b, h_status, (10, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, h_color, 2)
@@ -187,14 +199,12 @@ def main():
                 vis_a = ctx.frames_a[0].copy()
                 cv2.putText(vis_a, f"State: {sm.state.name}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
                 h_ok = "H:OK" if (ctx.handle_detector and
                                   ctx.handle_detector.last_known_pose is not None) else "H:..."
                 c_ok = "C:OK" if (ctx.cup_detector and
                                   ctx.cup_detector.last_known_pose is not None) else "C:..."
                 cv2.putText(vis_a, f"{h_ok} {c_ok}", (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
                 cv2.imshow("Orchestrator - Camera A (Eye-in-Hand)", vis_a)
             else:
                 blank = 255 * np.ones((480, 640, 3), dtype=np.uint8)
@@ -207,7 +217,6 @@ def main():
             if key == ord("q"):
                 print("[INFO] 用户按 q 退出")
                 ctx.stop_event.set()
-                running = False
                 break
 
     except KeyboardInterrupt:
@@ -222,31 +231,20 @@ def main():
         ctx.stop_event.set()
         cv2.destroyAllWindows()
 
-        # 清理当前状态资源 (GreetingHandler Camera A pipeline / TCP server 等)
-        try:
-            sm._handlers.get(sm.state).on_exit(ctx)  # type: ignore[union-attr]
-        except Exception:
-            pass
-
         if ctx.person_detector is not None:
             try:
                 ctx.person_detector.stop()
-                print("[INFO] PersonDetector 已停止")
+                print("[INFO] PersonDetector + Camera B pipeline 已停止")
             except Exception as e:
                 print(f"[WARN] PersonDetector 停止异常: {e}")
 
         if ctx.handle_detector is not None:
             try:
                 ctx.handle_detector.pipeline.stop()
-                print("[INFO] Handle 检测器已停止")
+                print("[INFO] Camera A pipeline 已停止")
             except Exception as e:
-                print(f"[WARN] Handle 检测器停止异常: {e}")
-        if ctx.cup_detector is not None:
-            try:
-                ctx.cup_detector.pipeline.stop()
-                print("[INFO] Cup 检测器已停止")
-            except Exception as e:
-                print(f"[WARN] Cup 检测器停止异常: {e}")
+                print(f"[WARN] Camera A 停止异常: {e}")
+
         if ctx.hand_in_cup_detector is not None:
             try:
                 ctx.hand_in_cup_detector.close()
