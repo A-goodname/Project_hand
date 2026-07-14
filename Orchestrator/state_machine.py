@@ -377,16 +377,21 @@ class GreetingHandler(StateHandler):
     def on_enter(self, ctx: SharedContext):
         self._start(ctx)
         ctx.greeting_complete.clear()
-
-        # 启动 Camera B + 人就位检测 (GREETING 阶段开始, 人不在椅子附近)
-        if ctx.person_detector is not None:
-            ctx.person_detector.start_camera()
-        ctx.run_seated_detection = True
-        print("[GREETING] Camera B + 人就位检测已启动")
+        # Camera B 延后到 Phase 0 结束后再启动, 避免影响 Phase B 检测速度
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        # 非阻塞 accept + 预览
+        # 非阻塞 accept
         self._accept_tcp(ctx)
+
+        # 向主循环提供 Camera A 预览帧 (非阻塞, 1ms 超时)
+        if self._pipeline is not None:
+            try:
+                frames = self._pipeline.wait_for_frames(1)
+                color_frame = frames.get_color_frame()
+                if color_frame:
+                    ctx.frames_a = (np.asanyarray(color_frame.get_data()), None, None, None)
+            except Exception:
+                pass
 
         if ctx.greeting_complete.is_set():
             print(f"[GREETING] Phase 0 完成 ✅")
@@ -826,6 +831,12 @@ class HandleGraspAndPourHandler(StateHandler):
         self._start(ctx)
         ctx.handle_cup_complete.clear()
 
+        # Phase 0 结束后启动 Camera B + 人就位检测
+        if ctx.person_detector is not None:
+            ctx.person_detector.start_camera()
+        ctx.run_seated_detection = True
+        print("[HANDLE] Camera B + 人就位检测已启动")
+
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
         # 获取 Camera A 帧 (Phase B 期间有帧, 之后为 None)
         if ctx.handle_detector is not None:
@@ -1063,14 +1074,14 @@ class HandleGraspAndPourHandler(StateHandler):
             else:
                 detector._pose_smoother.reset()
 
-            # === Cup 检测 (注入帧) ===
+            # === Cup 检测 (注入帧 + 位姿计算) ===
+            c_result = None
             if self._last_depth_image is not None and cup_detector is not None:
                 cup_detector.inject_frames(
                     self._last_color, self._last_depth_image, self._last_depth_colormap,
                     self._last_depth_frame
                 )
-
-            c_result = cup_detector.compute_cup_6d_pose(self._last_color, self._last_depth_frame)
+                c_result = cup_detector.compute_cup_6d_pose(self._last_color, self._last_depth_frame)
             if c_result is not None:
                 c_bbox, c_pos, c_rot, c_euler, c_point_cloud = c_result
                 if c_pos is not None and c_rot is not None:
@@ -1189,7 +1200,10 @@ class HandleGraspAndPourHandler(StateHandler):
         ctx.handle_detector.last_known_pose = None
         ctx.cup_detector = RealSenseCup6DDetector(config_dict=cfg, start_pipeline=False)
         ctx.cup_detector.color_intrinsics = ctx.handle_detector.color_intrinsics
+        ctx.cup_detector.depth_intrinsics = ctx.handle_detector.depth_intrinsics
         ctx.cup_detector.depth_scale = ctx.handle_detector.depth_scale
+        ctx.cup_detector.color_to_depth_extrinsics = ctx.handle_detector.color_to_depth_extrinsics
+        ctx.cup_detector.depth_to_color_extrinsics = ctx.handle_detector.depth_to_color_extrinsics
         ctx.cup_detector.last_known_pose = None
 
         calib_path = os.path.join(
@@ -1482,16 +1496,11 @@ class HandleGraspAndPourHandler(StateHandler):
                     ctx.run_seated_detection = False
 
                     if not ctx.is_person_seated:
-                        # 无人就位 → 跳过 HandInCup, 直接 ABORT
-                        print("[INFO] READY: 人未就位 → HandInCup=false, ABORT")
-                        hand_judged = True
-                        abort_mode = True
-                        try:
-                            conn.sendall(b"[0,0,0,0,0,0]")
-                            print("[SEND] ABORT ([0,0,0,0,0,0])")
-                        except Exception as e:
-                            print(f"[WARN] 发送 ABORT 失败: {e}")
-                            break
+                        # 无人就位 → 跳过 HandInCup 等待, 直接标记 FALSE
+                        # 不在此发送 ABORT — 等 RELEASE 到来时走正常判定流程
+                        print("[INFO] READY: 人未就位 → HandInCup=false, 等待 RELEASE")
+                        ctx.hand_in_cup_active = True
+                        ctx.hand_on_cup = False
                     else:
                         # 人就位 → 启动 HandInCup, 最长检测 5s
                         print("[INFO] READY: 人就位 → 启动 HandInCup (≤5s)")
@@ -1510,11 +1519,16 @@ class HandleGraspAndPourHandler(StateHandler):
                                 print("[INFO] HandInCup: 超时 → FALSE")
                                 break
                             time.sleep(0.05)
-                        ctx.hand_in_cup_active = False
                         print(f"[INFO] HandInCup 结束: {'TRUE' if ctx.hand_on_cup else 'FALSE'}")
+                        # 保持 hand_in_cup_active=True, RELEASE 到来时进入 Phase D 判定分支
 
                 elif cmd == "RELEASE":
-                    if not ctx.hand_in_cup_active:
+                    if abort_mode:
+                        # ---- ABORT 路径第二次 RELEASE (放回后松杯) ----
+                        if self._hand_available:
+                            release_object()
+                        print("[INFO] RELEASE (放回后松杯)")
+                    elif not ctx.hand_in_cup_active:
                         # ---- Phase C: 松把手 (READY 之前的 RELEASE) ----
                         if self._hand_available:
                             release_object()

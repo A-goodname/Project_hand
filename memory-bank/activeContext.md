@@ -2,45 +2,33 @@
 
 ## 当前焦点
 
-**Camera B D435i→UGREEN 替换完成。 P1/P2 ✅。 CRP 协议一致性验证 ✅。**
-双 Socket 架构确认 (8600+8080)。Phase 0/Phase A-C 两份 CRP+Python 对齐。
-待实机双相机全流程测试。
+**CRP Phase D 逻辑修复 + Python 端协议对齐完成。待实机全流程测试。**
 
 ## 最近变更
 
-1. **CRP 协议一致性修复 — orchestrator CRP 补全 + TXT 更新** (2026-07-14):
-   - orchestrator CRP Phase A-C 入口补全 3 个 widget: `SocketCreate(8080, Socket0)` / `If(socketflag)` / `GetCurCPos`
-   - Phase D 3 处 socket 引用修正: `Socket1→Socket0`
-   - 双 Socket 架构验证: Socket1(8600, Phase 0) + Socket0(8080, Phase A-C+D)
-   - Phase 0 / Phase A-C(Cup P3前) 两份 CRP + 两份 Python 端协议对齐确认
-   - TXT 伪代码同步更新: 新增 v8 changelog + Phase 0 段 + socket 引用统一
+1. **CRP Phase D 全面修复** (2026-07-14):
+   - 新增变量: strflag_cont, strflag_abort (INT=1), str7 ("READY"), socketstr5
+   - TranStrToCpos operateval 分离: as → strflag_cont / strflag_abort
+   - If 条件修正: socketflag != 0 → strflag_cont == 0 / strflag_abort == 0 (operator: = → ==)
+   - CONTINUE 分支: 新增 DCp2 + C_P4 计算 (DCp2.dz=Home.z-C_P1.z, CposOffset)
+   - 标签规范化: Phase D widget 去括号后缀, 对齐 greeting CRP
+   - Phase D Socket 引用修正: Socket1 → Socket0 (If 块内 3 处)
 
-2. **HandInCup curled gate 修复** (2026-07-14):
-   - 手腕在框外 + score≥5（多手指在框内）→ 直接判定 hit，跳过 curl 检测
-   - `curled_threshold: 25→35`（适配 720p）
-   - `bbox_margin: 20→40`（适配 720p）
-   - config 标注 `[分辨率相关]` 注释
+2. **Python RELEASE 三路分支修正** (2026-07-14):
+   - abort_mode 提到优先判断 (ABORT 路径 RELEASE 不再误入 Phase C)
+   - 人未就位不再提前发 ABORT, 等 RELEASE 到来走正常判定
+   - hand_in_cup_active 保持 True 至 RELEASE 判定完成
 
-2. **挥手时序优化** (2026-07-14):
-   - `do_gesture(delay=0.5)` + `time.sleep(wave_interval/2)` 替代插值控制
-   - `wave_interval: 0.15→0.45` (匹配同事 hello_frame_delay)
-   - 每周期 ~1.45s
+3. **Cup 检测修复** (2026-07-14):
+   - 补全 cup_detector: depth_intrinsics / color_to_depth_extrinsics / depth_to_color_extrinsics
 
-3. **椅子实时检测 + 非对称阈值 + baseline 锚定** (2026-07-14):
-   - 删除 `calibrate_chair()` 锁定逻辑 → 每帧实时检测椅子 (`_detect_chair_live`)
-   - 非对称阈值：进 10 帧 / 出 5 帧立刻 False
-   - `_chair_baseline` 锚定：仅 not person_near 时更新，person_near 时面积差 ≤30% 才更新 `_chair_ref`
-   - `is_chair_calibrated` → `has_chair`
-   - `PersonDetector` 加 `start_camera` 参数/方法
+4. **Camera B 优化** (2026-07-14):
+   - YOLO device: gpu → cpu (与 Camera A 解耦)
+   - 生命周期: 回到 GREETING enter 启动 (YOLO 在 Phase 0 预热)
 
-3. **Camera B 生命周期调整** (2026-07-14):
-   - IDLE: Camera B 关闭
-   - GREETING enter: 开 Camera B + 启 seated detection（不等人，直接进）
-   - HANDLE: seated detection 继续 → READY 判定
-
-4. **Camera B D435i → UGREEN 替换** (2026-07-13):
-   - 新增 `EyeToHand/camera.py`, 纯 RGB 无深度
-   - HandInCup 移除深度校验
+5. **退出加速** (2026-07-14):
+   - disable_hand(skip_reset=True) 跳过 RESET 手势
+   - HandInCup.close() daemon 线程 + 2s 超时
 
 ## 未解决问题
 
@@ -51,3 +39,4 @@
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
 | 🔴 P0 | **双相机全流程测试** | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
+| 🟡 | Camera B 杯 ROI 标定 | UGREEN 替换后首次 |

@@ -52,6 +52,11 @@
 - [x] RELEASE 双语义修复: hand_in_cup_active 标志区分 Phase C 松把手 vs Phase D 判定
 - [x] **CRP 一致性修复** (2026-07-14): orchestrator CRP 补全 SocketCreate(8080)/If/GetCurCPos + Phase D socket Socket1→Socket0
 - [x] **TXT 伪代码同步** (2026-07-14): v8 changelog + Phase 0 段 + 双 Socket 架构 + socket 引用统一
+- [x] **CRP Phase D 逻辑修复** (2026-07-14): strflag_cont/abort 变量 + TranStrToCpos 标志分离 + If 条件 == + CONTINUE C_P4 计算 + 标签规范化
+- [x] **Python RELEASE 分支修正** (2026-07-14): abort_mode 优先判断 + 人未就位走正常判定 + hand_in_cup_active 生命周期
+- [x] **Cup 检测 intrinsics 补全** (2026-07-14): depth_intrinsics / c2d_extr / d2c_extr
+- [x] **Camera B CPU 解耦** (2026-07-14): PersonDetector YOLO gpu→cpu
+- [x] **退出加速** (2026-07-14): disable_hand skip_reset + HandInCup close daemon 超时
 
 ### 双相机体系
 - [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)

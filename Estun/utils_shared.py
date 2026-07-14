@@ -372,16 +372,26 @@ def hand_reset():
         print(f"[WARN] RESET 失败: {e}")
 
 
-def disable_hand():
-    """关闭灵巧手 (RESET -> disable -> close)"""
+def disable_hand(skip_reset: bool = False):
+    """关闭灵巧手 (RESET -> disable -> close)
+
+    参数:
+        skip_reset: True 时跳过 RESET 手势 (退出时快速关闭)
+    """
     global _hand
     if _hand is not None:
         try:
-            _hand.do_gesture(Gesture.RESET, delay=0.3)
-            time.sleep(0.5)
+            t0 = time.perf_counter()
+            if not skip_reset:
+                _hand.do_gesture(Gesture.RESET, delay=0.3)
+                time.sleep(0.5)
+            t1 = time.perf_counter()
             _hand.disable()
+            t2 = time.perf_counter()
             _hand.close()
-            print("[INFO] 灵巧手已禁用并关闭串口")
+            t3 = time.perf_counter()
+            print(f"[INFO] 灵巧手已禁用并关闭串口 "
+                  f"(disable={t2-t1:.2f}s, close={t3-t2:.2f}s)")
         except Exception as e:
             print(f"[WARN] 灵巧手禁用失败: {e}")
         _hand = None

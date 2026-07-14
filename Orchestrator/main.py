@@ -19,6 +19,7 @@ Orchestrator — 系统入口
 
 import os
 import sys
+import threading
 import time
 
 import cv2
@@ -248,15 +249,24 @@ def main():
 
         if ctx.hand_in_cup_detector is not None:
             try:
-                ctx.hand_in_cup_detector.close()
-                print("[INFO] HandInCup 检测器已关闭")
+                # MediaPipe 后台遥测线程可能阻塞 close(), 用 daemon 线程 + 超时
+                t = threading.Thread(
+                    target=ctx.hand_in_cup_detector.close,
+                    daemon=True,
+                )
+                t.start()
+                t.join(timeout=2.0)
+                if t.is_alive():
+                    print("[INFO] HandInCup 检测器关闭中 (后台继续)...")
+                else:
+                    print("[INFO] HandInCup 检测器已关闭")
             except Exception as e:
                 print(f"[WARN] HandInCup 检测器关闭异常: {e}")
 
         from Estun.utils_shared import is_hand_available, disable_hand
         if is_hand_available():
             try:
-                disable_hand()
+                disable_hand(skip_reset=True)
                 print("[INFO] 灵巧手已关闭")
             except Exception as e:
                 print(f"[WARN] 灵巧手关闭异常: {e}")

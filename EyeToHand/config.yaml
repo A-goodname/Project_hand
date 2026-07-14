@@ -2,9 +2,9 @@ model:
   name: ./model/yolov8m
   conf_threshold: 0.5
   target_class_id: 0
-  device: gpu
+  device: cpu
 ugreen:
-  camera_id: 1
+  camera_id: 3  # DSHOW: 1=D435i RGB, 3=UGREEN 1080P
   width: 1280
   height: 720
   fps: 30

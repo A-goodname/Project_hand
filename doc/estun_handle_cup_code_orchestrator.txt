@@ -2,6 +2,22 @@ ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程:
 ============================================================
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
+=== v9 相比 v8 的关键变化 (2026-07-14) ===
+1. CRP Phase D 分支逻辑修复:
+   - 新增变量: strflag_cont(INT=1), strflag_abort(INT=1), str7("READY"), socketstr5("")
+   - TranStrToCpos operateval: as → strflag_cont / strflag_abort (双标志分离)
+   - If 条件: sockflag != 0 → strflag_cont == 0 / strflag_abort == 0
+   - If 内 SocketSendStr: Socket1 → Socket0 (3 处)
+2. CRP CONTINUE 分支: 新增 C_P4 计算 (DCp2.dz=Home.z-C_P1.z, CposOffset) + 标签规范化
+3. CRP ABORT 分支: 标签规范化 (去括号后缀, 对齐 greeting CRP)
+4. Python RELEASE 三路分支修正: abort_mode 提到优先判断, 人未就位不再提前发 ABORT
+5. Python hand_in_cup_active 生命周期修正: 保持 True 至 RELEASE 判定完成
+6. Python Cup 检测: 补全 depth_intrinsics/color_to_depth_extrinsics/depth_to_color_extrinsics
+7. Camera B YOLO: gpu → cpu (与 Camera A Cup YOLO 解耦)
+8. Phase B 超时: 30s → 60s
+9. Camera B 生命周期: Phase 0 结束后启动 → 回到 GREETING enter (YOLO 预热)
+10. 退出加速: disable_hand(skip_reset=True) + HandInCup.close() daemon 线程 2s 超时
+
 === v8 相比 v7 的关键变化 (2026-07-14) ===
 1. CRP Phase A-C 入口补全 3 个缺失 widget:
    - SocketCreate(8080, Socket0) — Phase A-C 客户端 socket (原 v7 CRP 缺失, send/recv 引用悬空)
@@ -285,8 +301,8 @@ while strflag == 1
 // ================================================================
 
 // --- 计算 Cup P4 安全退避点 (C_P1.XY + C_P3.Z + C_P1.ABC) ---
-DCp2.dz = C_P3.z - C_P1.z
-C_P4 = CposOffset(C_P1, DCp2)   // P4 = P1 位姿 + Z偏移到递送高度
+DCp2.dz = Home.z - C_P1.z         // 上升到 Home Z 高度
+C_P4 = CposOffset(C_P3, DCp2)     // P4 = P3 位姿 + Z偏移 (Home高度)
 
 // --- [7a] CONTINUE 分支: 有人接杯 → 松手已由 PC 执行 → 退避 ---
 // 注: 当 PC 发送 CONTINUE 时, PC 已调用 release_object() 松手
@@ -345,8 +361,8 @@ endif
 //    CONTINUE 响应发送时 Handle/Cup 解析已完成, socketstr5 是独立变量, 无冲突.
 //
 // 2. P4 安全退避点:
-//    Cup P4 = CposOffset(C_P1, DCp2)
-//    其中 DCp2.dz = C_P3.z - C_P1.z
+//    Cup P4 = CposOffset(C_P3, DCp2)
+//    其中 DCp2.dz = Home.z - C_P1.z
 //    P4 位于 P1 的 XY 平面上方, Z 高度等于 P3 (递送高度),
 //    姿态保持 P1 的姿态. 这样退避时先上升到安全高度再回 Home,
 //    避免与桌面/人体碰撞.
