@@ -61,3 +61,4 @@ cup:
   device: gpu                    # 运行设备: gpu(优先) | cpu(强制)
 
 # ESTUN 配置已迁移至 estun_config.yaml
+# 白色把手/红色胶带检测配置已迁移至 Orchestrator/config.yaml

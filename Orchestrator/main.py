@@ -201,10 +201,10 @@ def main():
                 vis_a = ctx.frames_a[0].copy()
                 cv2.putText(vis_a, f"State: {sm.state.name}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                h_ok = "H:OK" if (ctx.handle_detector and
-                                  ctx.handle_detector.last_known_pose is not None) else "H:..."
-                c_ok = "C:OK" if (ctx.cup_detector and
-                                  ctx.cup_detector.last_known_pose is not None) else "C:..."
+                h_ok = "H:OK" if (ctx.handle_cup_detector and
+                                  ctx.handle_cup_detector.last_known_pose is not None) else "H:..."
+                c_ok = "C:OK" if (ctx.handle_cup_detector and
+                                  getattr(ctx.handle_cup_detector, 'last_known_cup_pose', None) is not None) else "C:..."
                 cv2.putText(vis_a, f"{h_ok} {c_ok}", (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
                 cv2.imshow("Orchestrator - Camera A (Eye-in-Hand)", vis_a)
@@ -240,9 +240,9 @@ def main():
             except Exception as e:
                 print(f"[WARN] PersonDetector 停止异常: {e}")
 
-        if ctx.handle_detector is not None:
+        if ctx.handle_cup_detector is not None:
             try:
-                ctx.handle_detector.pipeline.stop()
+                ctx.handle_cup_detector.close()
                 print("[INFO] Camera A pipeline 已停止")
             except Exception as e:
                 print(f"[WARN] Camera A 停止异常: {e}")

@@ -1,0 +1,71 @@
+# Orchestrator Handle+Cup 检测器独立配置
+# HandleCupDetector 完全由此配置驱动, 不依赖 RealSense_R/config.yaml
+
+# 抓取模式: fixed (基系ABC直用) | vertical | free
+orientation_mode: fixed
+
+# 把手方向
+handle_side: right            # 水壶把手方向: right | left
+grasp_direction: right        # 抓取方向: right | left
+
+# 检测间隔 (YOLO kettle + cup 每 N 帧运行一次, 30fps 下 N=5≈6Hz)
+skip_frames: 5
+
+# 位姿稳定器 (PoseStabilizer)
+stabilization:
+  window: 5                  # 稳定窗口帧数 (skip_frames=5 → 0.83s)
+  pos_threshold: 0.01        # 位置波动阈值 (m)
+  angle_threshold: 5.0       # 角度波动阈值 (deg, fixed模式下固定波动=0)
+
+# ---- 模型路径 (相对项目根目录) ----
+kettle_model: model/kettle_yolov8n_finetune.pt   # 微调水壶 YOLO
+kettle_conf: 0.7                                  # 水壶检测置信度
+cup_model: model/yolov8m                          # 水杯 YOLO (class 41)
+cup_conf: 0.5                                     # 水杯检测置信度
+cup_handle_side: left                             # 杯把手方向: back | left | right
+cup_rim_radius: 0.035                             # 杯口半径 (m), 用于 left/right bbox 裁剪
+cup_height: 0.100                                 # 杯高先验 (m)
+
+# ---- 深度参数 ----
+depth_min: 0.15       # 最小有效深度 (m)
+depth_max: 1.5        # 最大有效深度 (m)
+depth_z_threshold: 0.05  # 深度离群过滤 (m)
+
+# ---- 固定 ABC (deg) ----
+handle_euler: [-90, 89, -90]
+cup_euler_back: [-90, 89, -110]
+cup_euler_left: [-90, 89, -90]
+
+# ---- 白色把手检测 ----
+# 参数来源: reference/机械臂_同事运行包_20260713/visionpro.py
+white_handle:
+  search_left_frac: 0.68        # 把手在水壶右侧, 从 kettle bbox 68% 处开始搜索
+  max_saturation: 115           # HSV 饱和度上限
+  min_value: 110                # HSV 明度下限
+  min_rgb: 120                  # RGB 三通道最小值下限 (排除暗色)
+  max_rgb_spread: 150           # RGB 三通道最大差值 (排除彩色)
+  min_component_area: 80.0      # 白色轮廓最小面积 (px)
+  max_component_area: 18000.0   # 白色轮廓最大面积
+  join_px: 25                   # dilate 合并近邻碎片核大小
+  min_pixels: 220               # 合并后白色区域最少像素
+  min_width: 18                 # 最小宽度
+  min_height: 35                # 最小高度
+  max_width: 180                # 最大宽度
+  max_height: 210               # 最大高度
+  roi_margin_x: 14              # ROI 外扩 (x)
+  roi_margin_y: 10              # ROI 外扩 (y)
+
+# ---- 红色胶带检测 ----
+red_handle:
+  low_hue_max: 8                # 红色低 hue 上限 (0~8)
+  high_hue_min: 172             # 红色高 hue 下限 (172~180)
+  min_saturation: 90            # HSV 饱和度下限
+  min_value: 70                 # HSV 明度下限
+  min_r: 120                    # R 通道最小值
+  min_rg_delta: 25              # R-G 最小差值
+  min_rb_delta: 30              # R-B 最小差值
+  min_area: 120.0               # 红色轮廓最小面积
+  max_area: 3600.0              # 红色轮廓最大面积
+  max_width: 120                # 红色轮廓最大宽度
+  max_height: 110               # 红色轮廓最大高度
+  ignore_top_frac: 0.18         # 忽略画面顶部比例 (排除水壶本体红色)

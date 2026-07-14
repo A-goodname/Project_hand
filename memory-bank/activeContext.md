@@ -2,33 +2,27 @@
 
 ## 当前焦点
 
-**CRP Phase D 逻辑修复 + Python 端协议对齐完成。待实机全流程测试。**
+**Camera A Handle+Cup 检测器轻量化改造完成。待实机全流程测试。**
 
 ## 最近变更
 
-1. **CRP Phase D 全面修复** (2026-07-14):
-   - 新增变量: strflag_cont, strflag_abort (INT=1), str7 ("READY"), socketstr5
-   - TranStrToCpos operateval 分离: as → strflag_cont / strflag_abort
-   - If 条件修正: socketflag != 0 → strflag_cont == 0 / strflag_abort == 0 (operator: = → ==)
-   - CONTINUE 分支: 新增 DCp2 + C_P4 计算 (DCp2.dz=Home.z-C_P1.z, CposOffset)
-   - 标签规范化: Phase D widget 去括号后缀, 对齐 greeting CRP
-   - Phase D Socket 引用修正: Socket1 → Socket0 (If 块内 3 处)
+1. **HandleCupDetector 轻量化改造** (2026-07-14):
+   - 新建 `Orchestrator/handle_cup_detector.py`: 独立检测器, 不依赖 RealSense_R
+   - Handle: YOLO kettle → 白色把手 HSV+RGB → 红色胶带(R通道优势) → 3D
+   - Cup: YOLO cup → bbox 裁剪(left/right) + 采样 → 3D
+   - 去掉 SAM2 (~3s/帧) + PCA 6D, skip_frames 90→5
+   - 固定 ABC 模式: 基系 ABC 来自 `Orchestrator/config.yaml`, P1/P2/P3 直用
+   - 白色把手+红色胶带 HSV 参数移植自同事 visionpro.py
+   - `state_machine.py` Phase B 适配: fixed 模式 Handle+Cup 统一使用基系 ABC
+   - 新建 `Orchestrator/config.yaml`: 独立配置 (模型/深度/ABC/白把手/红胶带)
 
-2. **Python RELEASE 三路分支修正** (2026-07-14):
-   - abort_mode 提到优先判断 (ABORT 路径 RELEASE 不再误入 Phase C)
-   - 人未就位不再提前发 ABORT, 等 RELEASE 到来走正常判定
-   - hand_in_cup_active 保持 True 至 RELEASE 判定完成
+2. **pyrealsense2 pyd 兼容** (2026-07-14):
+   - sys.path 提前到 import pyrealsense2 之前
+   - 去掉 rs 类型标注, 用 assert guard 替代 # type: ignore
 
-3. **Cup 检测修复** (2026-07-14):
-   - 补全 cup_detector: depth_intrinsics / color_to_depth_extrinsics / depth_to_color_extrinsics
-
-4. **Camera B 优化** (2026-07-14):
-   - YOLO device: gpu → cpu (与 Camera A 解耦)
-   - 生命周期: 回到 GREETING enter 启动 (YOLO 在 Phase 0 预热)
-
-5. **退出加速** (2026-07-14):
-   - disable_hand(skip_reset=True) 跳过 RESET 手势
-   - HandInCup.close() daemon 线程 + 2s 超时
+3. **Cup left/right Bbox 裁剪** (2026-07-14):
+   - 移植自 test_cup_6D.py, 排除把手侧背景干扰
+   - 裁剪后更新锚点深度 + 可视化 bbox
 
 ## 未解决问题
 
@@ -40,3 +34,4 @@
 |:---:|------|------|
 | 🔴 P0 | **双相机全流程测试** | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
 | 🟡 | Camera B 杯 ROI 标定 | UGREEN 替换后首次 |
+| 🟡 | skip_frames 实机微调 | 当前=5, 根据实际帧率调整 |

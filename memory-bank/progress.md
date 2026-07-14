@@ -57,6 +57,13 @@
 - [x] **Cup 检测 intrinsics 补全** (2026-07-14): depth_intrinsics / c2d_extr / d2c_extr
 - [x] **Camera B CPU 解耦** (2026-07-14): PersonDetector YOLO gpu→cpu
 - [x] **退出加速** (2026-07-14): disable_hand skip_reset + HandInCup close daemon 超时
+- [x] **HandleCupDetector 轻量化** (2026-07-14):
+  - 新建 `Orchestrator/handle_cup_detector.py` + `Orchestrator/config.yaml`
+  - YOLO kettle + 白色把手 HSV+RGB + 红色胶带(R通道优势) → 3D
+  - 去掉 SAM2 + PCA 6D, skip_frames 90→5
+  - fixed 模式: 基系 ABC 来自 config
+  - `state_machine.py` Phase B 适配: Handle+Cup 统一基系 ABC
+  - Cup left/right bbox 裁剪
 
 ### 双相机体系
 - [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)

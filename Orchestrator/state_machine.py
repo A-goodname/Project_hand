@@ -37,8 +37,7 @@ if _project_root not in sys.path:
 
 # ---- 导入 ----
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
-from RealSense_R.test_handle_6D import RealSenseHandle6DDetector
-from RealSense_R.test_cup_6D import RealSenseCup6DDetector
+from Orchestrator.handle_cup_detector import HandleCupDetector
 from EyeToHand.person_detector import PersonDetector
 
 from EyeToHand.hand_in_cup import HandInCupDetector
@@ -201,8 +200,7 @@ class SharedContext:
     handle_cup_complete: threading.Event = field(default_factory=threading.Event)
 
     # Camera A 检测器 (HandleGraspAndPourHandler 写入)
-    handle_detector: Optional[RealSenseHandle6DDetector] = None
-    cup_detector: Optional[RealSenseCup6DDetector] = None
+    handle_cup_detector: Optional[HandleCupDetector] = None
     T_cam2ee: Optional[np.ndarray] = None
 
     # 人就位门控 (main loop 写入, TCP handler 读取)
@@ -767,8 +765,7 @@ class HandleGraspAndPourHandler(StateHandler):
 
         # ---- 跳帧控制 ----
         self._frame_counter = 0
-        self._cached_handle = None
-        self._cached_cup = None
+        self._cached_result = None
         self._last_color = None
         self._last_depth_frame = None
         self._last_depth_image = None
@@ -839,7 +836,7 @@ class HandleGraspAndPourHandler(StateHandler):
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
         # 获取 Camera A 帧 (Phase B 期间有帧, 之后为 None)
-        if ctx.handle_detector is not None:
+        if ctx.handle_cup_detector is not None:
             color, depth, depth_colormap, depth_frame = self._get_frames(ctx)
             ctx.frames_a = (color, depth, depth_colormap, depth_frame)
             self._detect(ctx)
@@ -866,6 +863,15 @@ class HandleGraspAndPourHandler(StateHandler):
         cfg = ctx.realsense_config
         estun = ctx.estun_config
         eye_cfg = ctx.eye_to_hand_config
+
+        # ---- 加载 Orchestrator 独立配置 ----
+        _orch_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+        self._orch_cfg = {}
+        try:
+            with open(_orch_path, "r", encoding="utf-8") as f:
+                self._orch_cfg = yaml.safe_load(f)
+        except Exception:
+            pass
 
         # ---- 加载偏移参数 (从 estun_config) ----
         self._load_offsets(cfg, estun)
@@ -913,8 +919,8 @@ class HandleGraspAndPourHandler(StateHandler):
         self._handle_target_t_offset = np.array(hg["target_offset"]["t_offset"], dtype=float)
         self._handle_target_r_offset = np.array(hg["target_offset"]["r_offset"], dtype=float)
 
-        # Cup handle_side
-        self._cup_handle_side = cfg.get("cup", {}).get("handle_side", "back")
+        # Cup handle_side (从 orch config)
+        self._cup_handle_side = self._orch_cfg.get("cup_handle_side", "back")
         print(f"[INFO] cup handle_side: {self._cup_handle_side}")
 
         # Cup offsets
@@ -951,27 +957,28 @@ class HandleGraspAndPourHandler(StateHandler):
         self._pour_t_offset_base = np.array(cg["pour_offset"]["t_offset"], dtype=float)
         self._pour_r_offset = np.array(cg["pour_offset"]["r_offset"], dtype=float)
 
-        # Cup geometry
-        self._cup_rim_radius = cfg.get("cup", {}).get("rim_radius", 0.035)
-        self._cup_height = cfg.get("cup", {}).get("height", 0.100)
+        # Cup geometry (从 orch config)
+        self._cup_rim_radius = float(self._orch_cfg.get("cup_rim_radius", 0.035))
+        self._cup_height = float(self._orch_cfg.get("cup_height", 0.100))
 
-        # Orientation
-        self._orientation_mode = estun["orientation_mode"]
-        self._grasp_direction = estun["grasp_direction"]
-        self._handle_side = cfg["handle"]["side"]
+        # Orientation + 把手方向 (从 orch config)
+        self._orientation_mode = self._orch_cfg.get("orientation_mode", "fixed")
+        self._handle_side = self._orch_cfg.get("handle_side", "right")
+        self._grasp_direction = self._orch_cfg.get("grasp_direction", self._handle_side)
         if self._handle_side != self._grasp_direction:
             print(f"[INFO] grasp_direction ({self._grasp_direction}) → handle_side ({self._handle_side})")
             self._grasp_direction = self._handle_side
+        print(f"[INFO] orientation_mode: {self._orientation_mode}")
 
-        # fixed mode
-        fixed_abc_map = estun.get("fixed_abc", {})
-        fixed_abc_cfg = fixed_abc_map.get(self._grasp_direction, [])
-        if len(fixed_abc_cfg) == 3:
-            self._fixed_abc = np.array(fixed_abc_cfg, dtype=float)
-        else:
-            self._fixed_abc = np.array([-90, 82, -98], dtype=float)
-            if self._orientation_mode == "fixed":
-                print(f"[WARN] {self._grasp_direction} 方向 fixed_abc 未配置, 使用默认值")
+        # fixed mode — ABC 从 orchestrator config 读取 (基系末端 ABC)
+        _h_abc = self._orch_cfg.get("handle_euler")
+        self._handle_fixed_abc = np.array(_h_abc if _h_abc else [-90, 89, -90], dtype=float)
+        _cup_key = "cup_euler_left" if self._cup_handle_side == "left" else "cup_euler_back"
+        _c_abc = self._orch_cfg.get(_cup_key)
+        self._cup_fixed_abc = np.array(_c_abc if _c_abc else [-90, 89, -110], dtype=float)
+        self._fixed_abc = self._handle_fixed_abc  # 兼容旧引用
+        print(f"[INFO] Handle P1 ABC (基系): {tuple(self._handle_fixed_abc)}")
+        print(f"[INFO] Cup   P1 ABC (基系): {tuple(self._cup_fixed_abc)}")
 
         # 校验
         valid_modes = {"vertical", "horizontal", "free", "fixed"}
@@ -983,7 +990,7 @@ class HandleGraspAndPourHandler(StateHandler):
             self._orientation_mode = "free"
 
         # 跳帧
-        self._skip_frames = cfg["handle"]["skip_frames"]
+        self._skip_frames = self._orch_cfg.get("skip_frames", 5)
 
     def _stop(self, ctx: SharedContext):
         """清理资源."""
@@ -994,13 +1001,12 @@ class HandleGraspAndPourHandler(StateHandler):
                 pass
             self._server = None
         # Camera A 已在 Phase B 关闭; 安全兜底
-        if ctx.handle_detector is not None:
+        if ctx.handle_cup_detector is not None:
             try:
-                ctx.handle_detector.pipeline.stop()
+                ctx.handle_cup_detector.close()
             except Exception:
                 pass
-        ctx.handle_detector = None
-        ctx.cup_detector = None
+        ctx.handle_cup_detector = None
         ctx.T_cam2ee = None
         if self._hand_available:
             try:
@@ -1016,7 +1022,7 @@ class HandleGraspAndPourHandler(StateHandler):
     # ================================================================
 
     def _get_frames(self, ctx: SharedContext):
-        det = ctx.handle_detector
+        det = ctx.handle_cup_detector
         if det is None:
             return None, None, None, None
         color, depth, depth_colormap, depth_frame = det.get_frames()
@@ -1027,14 +1033,13 @@ class HandleGraspAndPourHandler(StateHandler):
         return color, depth, depth_colormap, depth_frame
 
     def _detect(self, ctx: SharedContext):
-        """跳帧检测 Handle+Cup."""
+        """跳帧检测 Handle+Cup (使用轻量 HandleCupDetector)."""
         if self._last_color is None or self._last_depth_frame is None:
             return
 
-        detector = ctx.handle_detector
-        cup_detector = ctx.cup_detector
+        det = ctx.handle_cup_detector
         T_cam2ee = ctx.T_cam2ee
-        if detector is None or cup_detector is None or T_cam2ee is None:
+        if det is None or T_cam2ee is None:
             return
         assert self._handle_stabilizer is not None, "handle_stabilizer 未初始化"
         assert self._cup_stabilizer is not None, "cup_stabilizer 未初始化"
@@ -1043,69 +1048,45 @@ class HandleGraspAndPourHandler(StateHandler):
         if self._frame_counter % self._skip_frames != 1:
             return
 
-        # === Handle 检测 ===
-        h_result = detector.detect_handle_6d(self._last_color, self._last_depth_frame)
-        if h_result is not None:
-            h_items: tuple = h_result if len(h_result) >= 7 else (None, None, None, None, None, None, None)  # type: ignore[assignment]
-            body_mask, handle_mask, h_stage, yolo_bbox, h_pos, h_rot, h_euler = h_items[:7]
+        result = det.detect(self._last_color, self._last_depth_frame)
 
-            if h_pos is not None and h_rot is not None:
-                smooth_pos, smooth_rot = detector._pose_smoother.update(h_pos, h_rot)
-                if smooth_rot is not None:
-                    h_pos, h_rot = smooth_pos, smooth_rot
-                    h_euler = rotation_matrix_to_euler_angles(h_rot)
-                if h_euler is None:
-                    h_euler = np.zeros(3)
-
-                self._handle_stabilizer.add(tuple(h_pos), tuple(h_euler))  # type: ignore[arg-type]
-                if self._handle_stabilizer.is_stable():
-                    if not self._handle_stabilizer.is_generation_valid():
-                        self._handle_stabilizer.reset()
-                        self._handle_stabilizer.capture_generation()
-                    else:
-                        mean_pos, mean_euler = self._handle_stabilizer.get_mean()
-                        if mean_pos is not None and mean_euler is not None:
-                            mean_rot = euler_to_rotation_matrix(*mean_euler, order="zyx")
-                            pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
-                            rot_ee = T_cam2ee[:3, :3] @ mean_rot
-                            A, B, C = rotation_matrix_to_euler_angles(rot_ee)
-                            detector.last_known_pose = (pos_ee, (A, B, C))
-                            print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})")
-            else:
-                detector._pose_smoother.reset()
-
-            # === Cup 检测 (注入帧 + 位姿计算) ===
-            c_result = None
-            if self._last_depth_image is not None and cup_detector is not None:
-                cup_detector.inject_frames(
-                    self._last_color, self._last_depth_image, self._last_depth_colormap,
-                    self._last_depth_frame
-                )
-                c_result = cup_detector.compute_cup_6d_pose(self._last_color, self._last_depth_frame)
-            if c_result is not None:
-                c_bbox, c_pos, c_rot, c_euler, c_point_cloud = c_result
-                if c_pos is not None and c_rot is not None:
-                    smooth_cpos, smooth_crot = cup_detector._pose_smoother.update(c_pos, c_rot)
-                    if smooth_crot is not None:
-                        c_pos, c_rot = smooth_cpos, smooth_crot
-                        c_euler = rotation_matrix_to_euler_angles(c_rot)
-                    if c_euler is None:
-                        c_euler = np.zeros(3)
-                    self._cup_stabilizer.add(tuple(c_pos), tuple(c_euler))  # type: ignore[arg-type]
-                    if self._cup_stabilizer.is_stable():
-                        if not self._cup_stabilizer.is_generation_valid():
-                            self._cup_stabilizer.reset()
-                            self._cup_stabilizer.capture_generation()
-                        else:
-                            mean_cpos, mean_ceuler = self._cup_stabilizer.get_mean()
-                            if mean_cpos is not None and mean_ceuler is not None:
-                                cup_detector.last_known_pose = (mean_cpos, mean_ceuler)  # type: ignore[assignment,unused-ignore]
-                                print(f"\n[Cup STABLE] pos=({mean_cpos[0]:.3f},{mean_cpos[1]:.3f},{mean_cpos[2]:.3f})")
+        # === Handle 稳定 ===
+        h = result["handle"]
+        if h["pos_cam"] is not None:
+            pos_cam = np.array(h["pos_cam"])
+            euler = np.array(h["euler_cam"])  # 基系 ABC, 仅用于稳定器角度检查
+            self._handle_stabilizer.add(tuple(pos_cam), tuple(euler))  # type: ignore[arg-type]
+            if self._handle_stabilizer.is_stable():
+                if not self._handle_stabilizer.is_generation_valid():
+                    self._handle_stabilizer.reset()
+                    self._handle_stabilizer.capture_generation()
                 else:
-                    cup_detector._pose_smoother.reset()
+                    mean_pos, _mean_euler = self._handle_stabilizer.get_mean()
+                    if mean_pos is not None:
+                        pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
+                        # 基系 ABC 来自 config, 不经过 T_cam2ee 旋转
+                        det.last_known_pose = (pos_ee, tuple(self._handle_fixed_abc))
+                        print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})")
+        # (else: 不稳定时保持上次稳定值, 不停清零)
 
-            self._cached_handle = h_result
-            self._cached_cup = c_result
+        # === Cup 稳定 ===
+        c = result["cup"]
+        if c["pos_cam"] is not None:
+            pos_cam = np.array(c["pos_cam"])
+            euler = np.array(c["euler_cam"])
+            self._cup_stabilizer.add(tuple(pos_cam), tuple(euler))  # type: ignore[arg-type]
+            if self._cup_stabilizer.is_stable():
+                if not self._cup_stabilizer.is_generation_valid():
+                    self._cup_stabilizer.reset()
+                    self._cup_stabilizer.capture_generation()
+                else:
+                    mean_cpos, _mean_ceuler = self._cup_stabilizer.get_mean()
+                    if mean_cpos is not None:
+                        # 存 (pos_cam, 基系 ABC) — ABC 来自 config
+                        det.last_known_cup_pose = (mean_cpos, tuple(self._cup_fixed_abc))
+                        print(f"\n[Cup STABLE] pos=({mean_cpos[0]:.3f},{mean_cpos[1]:.3f},{mean_cpos[2]:.3f})")
+
+        self._cached_result = result
 
     # ================================================================
     # TCP
@@ -1193,18 +1174,15 @@ class HandleGraspAndPourHandler(StateHandler):
         t_ee_base = np.array(robot_xyz, dtype=float)
 
         # ---- [Phase B] 打开 Camera A, 检测 Handle+Cup, 发送后关闭 ----
-        print("[INFO] 打开 Camera A (Handle+Cup 检测)...")
-        cfg = ctx.realsense_config
+        print("[INFO] 打开 Camera A (HandleCupDetector)...")
         estun = ctx.estun_config
-        ctx.handle_detector = RealSenseHandle6DDetector(config_dict=cfg)
-        ctx.handle_detector.last_known_pose = None
-        ctx.cup_detector = RealSenseCup6DDetector(config_dict=cfg, start_pipeline=False)
-        ctx.cup_detector.color_intrinsics = ctx.handle_detector.color_intrinsics
-        ctx.cup_detector.depth_intrinsics = ctx.handle_detector.depth_intrinsics
-        ctx.cup_detector.depth_scale = ctx.handle_detector.depth_scale
-        ctx.cup_detector.color_to_depth_extrinsics = ctx.handle_detector.color_to_depth_extrinsics
-        ctx.cup_detector.depth_to_color_extrinsics = ctx.handle_detector.depth_to_color_extrinsics
-        ctx.cup_detector.last_known_pose = None
+        import torch
+        _dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+        det = HandleCupDetector(
+            orch_config=self._orch_cfg,
+            serial=ctx.camera_a_serial, device=_dev,
+        )
+        ctx.handle_cup_detector = det
 
         calib_path = os.path.join(
             _project_root,
@@ -1212,7 +1190,7 @@ class HandleGraspAndPourHandler(StateHandler):
         )
         ctx.T_cam2ee = load_cam2ee(calib_path)
 
-        stab_cfg = estun.get("stabilization", {})
+        stab_cfg = self._orch_cfg.get("stabilization", {})
         self._handle_stabilizer = PoseStabilizer(
             window=stab_cfg.get("window", 3),
             pos_thresh=stab_cfg.get("pos_threshold", 0.01),
@@ -1227,15 +1205,9 @@ class HandleGraspAndPourHandler(StateHandler):
         self._cup_stabilizer.capture_generation()
 
         print("[INFO] 等待稳定目标位姿 (Handle + Cup)...")
-        detector = ctx.handle_detector
-        cup_detector = ctx.cup_detector
         T_cam2ee = ctx.T_cam2ee
-        if detector is None:
-            print("[ERROR] handle_detector 未初始化")
-            _cleanup()
-            return
-        if cup_detector is None:
-            print("[ERROR] cup_detector 未初始化")
+        if det is None:
+            print("[ERROR] handle_cup_detector 未初始化")
             _cleanup()
             return
         if T_cam2ee is None:
@@ -1246,8 +1218,8 @@ class HandleGraspAndPourHandler(StateHandler):
         target_sent = False
         wait_start = time.time()
         while not target_sent and not ctx.stop_event.is_set() and (time.time() - wait_start) < self._phase_b_timeout:
-            handle_pose = detector.last_known_pose
-            cup_pose = cup_detector.last_known_pose
+            handle_pose = det.last_known_pose
+            cup_pose = det.last_known_cup_pose
 
             if handle_pose is not None and cup_pose is not None:
                 mean_pos_ee, mean_euler_ee = handle_pose  # type: ignore[misc]
@@ -1306,44 +1278,21 @@ class HandleGraspAndPourHandler(StateHandler):
                     _R_pour_ee = R_pour_ee
 
                 # ============================================================
-                # Phase 2: Cup P1 / P2 / P3
-                #   P1, P2: Camera A 检测 (同原版)
-                #   P3:     delivery = (X_TEACH, Y_TEACH, Z_TEACH, ABC_TEACH)  # 全示教固定
+                # Phase 2: Cup P1 / P2 / P3 (fixed 模式: 基系 ABC 直接使用)
+                #   P3: delivery = (X_TEACH, Y_TEACH, Z_TEACH, ABC_TEACH)  # 全示教固定
                 # ============================================================
                 c_pos_ee = T_cam2ee[:3, :3] @ np.array(cup_pos_cam) + T_cam2ee[:3, 3]
-                c_rot_ee = T_cam2ee[:3, :3] @ euler_to_rotation_matrix(*cup_euler_cam, order="zyx")
+                # cup_euler_cam 是基系 ABC, 直接构造 R_base_fix (同 Handle fixed 分支)
+                c_R_base_fix = euler_to_rotation_matrix(*cup_euler_cam, order="zyx")
+                c_R_grasp_ee = R_ee_base.T @ c_R_base_fix
                 c_pos_ee_compensated = c_pos_ee - t_cup_effective
-                c_R_grasp_ee = compute_grasp_rotation(
-                    c_rot_ee, self._orientation_mode, self._cup_r_offset, R_ee_base,  # type: ignore[arg-type]
-                    grasp_direction=self._grasp_direction)
 
-                # Cup P1
-                c_rot_base_1 = R_ee_base @ c_R_grasp_ee
+                # Cup P1 (基系 ABC 直接使用)
+                c_rot_base_1 = c_R_base_fix
                 c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
-                cA1, cB1, cC1 = rotation_matrix_to_euler_angles(c_rot_base_1)
-                cA1, cB1, cC1 = post_correct_angles(cA1, cB1, cC1, robot_ABC)
-                if self._orientation_mode == "vertical":
-                    if self._cup_handle_side == "back":
-                        if cB1 < 90:
-                            print(f"[CLAMP] Cup P1 B {cB1:.1f} → 89.0")
-                            cB1 = 89.0
-                        elif cB1 > 90:
-                            print(f"[CLAMP] Cup P1 B {cB1:.1f} → 91.0")
-                            cB1 = 91.0
-                        if not (-120 <= cC1 <= -100):
-                            print(f"[CLAMP] Cup P1 C {cC1:.1f} → -110.0")
-                            cC1 = -110.0
-                    else:
-                        if cB1 < 90:
-                            cB1 = 89.0
-                        elif cB1 > 90:
-                            cB1 = 91.0
-                        if not (-100 <= cC1 <= -80):
-                            print(f"[CLAMP] Cup P1 C {cC1:.1f} → -90.0")
-                            cC1 = -90.0
+                cA1, cB1, cC1 = cup_euler_cam  # type: ignore[misc]
 
-                c_rot_base_1_corrected = euler_to_rotation_matrix(cA1, cB1, cC1, order="zyx")
-                c_R_grasp_ee_corrected = R_ee_base.T @ c_rot_base_1_corrected
+                c_R_grasp_ee_corrected = c_R_grasp_ee  # fixed 模式无需修正
 
                 # Cup P2
                 c_pos_ee_pre = c_pos_ee_compensated + c_R_grasp_ee_corrected @ self._cup_pre_t_offset
@@ -1429,14 +1378,13 @@ class HandleGraspAndPourHandler(StateHandler):
             return
 
         # ---- Camera A 已不再需要, 关闭 pipeline ----
-        if ctx.handle_detector is not None:
+        if ctx.handle_cup_detector is not None:
             try:
-                ctx.handle_detector.pipeline.stop()
+                ctx.handle_cup_detector.close()
                 print("[INFO] Camera A pipeline 已关闭 (位姿已发送)")
             except Exception:
                 pass
-            ctx.handle_detector = None
-            ctx.cup_detector = None
+            ctx.handle_cup_detector = None
             ctx.T_cam2ee = None
 
         # ---- [Phase C & D] 指令循环 ----
