@@ -3,18 +3,17 @@ model:
   conf_threshold: 0.5
   target_class_id: 0
   device: gpu
-depth:
-  min: 0.15
-  max: 1.5
-resolution:
-  width: 640
-  height: 480
+ugreen:
+  camera_id: 1
+  width: 1280
+  height: 720
   fps: 30
-smoothing:
-  alpha: 0.4
-stabilizer:
-  window: 10
-  pos_thresh: 0.03
+chair:
+  class_id: 56
+  conf_threshold: 0.4
+  overlap_threshold: 0.4
+  seated_stable_frames: 10
+  leave_frames: 5
 delivery:
   X_TEACH: 0.2295
   Y_TEACH: 0.4427
@@ -34,20 +33,12 @@ hand_in_cup:
   hand_min_tracking_conf: 0.5
   required_stable: 5
   dist_factor: 1.2
-  depth_tolerance: 0.1
-  cup_depth_expected: 1.09
-  bbox_margin: 20
-  curled_threshold: 25
+  bbox_margin: 40             # [分辨率相关] bbox 外扩像素, 720p→40, 480p→20
+  curled_threshold: 35        # [分辨率相关] 手指弯曲判定像素阈值, 720p→35, 480p→25
   curled_min_fingers: 2
-  chair:
-  class_id: 56              # COCO chair
-  conf_threshold: 0.4       # 椅子检测置信度
-  stabilize_frames: 10      # 椅子 bbox 稳定帧数
-  overlap_threshold: 0.4    # person∩chair/chair_area 阈值
-  seated_stable_frames: 10  # 就位确认帧数 (~0.3s @30fps, 设备性能限制)
-cup_roi_fallback:
-    enabled: true
-    x1: 342
-    y1: 171
-    x2: 380
-    y2: 219
+cup_roi_fallback:             # [分辨率相关] YOLO 失败时回退 ROI, 改分辨率后需重新标定
+  enabled: true
+  x1: 608
+  y1: 90
+  x2: 661
+  y2: 163

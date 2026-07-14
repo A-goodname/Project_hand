@@ -14,7 +14,7 @@ EyeToHand 人手-杯把手重合检测 (Hand-in-cup)
   3. score ≥ 2 → hit
      - 仅手腕在 bbox 内 = 2 分 → hit
      - 手腕不在但 2 MCP 在内 = 2 分 → hit (抓握场景)
-  4. 深度辅助: 最近手手腕深度 vs 杯深度 < depth_tolerance
+  4. 判定: score >= 2 → 累积 → hand_on_cup
   5. 连续 N 帧满足 → hand_on_cup = True
 
 模型:
@@ -22,7 +22,7 @@ EyeToHand 人手-杯把手重合检测 (Hand-in-cup)
   - Hand: model/hand_landmarker.task  (MediaPipe Hands)
 
 接口:
-  - update(color_image, depth_frame=None) : 每帧调用
+  - update(color_image) : 每帧调用
   - is_hand_on_cup : bool
   - stable_count   : int
   - reset()        : 重置内部状态
@@ -42,7 +42,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-from RealSense.realsense_shared import BaseRealSenseDetector
+from EyeToHand.camera import UGreenCamera
 
 # MediaPipe Hands (Task API)
 from mediapipe.tasks.python import BaseOptions
@@ -82,8 +82,8 @@ class HandInCupDetector:
         except Exception:
             _cfg = {}
         hic = _cfg.get("hand_in_cup", {})
-        # 杯 ROI 回退
-        _roi = hic.get("cup_roi_fallback", {})
+        # 杯 ROI 回退 (顶层 key)
+        _roi = _cfg.get("cup_roi_fallback", {})
         _roi_bbox = None
         if _roi.get("enabled", False):
             _roi_bbox = [
@@ -100,11 +100,9 @@ class HandInCupDetector:
             "hand_min_tracking_conf": float(hic.get("hand_min_tracking_conf", 0.5)),
             "required_stable": int(hic.get("required_stable", 5)),
             "dist_factor": float(hic.get("dist_factor", 1.2)),
-            "depth_tolerance": float(hic.get("depth_tolerance", 0.10)),
             "bbox_margin": int(hic.get("bbox_margin", 15)),
             "curled_threshold": int(hic.get("curled_threshold", 25)),
             "curled_min_fingers": int(hic.get("curled_min_fingers", 2)),
-            "cup_depth_expected": float(hic.get("cup_depth_expected", 0.0)),
             "cup_roi_fallback": _roi_bbox,
         }
 
@@ -115,8 +113,7 @@ class HandInCupDetector:
                  device: str = "cuda",
                  conf_threshold: float = 0.0,
                  required_stable: int = 0,
-                 dist_factor: float = 0.0,
-                 depth_tolerance: float = 0.0):
+                 dist_factor: float = 0.0):
         """
         Args:
             cup_model_path:  YOLO 杯检测模型路径 (空=从 config 读).
@@ -124,7 +121,6 @@ class HandInCupDetector:
             conf_threshold:  杯检测置信度阈值 (0=从 config 读).
             required_stable: 连续确认帧数 (0=从 config 读).
             dist_factor:     距离阈值因子 (保留, 未在计分制中使用).
-            depth_tolerance: 手腕-杯心深度差阈值 (米) (0=从 config 读).
         """
         cfg = self._load_default_config()
         if not cup_model_path:
@@ -133,11 +129,9 @@ class HandInCupDetector:
         self._conf_threshold = conf_threshold if conf_threshold > 0 else cfg["conf_threshold"]
         self._required_stable = required_stable if required_stable > 0 else cfg["required_stable"]
         self._dist_factor = dist_factor if dist_factor > 0 else cfg["dist_factor"]
-        self._depth_tolerance = depth_tolerance if depth_tolerance > 0 else cfg["depth_tolerance"]
         self._bbox_margin = cfg["bbox_margin"]
         self._curled_threshold = cfg["curled_threshold"]
         self._curled_min_fingers = cfg["curled_min_fingers"]
-        self._cup_depth_expected = cfg["cup_depth_expected"]
         self._cup_roi_fallback = cfg.get("cup_roi_fallback")
         self._stable_count = 0
         self._on_cup = False
@@ -167,7 +161,6 @@ class HandInCupDetector:
         self._last_best_hand = None     # 最近手 (同上)
         self._last_score = 0
         self._last_curled = 0           # 弯曲手指数
-        self._last_depth_ok = False
 
     def close(self):
         """释放 MediaPipe 资源."""
@@ -185,21 +178,19 @@ class HandInCupDetector:
     #  核心逻辑
     # ------------------------------------------------------------
 
-    def update(self, color_image: np.ndarray, depth_frame=None):
-        """每帧调用 — landmarks-in-bbox 计分制.
+    def update(self, color_image: np.ndarray):
+        """每帧调用 — landmarks-in-bbox 计分制 (纯 RGB).
 
         Args:
             color_image: BGR 图像 (H, W, 3).
-            depth_frame: rs.depth_frame, 用于深度辅助判定 (可选).
         """
         # 1. 检测杯 bbox
-        cup_bbox, cup_source = self._detect_cup(color_image)
+        cup_bbox, _ = self._detect_cup(color_image)
         self._last_cup_bbox = cup_bbox
         self._last_hands = []
         self._last_best_hand = None
         self._last_score = 0
         self._last_curled = 0
-        self._last_depth_ok = False
         cup_center = None
         hit = False
 
@@ -244,42 +235,14 @@ class HandInCupDetector:
                 self._last_score = score
                 self._last_curled = curled_count
 
-                # 判定: 手腕在 bbox 内 → 手已到位, 跳过握拳检测
-                #       手腕不在 bbox 内 → 需确认手指弯曲 (防开掌划过误触发)
+                # 判定: 手腕在 bbox 内 → 跳过握拳检测
+                #       手腕不在 bbox 内: score≥5(多手指在框内)→信任; 低→curl兜底
                 if wrist_in_bbox:
                     hit = (score >= 2)
+                elif score >= 5:
+                    hit = True
                 else:
                     hit = (score >= 2) and (curled_count >= self._curled_min_fingers)
-
-                # 5. 深度辅助: 最近手手腕深度 vs 杯深度
-                if hit and depth_frame is not None:
-                    wz = depth_frame.get_distance(wx, wy)
-                    if cup_source == "yolo":
-                        # YOLO 检测到杯 → 从画面采样 (杯可见, 可靠)
-                        cup_depths = []
-                        for dy in range(-2, 3):
-                            for dx in range(-2, 3):
-                                py, px = cy + dy, cx + dx
-                                if 0 <= py < color_image.shape[0] and 0 <= px < color_image.shape[1]:
-                                    dd = depth_frame.get_distance(px, py)
-                                    if 0 < dd < 2.0:
-                                        cup_depths.append(dd)
-                        if cup_depths:
-                            cup_z = np.median(cup_depths)
-                            if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance:
-                                self._last_depth_ok = True
-                            else:
-                                hit = False
-                        else:
-                            hit = False
-                    elif self._cup_depth_expected > 0:
-                        # fallback → 用预标定深度 (唯一可靠来源)
-                        cup_z = self._cup_depth_expected
-                        if 0 < wz < 2.0 and abs(wz - cup_z) < self._depth_tolerance:
-                            self._last_depth_ok = True
-                        else:
-                            hit = False
-                    # else: fallback + 未配置深度 → 跳过深度检查
 
         self._last_cup_center = cup_center
 
@@ -389,7 +352,6 @@ class HandInCupDetector:
         self._last_best_hand = None
         self._last_score = 0
         self._last_curled = 0
-        self._last_depth_ok = False
 
     # ------------------------------------------------------------
     #  可视化绘制 (复用)
@@ -500,13 +462,12 @@ class HandInCupDetector:
     # ------------------------------------------------------------
 
     def _diagnose_frame(self, color_image: np.ndarray, name: str = "",
-                        depth_frame=None, log_file: str = ""):
+                        log_file: str = ""):
         """对单帧运行诊断, 输出到日志文件 (避免控制台刷屏).
 
         Args:
             color_image: BGR 图像.
             name:        帧标识 (用于日志).
-            depth_frame: rs.depth_frame (可选, 用于深度诊断).
             log_file:    日志路径, 为空则自动生成.
 
         Returns:
@@ -525,7 +486,6 @@ class HandInCupDetector:
         ts = datetime.datetime.now().strftime("%H:%M:%S")
         lines.append(f"\n{'='*60}")
         lines.append(f"  [{ts}] HandInCup 诊断: {name}  ({w}x{h})")
-        lines.append(f"  depth_frame={'OK' if depth_frame is not None else 'None'}")
         lines.append(f"{'='*60}")
 
         # Cup 模型 — class 41
@@ -603,25 +563,6 @@ class HandInCupDetector:
                     lines.append(f"  tip({px},{py}) in bbox → +1")
             hit = score >= 2
             lines.append(f"  score={score} → {'✓ HIT' if hit else '✗ MISS'}")
-
-            if depth_frame is not None:
-                cup_depths = []
-                for dy in range(-2, 3):
-                    for dx in range(-2, 3):
-                        py, px = cy+dy, cx+dx
-                        if 0 <= py < h and 0 <= px < w:
-                            d = depth_frame.get_distance(px, py)
-                            if 0 < d < 2.0:
-                                cup_depths.append(d)
-                if cup_depths:
-                    cup_z = np.median(cup_depths)
-                    wz = depth_frame.get_distance(wx, wy)
-                    ok = "OK" if 0 < wz < 2.0 and abs(wz-cup_z) < self._depth_tolerance else "FAIL"
-                    lines.append(f"  杯深度={cup_z:.3f}m  手腕深度={wz:.3f}m  diff={abs(wz-cup_z):.3f}m  [{ok}]")
-                else:
-                    lines.append("  ⚠️ 杯深度无效")
-            else:
-                lines.append("  depth_frame=None (仅2D判定)")
         else:
             lines.append(f"  cup={'✓' if cup_bboxes else '✗'}  hands={'✓' if hands else '✗'} — 无法判定")
 
@@ -670,24 +611,26 @@ class HandInCupDetector:
     # ------------------------------------------------------------
 
     def diagnose_live(self):
-        """实时诊断模式: 连接 Camera B, 按 'd' 诊断当前帧, 'q' 退出."""
+        """实时诊断模式: UGREEN Camera, 按 'd' 诊断当前帧, 'q' 退出."""
         _cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
         with open(_cfg_path, "r", encoding="utf-8") as f:
             _cfg = yaml.safe_load(f)
 
-        class _DiagRunner(BaseRealSenseDetector):
-            USE_YOLO_WORLD = False; USE_SAM = False
-            LOG_NAME = "hand_in_cup_diag.log"; TARGET_CLASS_ID = 0
-
-        runner = _DiagRunner(config_dict=_cfg)
+        _ugreen = _cfg.get("ugreen", {})
+        cam = UGreenCamera(
+            camera_id=_ugreen.get("camera_id", 1),
+            width=_ugreen.get("width", 1920),
+            height=_ugreen.get("height", 1080),
+            fps=_ugreen.get("fps", 30),
+        )
         print("=" * 55)
-        print("  HandInCup 实时诊断")
+        print("  HandInCup 实时诊断 (纯 RGB)")
         print("  按 'd' 诊断当前帧 | 'q' 退出")
         print("=" * 55)
 
         try:
             while True:
-                color, depth_img, depth_cmap, depth_frame = runner.get_frames()
+                color = cam.read()[0]
                 if color is None:
                     continue
                 cv2.imshow("HandInCup - Live", color)
@@ -695,8 +638,7 @@ class HandInCupDetector:
                 if key == ord("q"):
                     break
                 elif key == ord("d"):
-                    display = self._diagnose_frame(color, f"live_{int(time.time())}",
-                                                   depth_frame=depth_frame)
+                    display = self._diagnose_frame(color, f"live_{int(time.time())}")
                     cv2.imshow("HandInCup - Diagnose", display)
                     print("[INFO] 按任意键返回实时画面...")
                     cv2.waitKey(0)
@@ -704,7 +646,7 @@ class HandInCupDetector:
         except KeyboardInterrupt:
             print("\n[INFO] 键盘中断")
         finally:
-            runner.stop()
+            cam.release()
             cv2.destroyAllWindows()
             print("[INFO] 已退出")
 
@@ -741,7 +683,7 @@ class HandInCupDetector:
         print(f"[INFO] 检测图片: {image_path}  ({color.shape[1]}x{color.shape[0]})")
 
         # 运行检测 (无深度)
-        self.update(color, depth_frame=None)
+        self.update(color)
         display = self.draw_visualization(color)
 
         # 输出判定
@@ -783,47 +725,35 @@ class HandInCupDetector:
     # ------------------------------------------------------------
 
     def run(self):
-        """交互式测试主循环. 需要连接 Camera B (RealSense D435i)."""
+        """交互式测试主循环 (纯 RGB, UGREEN Camera)."""
         _cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
         with open(_cfg_path, "r", encoding="utf-8") as f:
             _cfg = yaml.safe_load(f)
 
-        class _TestRunner(BaseRealSenseDetector):
-            USE_YOLO_WORLD = False
-            USE_SAM = False
-            LOG_NAME = "hand_in_cup_test.log"
-            TARGET_CLASS_ID = 0
-
-        runner = _TestRunner(config_dict=_cfg)
+        _ugreen = _cfg.get("ugreen", {})
+        cam = UGreenCamera(
+            camera_id=_ugreen.get("camera_id", 1),
+            width=_ugreen.get("width", 1920),
+            height=_ugreen.get("height", 1080),
+            fps=_ugreen.get("fps", 30),
+        )
         print("=" * 55)
-        print("  Hand-in-cup 检测测试")
+        print("  Hand-in-cup 检测测试 (纯 RGB)")
         print("  YOLOv8m (cup) + MediaPipe Hands (21 landmarks)")
-        print("  landmarks-in-bbox 计分制 + 深度辅助")
+        print("  landmarks-in-bbox 计分制")
         print("  按 'q' 退出")
         print("=" * 55)
 
         try:
             while True:
-                color, depth_img, depth_cmap, depth_frame = runner.get_frames()
+                color = cam.read()[0]
                 if color is None:
                     continue
 
-                self.update(color, depth_frame)
+                self.update(color)
                 display = self.draw_visualization(color)
 
-                # ---- 深度状态 (仅实时模式) ----
-                dep_str = f"depth:{'OK' if self._last_depth_ok else '--'}" if self._last_cup_bbox else ""
-                if dep_str:
-                    cv2.putText(display, dep_str, (10, 55),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (0, 255, 0) if self._last_depth_ok else (128, 128, 128), 1)
-
-                # ---- 并排显示 ----
-                if depth_cmap is not None and display.shape == depth_cmap.shape:
-                    panel = np.hstack((display, depth_cmap))
-                else:
-                    panel = display
-                cv2.imshow("HandInCup Test", panel)
+                cv2.imshow("HandInCup Test", display)
 
                 if cv2.waitKey(25) & 0xFF == ord("q"):
                     print("[INFO] 用户按 q 退出")
@@ -836,7 +766,7 @@ class HandInCupDetector:
             import traceback
             traceback.print_exc()
         finally:
-            runner.stop()
+            cam.release()
             cv2.destroyAllWindows()
             print("[INFO] 已退出")
 
@@ -846,27 +776,29 @@ class HandInCupDetector:
 # ============================================================
 
 # ============================================================
-#  杯 ROI 标定 (鼠标框选 + 深度测量 → 写入 config.yaml)
+#  杯 ROI 标定 (鼠标框选 → 写入 config.yaml)
 # ============================================================
 
 def calibrate_cup_roi():
-    """Camera B 实时画面 + 鼠标框选杯区域 + 测量 ROI 中心深度.
+    """UGREEN Camera 实时画面 + 鼠标框选杯区域.
 
     操作:
-      鼠标拖拽框选 ROI → 画面显示深度值 → 按 s 保存 → 按 r 重选 → 按 q 退出.
+      鼠标拖拽框选 ROI → 按 s 保存 → 按 r 重选 → 按 q 退出.
     保存内容:
       - cup_roi_fallback: 框选的 bbox
-      - cup_depth_expected: ROI 中心的 5×5 中值深度
+      (纯 RGB, 不测量深度 — cup_depth_expected 需手动填入 config)
     """
     _cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     with open(_cfg_path, "r", encoding="utf-8") as f:
         _cfg = yaml.safe_load(f)
 
-    class _CalibRunner(BaseRealSenseDetector):
-        USE_YOLO_WORLD = False; USE_SAM = False
-        LOG_NAME = "hand_in_cup_calib.log"; TARGET_CLASS_ID = 0
-
-    runner = _CalibRunner(config_dict=_cfg)
+    _ugreen = _cfg.get("ugreen", {})
+    cam = UGreenCamera(
+        camera_id=_ugreen.get("camera_id", 1),
+        width=_ugreen.get("width", 1920),
+        height=_ugreen.get("height", 1080),
+        fps=_ugreen.get("fps", 30),
+    )
 
     roi = {"x1": 0, "y1": 0, "x2": 0, "y2": 0, "drawing": False}
 
@@ -886,14 +818,14 @@ def calibrate_cup_roi():
     cv2.setMouseCallback("Cup ROI Calibration", on_mouse)
 
     print("=" * 55)
-    print("  杯 ROI 标定 + 深度测量")
-    print("  鼠标拖拽框选杯区域 → s 保存(含深度) → r 重选 → q 退出")
+    print("  杯 ROI 标定 (纯 RGB)")
+    print("  鼠标拖拽框选杯区域 → s 保存 → r 重选 → q 退出")
     print("=" * 55)
 
     saved = False
     try:
         while True:
-            color, _, _, depth_frame = runner.get_frames()
+            color = cam.read()[0]
             if color is None:
                 continue
             h, w = color.shape[:2]
@@ -906,27 +838,11 @@ def calibrate_cup_roi():
                 rx2, ry2 = max(x1, x2), max(y1, y2)
                 cv2.rectangle(display, (rx1, ry1), (rx2, ry2), (0, 255, 0), 2)
 
-                # 测量 ROI 中心深度
                 cx, cy = (rx1 + rx2) // 2, (ry1 + ry2) // 2
                 cv2.drawMarker(display, (cx, cy), (0, 255, 0), cv2.MARKER_CROSS, 8, 1)
-                depths = []
-                if depth_frame is not None:
-                    for dy in range(-2, 3):
-                        for dx in range(-2, 3):
-                            py, px = cy + dy, cx + dx
-                            if 0 <= py < h and 0 <= px < w:
-                                dd = depth_frame.get_distance(px, py)
-                                if 0 < dd < 2.0:
-                                    depths.append(dd)
-                if depths:
-                    median_z = float(np.median(depths))
-                    cv2.putText(display,
-                                f"ROI:({rx1},{ry1})-({rx2},{ry2}) {rx2-rx1}x{ry2-ry1}  Z={median_z:.3f}m",
-                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                else:
-                    cv2.putText(display,
-                                f"ROI:({rx1},{ry1})-({rx2},{ry2}) {rx2-rx1}x{ry2-ry1}  Z=N/A",
-                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                cv2.putText(display,
+                            f"ROI:({rx1},{ry1})-({rx2},{ry2}) {rx2-rx1}x{ry2-ry1}",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             else:
                 cv2.putText(display, "Drag mouse to select cup ROI", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
@@ -948,31 +864,15 @@ def calibrate_cup_roi():
                 if rx1 == rx2 or ry1 == ry2:
                     print("[WARN] 未框选 ROI, 请先用鼠标拖拽框选杯区域")
                     continue
-                # 测量深度
-                cxs, cys = (rx1 + rx2) // 2, (ry1 + ry2) // 2
-                calib_depths = []
-                if depth_frame is not None:
-                    for dy in range(-2, 3):
-                        for dx in range(-2, 3):
-                            py, px = cys + dy, cxs + dx
-                            if 0 <= py < h and 0 <= px < w:
-                                dd = depth_frame.get_distance(px, py)
-                                if 0 < dd < 2.0:
-                                    calib_depths.append(dd)
-                calib_z = float(np.median(calib_depths)) if calib_depths else 0.0
 
-                # 写入 config.yaml
-                hic = _cfg.setdefault("hand_in_cup", {})
-                hic["cup_roi_fallback"] = {
+                # 写入 config.yaml (仅 bbox, 无深度)
+                _cfg["cup_roi_fallback"] = {
                     "enabled": True,
                     "x1": rx1, "y1": ry1, "x2": rx2, "y2": ry2,
                 }
-                if calib_z > 0:
-                    hic["cup_depth_expected"] = round(calib_z, 3)
                 with open(_cfg_path, "w", encoding="utf-8") as f:
                     yaml.dump(_cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
                 print(f"[SAVE] cup_roi_fallback: ({rx1},{ry1})-({rx2},{ry2})")
-                print(f"[SAVE] cup_depth_expected: {calib_z:.3f}m")
                 print(f"[SAVE] → {_cfg_path}")
                 saved = True
                 break
@@ -984,7 +884,7 @@ def calibrate_cup_roi():
         import traceback
         traceback.print_exc()
     finally:
-        runner.stop()
+        cam.release()
         cv2.destroyAllWindows()
         if saved:
             print("[INFO] 标定完成!")

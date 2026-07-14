@@ -95,10 +95,11 @@ def main():
     ctx.hand_in_cup_detector = HandInCupDetector()
 
     # ---- [4] Camera B PersonDetector (全生命周期, 主循环统一管理) ----
-    print("[INFO] 启动 PersonDetector (Camera B)...")
+    print("[INFO] 启动 PersonDetector (UGREEN Camera B)...")
     ctx.person_detector = PersonDetector(
+        camera_id=eye_to_hand_cfg.get("ugreen", {}).get("camera_id", 1),
         config_dict=eye_to_hand_cfg,
-        serial_number=eye_to_hand_serial,
+        start_camera=False,
     )
 
     # ---- [5] 注册状态机 ----
@@ -115,13 +116,13 @@ def main():
     try:
         while not ctx.stop_event.is_set():
             # ============================================================
-            # Camera B: 帧采集 (PersonDetector pipeline, 全生命周期)
+            # Camera B: 帧采集 (UGREEN Camera, 全生命周期)
             # ============================================================
             pd = ctx.person_detector
             if pd is not None:
                 try:
-                    color_b, depth_b, depth_cmap_b, depth_frame_b = pd.get_frames()
-                    ctx.frames_b = (color_b, depth_b, depth_cmap_b, depth_frame_b)
+                    color_b = pd.get_frames()[0]
+                    ctx.frames_b = (color_b,)
                 except Exception as e:
                     print(f"[WARN] Camera B 获取帧异常: {e}")
                     ctx.frames_b = None
@@ -131,7 +132,7 @@ def main():
             # ---- 人就位检测 (GREETING 完成后启动, READY 时停止) ----
             if ctx.run_seated_detection and ctx.frames_b is not None:
                 color_b = ctx.frames_b[0]
-                if color_b is not None and pd is not None and pd.is_chair_calibrated:
+                if color_b is not None and pd is not None and pd.has_chair:
                     seated = pd.detect_person_seated(color_b)
                     if seated is not None:
                         ctx.is_person_seated = seated["is_seated"]
@@ -142,9 +143,9 @@ def main():
                     ctx.hand_on_cup = False
                     print("[INFO] HandInCup 超时 5s")
                 elif ctx.frames_b is not None:
-                    color_b, _, _, depth_frame_b = ctx.frames_b
-                    if color_b is not None and depth_frame_b is not None:
-                        ctx.hand_in_cup_detector.update(color_b, depth_frame_b)
+                    color_b = ctx.frames_b[0]
+                    if color_b is not None:
+                        ctx.hand_in_cup_detector.update(color_b)
                         ctx.hand_on_cup = ctx.hand_in_cup_detector.is_hand_on_cup
 
             # ============================================================
@@ -170,9 +171,9 @@ def main():
 
                     pd2 = ctx.person_detector
                     if pd2 is not None:
-                        if not pd2.is_chair_calibrated:
-                            cv2.putText(vis_b, "Chair: calibrating...", (10, 55),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+                        if not pd2.has_chair:
+                            cv2.putText(vis_b, "Chair: --", (10, 55),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 2)
                         elif ctx.run_seated_detection:
                             status = "SEATED" if ctx.is_person_seated else "waiting"
                             s_color = (0, 255, 0) if ctx.is_person_seated else (0, 165, 255)

@@ -7,8 +7,8 @@
 | 语言 | Python 3.11+ |
 | 深度学习 | PyTorch 2.x (CUDA 12.6), Ultralytics YOLOv8 / YOLOv8-Pose |
 | 计算机视觉 | OpenCV, NumPy, SAM2 |
-| 3D 处理 | Open3D, PointNet++, pyrealsense2 |
-| 通信 | TCP socket, USB 串口 (PySerial) |
+| 3D 处理 | Open3D, PointNet++, pyrealsense2 (仅 Camera A) |
+| 通信 | TCP socket, USB 串口 (PySerial), OpenCV VideoCapture (Camera B) |
 | 配置 | PyYAML |
 
 ## 开发环境

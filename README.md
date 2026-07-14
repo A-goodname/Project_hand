@@ -49,8 +49,8 @@ pip install -r requirements.txt
 | `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
 | `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
 | `Estun/__init__.py` | Estun 包标记文件 |
-| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector + PersonStabilizer)、3D→1D 人体标定工具、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+MediaPipe Hands) |
-| `Orchestrator/` | **双相机流程编排**：3 状态状态机 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)、Phase 0 打招呼 (TCP 8600, 速度插值挥手+压力配置化) + Phase A-D 抓取递送 (TCP 8080)、HandInCup 判定、双相机主循环 |
+| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector)、椅子标定 → 人就位判定、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+MediaPipe Hands)、**UGREEN Camera B 适配** (camera.py, 纯 RGB) |
+| `Orchestrator/` | **双相机流程编排**：3 状态状态机 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)、Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)、HandInCup 判定、双相机主循环 |
 | `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
 | `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
 | `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
@@ -122,6 +122,40 @@ pip install -r requirements.txt
 2. 设置 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` 切换倒水角度
 3. 示教数据按角度索引 (10/15/20/30) + back/left 分模式存储
 
+### 双相机全流程 (Orchestrator) 快速开始
+
+1. 连接 **Camera A** (RealSense D435i, serial `342222071364`) 和 **Camera B** (UGREEN Camera 1080P)
+2. 首次使用确认 `EyeToHand/config.yaml` → `ugreen.camera_id` (通常为 1)，分辨率 1920×1080@30fps
+3. **首次使用必须标定杯 ROI 回退区域** (见下方)
+4. 修改 `Estun/estun_config.yaml` → `host`、`hand.port`
+5. 运行 `python Orchestrator/main.py`
+
+### Camera B 杯 ROI 标定 (UGREEN 替换后必须执行)
+
+UGREEN Camera 无深度数据，HandInCup 纯 RGB 判定。YOLO 检测不到杯 (class 41) 时回退到固定 ROI。
+
+```bash
+python EyeToHand/hand_in_cup.py --calibrate-roi
+```
+
+1. 确保 UGREEN Camera 对准杯放置区域
+2. 鼠标拖拽框选杯所在的固定区域
+3. 按 `s` 保存 → 写入 `EyeToHand/config.yaml` → `cup_roi_fallback`
+4. 按 `r` 重选，按 `q` 退出
+
+### PersonDetector / HandInCup 独立测试
+
+```bash
+# 椅子标定 + 人就位检测
+python EyeToHand/person_detector.py
+
+# HandInCup 实时检测
+python EyeToHand/hand_in_cup.py
+
+# HandInCup 实时诊断 (按 d 诊断当前帧)
+python EyeToHand/hand_in_cup.py --diagnose-live
+```
+
 ## 配置说明
 
 所有配置通过YAML文件管理，无需改代码：
@@ -145,7 +179,10 @@ pip install -r requirements.txt
 - **调整水杯偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `cup_grasp.gripper_offset.t_cup_offset` (back 模式) 或 `t_cup_offset_left` (left 模式)
 - **P3 倒水角度切换** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` (10/15/20/30)
 - **P3 示教偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.back` / `.left` 各角度 `t_offset` 和 `r_abc`
-- **眼在手外人体检测** → 修改 `EyeToHand/config.yaml` 中的 `model`、`stabilizer`、`delivery.*` 参数
+- **Camera B UGREEN 相机** → 修改 `EyeToHand/config.yaml` → `ugreen` 段 (camera_id/width/height/fps)
+- **眼在手外椅子标定** → 修改 `EyeToHand/config.yaml` → `chair` 段 (conf_threshold / stabilize_frames / overlap_threshold / seated_stable_frames)
+- **眼在手外人体检测** → 修改 `EyeToHand/config.yaml` 中的 `model`、`delivery.*` 参数
+- **杯 ROI 回退标定** → 运行 `python EyeToHand/hand_in_cup.py --calibrate-roi` 鼠标框选杯区域
 - **眼在手外标定** → 运行 `EyeToHand/calibration/calibrate.py` 采集 N 点拟合 `a,b,c,d` (3D→1D 人体标定, 暂未接入)
 
 ## 核心流程
@@ -207,8 +244,8 @@ TCP 8080 pack_three                 TCP 8600 Phase 0 打招呼
   IDLE ──(人就位)──→ GREETING ──(Phase 0 完成)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
 
 各状态职责:
-  IDLE:                   Camera B 椅子标定 → 人就位检测 → 触发 GREETING
-  GREETING:               Camera A 独立 pipeline + TCP 8600 Phase 0 (4步: 招手→挥手→握手→Home)
+  IDLE:                   Camera B 关闭 → 直接 GREETING
+  GREETING:               Camera B 启动 + 人就位检测启动; Camera A 独立 pipeline + TCP 8600 Phase 0
   HANDLE_GRASP_AND_POUR:  单 TCP Session 8080 全流程:
     Phase A: Robot → PC  [x,y,z,A,B,C]       初始末端位姿 (m/deg)
     Phase B: PC → Robot  <H_P1>[H_P2]{H_P3}  Handle 三组位姿
@@ -221,11 +258,11 @@ TCP 8080 pack_three                 TCP 8600 Phase 0 打招呼
 ```
 
 - **Camera A** (眼在手上, serial `342222071364`, `RealSense_R/` 手动像素映射): Handle+Cup 6D 检测
-- **Camera B** (眼在手外, serial `819612071851`, `RealSense/` rs.align): 人体检测 + 椅子标定 + 人就位 + HandInCup 检测
+- **Camera B** (眼在手外, **UGREEN Camera 1080P**, `EyeToHand/camera.py` OpenCV 封装): 人体检测 + 椅子标定 + 人就位 + HandInCup 检测 (纯 RGB, 无深度)
 - **Cup P3**: XYZ/ABC 全示教固定值 (3D→1D 人体标定工具就绪, 暂未接入)
-- **HandInCup**: YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪), landmarks-in-bbox 计分制 + curled gate
+- **HandInCup**: YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪), landmarks-in-bbox 计分制 + curled gate (score≥5 绕过 curl), **纯 RGB 判定**
 - **RELEASE 双语义**: READY 之前 → 松把手; READY 之后 → HandInCup 判定触发 (hand_in_cup_active 标志区分)
-- 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py` + `EyeToHand/person_detector.py`
+- 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py` + `EyeToHand/person_detector.py` + `EyeToHand/camera.py`
 
 ## 关键概念
 
@@ -239,10 +276,12 @@ TCP 8080 pack_three                 TCP 8600 Phase 0 打招呼
 - **扫描线分离**：按 `handle_side` 取最外段（right=最右段/left=最左段），底部+顶部双向剔除 x 中心偏离行
 - **Cup handle_side 模式**：`RealSense_R/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + 角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left
 - **P3 多角度示教**：`estun_config.yaml` 中 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30)，`pour_angle` 切换当前使用角度，加载自动转字符串键防整数键 bug
-- **双相机体系**：两台 RealSense D435i，Camera A (眼在手上, serial 342222071364, `RealSense_R/` 手动像素映射) + Camera B (眼在手外, serial 819612071851, `RealSense/` rs.align)
+- **双相机体系**：Camera A (眼在手上, serial 342222071364, `RealSense_R/` 手动像素映射) + Camera B (眼在手外, **UGREEN Camera 1080P**, `EyeToHand/camera.py` OpenCV 封装, 替代原 D435i serial 819612071851)
 - **Orchestrator 状态机**：3 状态闭环 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)，Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)，人就位触发 + 椅子标定
 - **Cup P3 递送位姿**：XYZ/ABC 来自 `EyeToHand/config.yaml` delivery 段全示教 (3D→1D 人体标定工具就绪, 暂未接入)
-- **HandInCup 检测**：YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪)，landmarks-in-bbox 计分制 + curled gate；独立模块 `EyeToHand/hand_in_cup.py`
+- **HandInCup 检测**：YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks)，landmarks-in-bbox 计分 + curled gate (score≥5 绕过)；`bbox_margin`/`curled_threshold` 分辨率相关；独立模块 `EyeToHand/hand_in_cup.py`
+- **UGREEN Camera B**：纯 RGB 1920×1080@30fps，`EyeToHand/camera.py` OpenCV VideoCapture 封装，分辨率通过 `EyeToHand/config.yaml` → `ugreen` 段可配置
+- **杯 ROI 回退标定**：YOLO 检测不到杯时使用固定 ROI (`cup_roi_fallback`)，运行 `python EyeToHand/hand_in_cup.py --calibrate-roi` 鼠标框选标定
 - **RELEASE 双语义**：`hand_in_cup_active` 标志区分 — Phase C 松把手 vs Phase D HandInCup 判定
 - **新协议指令**：`READY` (Robot→PC, 到达 P3 启动 HandInCup)、`CONTINUE` `<0,0,0,0,0,0>` (PC→Robot, TRUE 松手退避)、`ABORT` `[0,0,0,0,0,0]` (PC→Robot, FALSE 放回杯子)
 - **CRP 已知限制**：MovJ widget 的 ZONE datavar 在机械臂 Lua 运行时无法正确解析 → 全部使用 MovL

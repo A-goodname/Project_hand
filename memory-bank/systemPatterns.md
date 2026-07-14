@@ -3,11 +3,11 @@
 ## 系统架构
 
 ```text
-Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
+Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 1080P)
         ↓                                    ↓
-  Handle+Cup 6D 检测                   PersonDetector (人体X)
+  Handle+Cup 6D 检测                   PersonDetector (椅子+人就位)
         ↓                                    ↓
-  手眼标定 (cam→ee)                    全示教 delivery.X_TEACH
+  手眼标定 (cam→ee)                    HandInCup (纯RGB判定)
         ↓                                    ↓
   工具偏移补偿                              ──→ Cup P3 X
         ↓                               YZ/ABC ← config 预示教
@@ -78,16 +78,21 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, rs.align)
 
 - **杯检测**: YOLOv8m (class=41) → 失败回退固定 ROI (`cup_roi_fallback`)
 - **手检测**: MediaPipe Hands (21 landmarks, 帧间跟踪, RunningMode.VIDEO)
-- **判定**: landmarks-in-bbox 计分制 — 最近手的 wrist(×2) + MCP(×1) + TIP(×1) ≥ 2 (bbox_margin=20px)
-- **curled gate**: wrist 在 bbox 内→跳过; wrist 不在→需 curled ≥ 2 (防开掌划过误触发)
-- **深度辅助**: YOLO 检测到杯→画面采样; fallback→cup_depth_expected 预标定值; diff < depth_tolerance(0.10m)
+- **判定**: landmarks-in-bbox 计分制 — 最近手的 wrist(×2) + MCP(×1) + TIP(×1)
+  - wrist 在框内 → score ≥ 2 即 hit
+  - wrist 在框外 → score ≥ 5 即 hit (多手指在框内); 否则需 curled ≥ 2
+- **curled_threshold**: 35px (720p), bbox_margin: 40px (720p) — 分辨率相关
+- 纯 RGB 判定 (深度辅助已移除)
 - 独立文件 `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试 (`--calibrate-roi` 标定工具)
 
 ### PersonDetector / HandInCup 共用 Camera B Pipeline
 
-- `PersonDetector` 打开 Camera B pipeline
-- main loop 通过标志位 (`stop_person_detector` / `hand_in_cup_active`) 切换检测逻辑
-- Pipeline 始终保持运行, 帧来源不变
+- `PersonDetector` 打开 UGREEN Camera B (OpenCV VideoCapture)
+- Camera B 生命周期: IDLE 关 → GREETING enter 开 → HANDLE 继续
+- main loop 通过标志位 (`run_seated_detection` / `hand_in_cup_active`) 切换检测逻辑
+- 椅子检测: 每帧实时 YOLO, 取画面中心最近 (不锁定)
+- 人就位: 非对称阈值 (进10出5) + `_chair_baseline` 尺寸锚定 (面积差≤30%更新)
+- 纯 RGB 无深度 — HandInCup 判定仅依赖 landmarks-in-bbox 计分 + curled gate
 
 ### 状态机 — 3 状态闭环
 

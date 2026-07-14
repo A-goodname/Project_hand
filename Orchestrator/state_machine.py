@@ -305,13 +305,14 @@ class IdleHandler(StateHandler):
         super().__init__("IDLE")
 
     def on_enter(self, ctx: SharedContext):
-        # 启动 PersonDetector (若未启动)
+        # PersonDetector 由 main.py 全生命周期管理, 此处仅做兜底
         if ctx.person_detector is None:
-            serial = ctx.eye_to_hand_serial
-            print(f"[INFO] 启动 PersonDetector (serial: {serial})...")
+            cam_id = ctx.eye_to_hand_config.get("ugreen", {}).get("camera_id", 1)
+            print(f"[INFO] 启动 PersonDetector (camera_id={cam_id})...")
             ctx.person_detector = PersonDetector(
+                camera_id=cam_id,
                 config_dict=ctx.eye_to_hand_config,
-                serial_number=serial,
+                start_camera=False,
             )
         # 重置运行时标志
         ctx.hand_in_cup_active = False
@@ -320,25 +321,9 @@ class IdleHandler(StateHandler):
         ctx.greeting_complete.clear()
         ctx.run_seated_detection = False
         ctx.is_person_seated = False
-        print("[IDLE] 等待椅子标定...")
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        pd = ctx.person_detector
-        if pd is None:
-            return None
-        if ctx.frames_b is None:
-            return None
-        color, _, _, _ = ctx.frames_b
-        if color is None:
-            return None
-
-        # 椅子标定 (仅一次)
-        if not pd.is_chair_calibrated:
-            pd.calibrate_chair(color)
-            return None
-
-        # 标定完成 → 下一状态
-        print("[IDLE] 椅子标定完成 ✅ → GREETING")
+        # 直接进入 GREETING — Camera B 在此阶段才启动, 椅子/人就位在 GREETING 中检测
         return OrchestratorState.GREETING
 
     def on_exit(self, ctx: SharedContext):
@@ -393,6 +378,12 @@ class GreetingHandler(StateHandler):
         self._start(ctx)
         ctx.greeting_complete.clear()
 
+        # 启动 Camera B + 人就位检测 (GREETING 阶段开始, 人不在椅子附近)
+        if ctx.person_detector is not None:
+            ctx.person_detector.start_camera()
+        ctx.run_seated_detection = True
+        print("[GREETING] Camera B + 人就位检测已启动")
+
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
         # 非阻塞 accept + 预览
         self._accept_tcp(ctx)
@@ -404,9 +395,7 @@ class GreetingHandler(StateHandler):
 
     def on_exit(self, ctx: SharedContext):
         self._stop()
-        # 启动人就位检测 (主循环每帧调用 detect_person_seated)
-        ctx.run_seated_detection = True
-        print("[GREETING] 人就位检测已启动")
+        print("[GREETING] 退出")
 
     # ================================================================
     # 初始化 / 清理
