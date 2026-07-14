@@ -382,8 +382,10 @@ class Phase0Server:
                   f"(间隔: {GREET_WAVE_INTERVAL}s)...")
             for i in range(GREET_WAVE_CYCLES):
                 print(f"  {i+1}/{GREET_WAVE_CYCLES}")
-                _h.do_gesture(Gesture.HELLO_1, delay=GREET_WAVE_INTERVAL)
-                _h.do_gesture(Gesture.HELLO_2, delay=GREET_WAVE_INTERVAL)
+                _h.do_gesture(Gesture.HELLO_1, delay=0.5)
+                time.sleep(GREET_WAVE_INTERVAL / 2)
+                _h.do_gesture(Gesture.HELLO_2, delay=0.5)
+                time.sleep(GREET_WAVE_INTERVAL / 2)
 
             print("[Phase 0] RESET — 挥手结束, 复位")
             _h.do_gesture(Gesture.RESET, delay=0.5)

@@ -15,7 +15,12 @@ HandInCup curled gate 修复：score≥5 绕过握拳约束。
    - `bbox_margin: 20→40`（适配 720p）
    - config 标注 `[分辨率相关]` 注释
 
-2. **椅子实时检测 + 非对称阈值 + baseline 锚定** (2026-07-14):
+2. **挥手时序优化** (2026-07-14):
+   - `do_gesture(delay=0.5)` + `time.sleep(wave_interval/2)` 替代插值控制
+   - `wave_interval: 0.15→0.45` (匹配同事 hello_frame_delay)
+   - 每周期 ~1.45s
+
+3. **椅子实时检测 + 非对称阈值 + baseline 锚定** (2026-07-14):
    - 删除 `calibrate_chair()` 锁定逻辑 → 每帧实时检测椅子 (`_detect_chair_live`)
    - 非对称阈值：进 10 帧 / 出 5 帧立刻 False
    - `_chair_baseline` 锚定：仅 not person_near 时更新，person_near 时面积差 ≤30% 才更新 `_chair_ref`

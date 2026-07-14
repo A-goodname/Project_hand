@@ -562,16 +562,18 @@ class GreetingHandler(StateHandler):
                     print("[GREETING] 挥手被中断")
                     break
                 print(f"  {i+1}/{self._wave_cycles}")
-                _h.do_gesture(Gesture.HELLO_1, delay=self._wave_interval)
+                _h.do_gesture(Gesture.HELLO_1, delay=0.5)
+                time.sleep(self._wave_interval / 2)
                 if ctx.stop_event.is_set():
                     break
-                _h.do_gesture(Gesture.HELLO_2, delay=self._wave_interval)
+                _h.do_gesture(Gesture.HELLO_2, delay=0.5)
+                time.sleep(self._wave_interval / 2)
 
             print("[GREETING] RESET — 挥手结束, 复位")
             _h.do_gesture(Gesture.RESET, delay=0.5)
         else:
             print("[GREETING] 模拟挥手")
-            time.sleep(self._wave_cycles * self._wave_interval * 2)
+            time.sleep(self._wave_cycles * (0.5 + self._wave_interval / 2) * 2)
 
     def _read_hand_back_pressure(self):
         from Estun.utils_shared import _hand as _h
@@ -867,10 +869,7 @@ class HandleGraspAndPourHandler(StateHandler):
         self._c_teach = delivery.get("C_TEACH", 0.0)
         print(f"[INFO] 递送位姿 (全示教): X={self._x_teach:.3f} Y={self._y_teach:.3f} Z={self._z_teach:.3f} ABC=({self._a_teach:.1f},{self._b_teach:.1f},{self._c_teach:.1f})")
 
-        # ---- 灵巧手 (若 GREETING 已初始化则跳过) ----
-        if not is_hand_available():
-            hand_port = estun.get("hand", {}).get("port", "COM5")
-            init_hand(hand_port=hand_port, initial_gesture="RESET")
+        # ---- 灵巧手 (GREETING 已初始化, 不再重试使能) ----
         self._hand_available = is_hand_available()
 
         # ---- TCP 服务器 ----
