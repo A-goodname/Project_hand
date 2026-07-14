@@ -50,6 +50,8 @@
 - [x] pack_three / Orchestrator CRP / 同事 CRP
 - [x] READY/CONTINUE/ABORT 协议 + TranStrToCpos 括号约定
 - [x] RELEASE 双语义修复: hand_in_cup_active 标志区分 Phase C 松把手 vs Phase D 判定
+- [x] **CRP 一致性修复** (2026-07-14): orchestrator CRP 补全 SocketCreate(8080)/If/GetCurCPos + Phase D socket Socket1→Socket0
+- [x] **TXT 伪代码同步** (2026-07-14): v8 changelog + Phase 0 段 + 双 Socket 架构 + socket 引用统一
 
 ### 双相机体系
 - [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)
@@ -154,6 +156,13 @@
 - [x] 独立测试模式 `run()`: 椅子实时 + 就位状态可视化
 - [x] `is_chair_calibrated` → `has_chair`; `start_camera` 参数/方法
 
+### HandInCup 纯 RGB 精度评估
+- [x] 纯 RGB 判定精度验证通过 ✅ (2026-07-14)
+- [x] score≥5 绕过 curl 后误判率可接受 ✅ (2026-07-14)
+
+### UGREEN 720p 帧率确认
+- [x] YOLO+MediaPipe 在 1280×720 上的推理延迟可接受 ✅ (2026-07-14)
+
 ### EyeToHand 标定
 - [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
 - [x] result.yaml: {a,b,c,d} + detector.py: person_to_base_x()
@@ -165,7 +174,6 @@
 |------|------|
 | 🔴 UGREEN Camera B 杯 ROI 标定 | `python EyeToHand/hand_in_cup.py --calibrate-roi` |
 | 🔴 双相机全流程测试 | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
-| 🟡 HandInCup 纯 RGB 精度评估 | 无深度辅助后误判率验证 |
 | 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
 
 ## 已知问题

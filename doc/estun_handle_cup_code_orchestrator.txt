@@ -2,6 +2,18 @@ ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程:
 ============================================================
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
+=== v8 相比 v7 的关键变化 (2026-07-14) ===
+1. CRP Phase A-C 入口补全 3 个缺失 widget:
+   - SocketCreate(8080, Socket0) — Phase A-C 客户端 socket (原 v7 CRP 缺失, send/recv 引用悬空)
+   - If(socketflag != 0 -> return) — socket 创建失败保护
+   - GetCurCPos -> ptmquqjdjhbfh9hb — Phase A 初始位姿采集 (原 v7 CRP cpostostr 引用未赋值点)
+2. CRP Phase D socket 引用修正: 3 处 SocketSendStr/SocketReadStr 从 Socket1 → Socket0
+   - READY / RELEASE / CONTINUE-ABORT 现正确使用 Phase A-C 的 Socket0(8080)
+3. Phase 0 集成到 orchestrator CRP: 同一 .crp 文件含两个独立 Socket:
+   - Socket1(8600): Phase 0 打招呼 (ZHAOSHOU1/ZHAOSHOU2/WOSHOU/Home)
+   - Socket0(8080): Phase A-C 抓取 + Phase D HandInCup 判定
+4. TXT 新增 Phase 0 伪代码段
+
 === v7 相比 v6 的关键变化 (2026-07-13) ===
 1. 相机 Pipeline 生命周期重构:
    - Camera A: GREETING 独立 open→close; HANDLE Phase B 按需 open→pack_three→close
@@ -99,25 +111,69 @@ PC 端 RELEASE 处理逻辑 (state_machine.py):
 
 
 // ================================================================
-// [0] 建立 Socket 连接
+// [Phase 0] 打招呼 — Socket1 (port 8600)
+//    与 Orchestrator/state_machine.py GreetingHandler 配合
+//    4 步协议: ZHAOSHOU1 → ZHAOSHOU2 → WOSHOU → Home
 // ================================================================
-SocketCreat(socketflag)
+SetTool(0)
+SocketCreate(Socket1, 8600)     // Socket1: Phase 0 专用 (独立于 Phase A-C)
+GetCurCpos cur_pos
+socketstr = CposToStr(cur_pos, "mm", "deg")
+SocketSendStr(Socket1, socketstr)
+
+// Step 1: 发送当前位姿 → PC 回复 ZHAOSHOU1
+SocketReadStr(Socket1, tra, 10000)
+GH_ZHAOSHOU1 = TranStrToCpos(tra, "mm", "deg")
+MovL GH_ZHAOSHOU1               // → 招手位姿 1
+
+// Step 2: 确认到达 → 发送当前位姿 → PC YOLO 人检测 → 回复 ZHAOSHOU2
+GetCurCpos cur_pos
+socketstr = CposToStr(cur_pos, "mm", "deg") + "ZHAOSHOU1|"
+SocketSendStr(Socket1, socketstr)
+SocketReadStr(Socket1, tra, 130000)
+GH_ZHAOSHOU2 = TranStrToCpos(tra, "mm", "deg")
+MovL GH_ZHAOSHOU2               // → 招手位姿 2
+
+// Step 3: 确认到达 → PC 挥手 → 回复 WOSHOU
+GetCurCpos cur_pos
+socketstr = CposToStr(cur_pos, "mm", "deg") + "ZHAOSHOU2|"
+SocketSendStr(Socket1, socketstr)
+SocketReadStr(Socket1, tra, 30000)
+GH_WOSHOU = TranStrToCpos(tra, "mm", "deg")
+MovL GH_WOSHOU                  // → 握手位姿
+
+// Step 4: 确认到达 → PC 握手(压力→HAND_SHAKE→松手→RESET) → 回复 "Home"
+GetCurCpos cur_pos
+socketstr = CposToStr(cur_pos, "mm", "deg") + "WOSHOU|"
+SocketSendStr(Socket1, socketstr)
+SocketReadStr(Socket1, tra, 90000)
+MovL Home                       // → 回原点
+SocketClose(Socket1)            // Phase 0 结束, 关闭 8600
+
+Wait 1s
+Wait 1s
+
+// ================================================================
+// [Phase A-C 入口] 建立 Socket0 连接 (port 8080)
+//    与 Orchestrator/state_machine.py HandleGraspAndPourHandler 配合
+// ================================================================
+SocketCreate(Socket0, 8080)     // [v8] Socket0: Phase A-C + Phase D 共用
 if socketflag != 0
     return
 
 // ================================================================
-// [1] Phase A: 发送当前末端位姿 (仅一次)
+// [1] Phase A: 发送当前末端位姿 (仅一次, Socket0)
 // ================================================================
-GetCurCpos P0
-socketstr1 = CposTostr(P0)
-SocketSendStr(socketstr1)
+GetCurCpos P0                   // [v8] GetCurCPos 在此, 填充 P0 后再格式化
+socketstr1 = CposTostr(P0, "m", "deg")
+SocketSendStr(Socket0, socketstr1)
 
 // ================================================================
 // [2] Phase B: 等待 Handle H_P1/H_P2/H_P3
 // ================================================================
 strflag = 1
 while strflag == 1
-    SocketReadStr(sock, socketstr2, 5000, socketflag, "", "")
+    SocketReadStr(Socket0, socketstr2, 5000, socketflag, "", "")
     if socketflag == 0
         H_P1 = TranStrToCpos(socketstr2, ",", H_P1, strflag, "<", ">", "deg", "m")
         H_P2 = TranStrToCpos(socketstr2, ",", H_P2, strflag, "[", "]", "deg", "m")
@@ -129,10 +185,10 @@ while strflag == 1
 // [3] Handle 运动 (含 P4 预倒水点 — v7 Y后退)
 // ================================================================
 MovL H_P2                       // 到预抓取点
-SocketSendStr('PREGRIP')        // → PC: 灵巧手 PREGRIP
+SocketSendStr(Socket0, 'PREGRIP')        // → PC: 灵巧手 PREGRIP
 Wait 1s
 MovL H_P1                       // 到抓取点
-SocketSendStr('GRIPDONE')       // → PC: 灵巧手 GRIPDONE
+SocketSendStr(Socket0, 'GRIPDONE')       // → PC: 灵巧手 GRIPDONE
 Wait 1s
 // --- 计算 P4 (v7: P3位置Y后退 + P1姿态) ---
 // DCp1.xyz = P3.xyz - P1.xyz    (XZ偏移 → P4.XZ=P3.XZ)
@@ -159,10 +215,10 @@ Wait 5s                         // 倒水延时
 MovL H_P4                       // → 预倒水点 (退避)
 Wait 1s
 MovL H_P1                       // 回到抓取点
-SocketSendStr('PREGRIP')        // → PC: 灵巧手 PREGRIP
+SocketSendStr(Socket0, 'PREGRIP')        // → PC: 灵巧手 PREGRIP
 Wait 1s
 MovL H_P2                       // 回到预抓取点
-SocketSendStr('RESET')          // → PC: 灵巧手 RESET
+SocketSendStr(Socket0, 'RESET')          // → PC: 灵巧手 RESET
 Wait 1s
 // --- Home: Handle 与 Cup 之间的安全过渡点 ---
 MovL Home
@@ -170,10 +226,10 @@ MovL Home
 // ================================================================
 // [4] Phase C: 请求并等待 Cup C_P1/C_P2/C_P3
 // ================================================================
-SocketSendStr('CUP')            // → PC: 请求 Cup 位姿
+SocketSendStr(Socket0, 'CUP')            // → PC: 请求 Cup 位姿
 strflag = 1
 while strflag == 1
-    SocketReadStr(sock, socketstr3, 5000, socketflag, "", "")
+    SocketReadStr(Socket0, socketstr3, 5000, socketflag, "", "")
     if socketflag == 0
         C_P1 = TranStrToCpos(socketstr3, ",", C_P1, strflag, "<", ">", "deg", "m")
         C_P2 = TranStrToCpos(socketstr3, ",", C_P2, strflag, "[", "]", "deg", "m")
@@ -184,10 +240,10 @@ while strflag == 1
 // [5] Cup 运动 — 抓杯 → 递送
 // ================================================================
 MovL C_P2                       // 到预抓取点
-SocketSendStr('RELEASE')        // → PC: 灵巧手 RELEASE (张开)
+SocketSendStr(Socket0, 'RELEASE')        // → PC: 灵巧手 RELEASE (张开)
 Wait 1s
 MovL C_P1                       // 到抓取点
-SocketSendStr('GRIP')           // → PC: 灵巧手 GRIP (夹紧)
+SocketSendStr(Socket0, 'GRIP')           // → PC: 灵巧手 GRIP (夹紧)
 Wait 1s
 MovL C_P3                       // 到递杯位置
 Wait 3s
@@ -200,11 +256,11 @@ Wait 3s
 // ================================================================
 
 // --- [6a] 发送 READY → PC 启动 HandInCup 检测 ---
-SocketSendStr('READY')          // → PC: 到达递送点, 启动 HandInCup (hand_in_cup_active=True)
+SocketSendStr(Socket0, 'READY')          // → PC: 到达递送点, 启动 HandInCup (hand_in_cup_active=True)
 Wait 2s                         // 留给 PC 运行 HandInCup 检测的时间 (给人抓杯+检测稳定时间)
 
 // --- [6b] 发送 RELEASE → PC 判定 ---
-SocketSendStr('RELEASE')        // → PC: 请求判定 HandInCup
+SocketSendStr(Socket0, 'RELEASE')        // → PC: 请求判定 HandInCup
 
 // --- [6c] 等待 PC 返回 CONTINUE 或 ABORT ---
 // PC 端响应格式:
@@ -215,7 +271,7 @@ strflag_cont = 1   // 初始=1 (失败)
 strflag_abort = 1  // 初始=1 (失败)
 strflag = 1
 while strflag == 1
-    SocketReadStr(sock, socketstr5, 5000, socketflag, "", "")
+    SocketReadStr(Socket0, socketstr5, 5000, socketflag, "", "")
     if socketflag == 0
         // 尝试解析 <...> 格式 (CONTINUE 标记)
         DummyCpos = TranStrToCpos(socketstr5, ",", DummyCpos, strflag_cont, "<", ">", "deg", "m")
@@ -238,10 +294,10 @@ C_P4 = CposOffset(C_P1, DCp2)   // P4 = P1 位姿 + Z偏移到递送高度
 if strflag_cont == 0
     MovL C_P4                   // → 安全退避点 (上升到递送高度)
     Wait 1s
-    SocketSendStr('RESET')      // → PC: 灵巧手 RESET
+    SocketSendStr(Socket0, 'RESET')      // → PC: 灵巧手 RESET
     Wait 1s
     MovL Home                   // → 回原点
-    SocketClose
+    SocketClose(Socket0)
 endif
 
 // --- [7b] ABORT 分支: 无人接杯 → 保持夹紧 → 放回原位 ---
@@ -251,14 +307,14 @@ if strflag_abort == 0
     // 注意: 此时灵巧手仍然夹着杯子 (PC 端未松手)
     MovL C_P1                   // → 回到抓取点 (放回水杯)
     Wait 1s
-    SocketSendStr('RELEASE')    // → PC: 灵巧手 RELEASE (松杯) — 第二次 RELEASE
+    SocketSendStr(Socket0, 'RELEASE')    // → PC: 灵巧手 RELEASE (松杯) — 第二次 RELEASE
     Wait 1s
     MovL C_P2                   // → 回到预抓取点 (安全退避)
     Wait 1s
-    SocketSendStr('RESET')      // → PC: 灵巧手 RESET
+    SocketSendStr(Socket0, 'RESET')      // → PC: 灵巧手 RESET
     Wait 1s
     MovL Home                   // → 回原点
-    SocketClose
+    SocketClose(Socket0)
 endif
 
 // ================================================================
@@ -269,6 +325,12 @@ endif
 // ================================================================
 // 附注: ESTUN 示教器实现注意事项
 // ================================================================
+//
+// 0. 双 Socket 架构 [v8]:
+//    Socket1(8600) — Phase 0 打招呼 (创建→使用→关闭)
+//    Socket0(8080) — Phase A-C 抓取 + Phase D 判定 (创建→使用→CONTINUE/ABORT 各分支内关闭)
+//    两个 Socket 在同一个 .crp 文件中顺序执行, Phase 0 完成后 SocketClose(Socket1),
+//    随后 SocketCreate(Socket0, 8080) 创建 Phase A-C 连接.
 //
 // 1. CONTINUE/ABORT 响应解析:
 //    PC 端发送格式化的位姿字符串:

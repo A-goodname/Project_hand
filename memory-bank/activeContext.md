@@ -2,14 +2,20 @@
 
 ## 当前焦点
 
-**Camera B 从 D435i → UGREEN Camera 720P 替换完成 + HandInCup 纯 RGB 调试完成。**
-椅子实时检测 + 非对称阈值 + baseline 锚定，人就位检测可通过。
-HandInCup curled gate 修复：score≥5 绕过握拳约束。
+**Camera B D435i→UGREEN 替换完成。 P1/P2 ✅。 CRP 协议一致性验证 ✅。**
+双 Socket 架构确认 (8600+8080)。Phase 0/Phase A-C 两份 CRP+Python 对齐。
 待实机双相机全流程测试。
 
 ## 最近变更
 
-1. **HandInCup curled gate 修复** (2026-07-14):
+1. **CRP 协议一致性修复 — orchestrator CRP 补全 + TXT 更新** (2026-07-14):
+   - orchestrator CRP Phase A-C 入口补全 3 个 widget: `SocketCreate(8080, Socket0)` / `If(socketflag)` / `GetCurCPos`
+   - Phase D 3 处 socket 引用修正: `Socket1→Socket0`
+   - 双 Socket 架构验证: Socket1(8600, Phase 0) + Socket0(8080, Phase A-C+D)
+   - Phase 0 / Phase A-C(Cup P3前) 两份 CRP + 两份 Python 端协议对齐确认
+   - TXT 伪代码同步更新: 新增 v8 changelog + Phase 0 段 + socket 引用统一
+
+2. **HandInCup curled gate 修复** (2026-07-14):
    - 手腕在框外 + score≥5（多手指在框内）→ 直接判定 hit，跳过 curl 检测
    - `curled_threshold: 25→35`（适配 720p）
    - `bbox_margin: 20→40`（适配 720p）
@@ -45,5 +51,3 @@ HandInCup curled gate 修复：score≥5 绕过握拳约束。
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
 | 🔴 P0 | **双相机全流程测试** | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
-| 🟡 P1 | **HandInCup 纯 RGB 精度** | 确认 score≥5 绕过 curl 后的误判率 |
-| 🟢 P2 | **UGREEN 720p 帧率确认** | YOLO+MediaPipe 在 1280×720 上的推理延迟 |
