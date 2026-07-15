@@ -17,6 +17,11 @@ Orchestrator — 系统入口
 退出: 按 'q' 键或 Ctrl+C
 """
 
+# 禁用 MediaPipe clearcut 遥测 — 必须在任何 MediaPipe import 之前
+import os as _os
+_os.environ["GLOG_minloglevel"] = "3"
+_os.environ["GLOG_logtostderr"] = "0"
+
 import os
 import sys
 import threading
@@ -32,7 +37,6 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入 ----
-from RealSense.realsense_shared import load_camera_serial  # Camera B (新相机, rs.align)
 from RealSense_R.realsense_shared import load_camera_serial as load_camera_a_serial  # Camera A (旧相机)
 from Orchestrator.state_machine import (
     SharedContext,
@@ -44,6 +48,7 @@ from Orchestrator.state_machine import (
 )
 from EyeToHand.hand_in_cup import HandInCupDetector
 from EyeToHand.person_detector import PersonDetector
+from Orchestrator.logger import init_log, session_log, close_log
 
 
 def load_yaml(path):
@@ -68,15 +73,15 @@ def main():
     print("=" * 60)
     print()
 
+    # ---- [0] 初始化日志 ----
+    init_log("orchestrator")
+    session_log("Orchestrator 启动")
+
     # ---- [1] 加载配置 ----
     print("[INFO] 加载配置...")
     realsense_cfg = load_yaml("RealSense_R/config.yaml")         # Camera A (Handle+Cup, 旧相机)
     estun_cfg = load_yaml("Estun/estun_config.yaml")["estun"]
     eye_to_hand_cfg = load_yaml("EyeToHand/config.yaml")
-    eye_to_hand_serial = load_camera_serial(
-        os.path.join(_project_root, "EyeToHand/D435i_info.yaml")
-    )
-    print(f"[INFO] Camera B serial: {eye_to_hand_serial}")
 
     # ---- [2] 构建共享上下文 ----
     camera_a_serial = load_camera_a_serial(
@@ -88,7 +93,7 @@ def main():
         eye_to_hand_config=eye_to_hand_cfg,
         estun_config=estun_cfg,
         realsense_config=realsense_cfg,
-        eye_to_hand_serial=eye_to_hand_serial,
+        eye_to_hand_serial="",  # Camera B 已改用 UGREEN, 不再需要 serial
         camera_a_serial=camera_a_serial,
     )
 
@@ -115,6 +120,8 @@ def main():
     cv2.namedWindow("Orchestrator - Camera A (Eye-in-Hand)", cv2.WINDOW_NORMAL)
 
     try:
+        _pd_was_seated = False       # 去重日志
+
         while not ctx.stop_event.is_set():
             # ============================================================
             # Camera B: 帧采集 (UGREEN Camera, 全生命周期)
@@ -133,16 +140,24 @@ def main():
             # ---- 人就位检测 (GREETING 完成后启动, READY 时停止) ----
             if ctx.run_seated_detection and ctx.frames_b is not None:
                 color_b = ctx.frames_b[0]
-                if color_b is not None and pd is not None and pd.has_chair:
+                if color_b is not None and pd is not None:
                     seated = pd.detect_person_seated(color_b)
                     if seated is not None:
-                        ctx.is_person_seated = seated["is_seated"]
+                        new_seated = seated["is_seated"]
+                        if new_seated != _pd_was_seated:
+                            session_log(f"人就位: {new_seated} "
+                                        f"(stable={seated.get('seated_stable',0)}/{seated.get('seated_required',0)})")
+                            _pd_was_seated = new_seated
+                        ctx.is_person_seated = new_seated
+                        if new_seated:
+                            ctx.run_seated_detection = False  # 人就位确认, 停止Camera B YOLO
 
             # ---- Hand-in-cup 检测 (READY 后 ≤5s, TRUE 提前结束) ----
             if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
                 if time.time() - ctx.hand_in_cup_start_time > 5.0:
-                    ctx.hand_on_cup = False
-                    print("[INFO] HandInCup 超时 5s")
+                    if ctx.hand_on_cup is not False:  # 首次超时
+                        ctx.hand_on_cup = False
+                        session_log("HandInCup 超时 5s")
                 elif ctx.frames_b is not None:
                     color_b = ctx.frames_b[0]
                     if color_b is not None:
@@ -222,14 +237,14 @@ def main():
                 break
 
     except KeyboardInterrupt:
-        print("\n[INFO] 键盘中断 (Ctrl+C)")
+        session_log("键盘中断 (Ctrl+C)")
     except Exception as e:
-        print(f"[ERROR] 主循环异常: {e}")
+        session_log(f"主循环异常: {e}")
         import traceback
         traceback.print_exc()
     finally:
         # ---- 清理 ----
-        print("[INFO] 正在清理资源...")
+        session_log("正在清理资源...")
         ctx.stop_event.set()
         cv2.destroyAllWindows()
 
@@ -240,12 +255,16 @@ def main():
             except Exception as e:
                 print(f"[WARN] PersonDetector 停止异常: {e}")
 
-        if ctx.handle_cup_detector is not None:
+        # Camera A 关闭: 优先用延迟引用, 否则直接关
+        cam_a = ctx._camera_a_to_close or ctx.handle_cup_detector
+        if cam_a is not None:
             try:
-                ctx.handle_cup_detector.close()
+                cam_a.close()
                 print("[INFO] Camera A pipeline 已停止")
             except Exception as e:
                 print(f"[WARN] Camera A 停止异常: {e}")
+            ctx.handle_cup_detector = None
+            ctx._camera_a_to_close = None
 
         if ctx.hand_in_cup_detector is not None:
             try:

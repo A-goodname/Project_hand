@@ -273,13 +273,20 @@ class PersonDetector:
         if not person_near:
             # 无人靠近 → 安全更新 baseline + ref (椅子完整可见)
             if chair_live is not None:
+                was_new = not self._has_chair
                 self._chair_baseline = chair_live   # 尺寸锚点
                 self._chair_ref = chair_live
                 self._has_chair = True
+                if was_new:
+                    _p = chair_live
+                    print(f"[PersonDetector] 椅子已检测: bbox=[{_p[0]},{_p[1]},{_p[2]},{_p[3]}] "
+                          f"size={(_p[2]-_p[0])}x{(_p[3]-_p[1])}")
 
             # 退出退避
             self._absent_count += 1
             if self._absent_count >= self._leave_frames:
+                if self._is_seated:
+                    print(f"[PersonDetector] 人就位: False (连续{self._absent_count}帧未检测到)")
                 self._seated_stable_count = 0
                 self._is_seated = False
                 self._absent_count = 0
@@ -296,6 +303,7 @@ class PersonDetector:
                 self._chair_ref = chair_live
 
         overlap = self._compute_seated_overlap(detection["bbox"])
+        was_seated = self._is_seated
 
         if overlap >= self._seated_overlap_threshold:
             self._seated_stable_count += 1
@@ -304,10 +312,13 @@ class PersonDetector:
             self._absent_count += 1
             if self._absent_count >= self._leave_frames:
                 self._seated_stable_count = 0
-                self._is_seated = False
                 self._absent_count = 0
 
         self._is_seated = self._seated_stable_count >= self._seated_stable_required
+        if self._is_seated and not was_seated:
+            print(f"[PersonDetector] 人就位: True "
+                  f"(stable={self._seated_stable_count}/{self._seated_stable_required} "
+                  f"overlap={overlap:.2f})")
 
         return {
             "bbox": detection["bbox"],

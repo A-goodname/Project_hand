@@ -2,6 +2,21 @@ ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程:
 ============================================================
 与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
 
+=== v10 相比 v9 的关键变化 (2026-07-15) ===
+1. CRP: 删除 Phase 0→Phase A 间重复的 Wait 1s (只保留一个)
+2. CRP: SocketClose 修正 — CONTINUE/ABORT 分支内 SocketClose 从 Socket1 → Socket0
+3. CRP Cup 递送段:
+   a. 删除 MovL C_P3 和 SocketSendStr(READY) 之间多余的 Wait
+   b. 新增 C_P5 DCPOS 点: C_P5 = CposOffset(C_P1, DCp3), DCp3.dz=100mm (Z+10cm)
+   c. Cup 正常路径: C_P2 → C_P1 → GRIP → C_P5 → C_P3 → READY → ...
+   d. Cup ABORT 路径: C_P3 → C_P5 → C_P1 → RELEASE → C_P2 → RESET → Home
+4. Camera A pipeline 全生命周期共享: GREETING 创建 HandleCupDetector, HANDLE 复用
+5. Camera B 预加载: 提到 GREETING.on_enter 启动 (原在 HANDLE.on_enter)
+6. 红色胶带检测重写: 对齐 RealSense_R/detect_red_tape (HSV+最大连通域, 去 R优势/评分)
+7. 人就位: leave_frames 5→30, 人就位确认后停止 Camera B YOLO
+8. Handle P3 left 模式各角度 Y-2cm
+9. 日志系统: Orchestrator/logger.py 终端+文件双输出
+
 === v9 相比 v8 的关键变化 (2026-07-14) ===
 1. CRP Phase D 分支逻辑修复:
    - 新增变量: strflag_cont(INT=1), strflag_abort(INT=1), str7("READY"), socketstr5("")
@@ -122,8 +137,9 @@ PC 端 RELEASE 处理逻辑 (state_machine.py):
 
 === 路径 ===
   Handle: H_P2 → H_P1 → H_P4 → H_P3 → H_P4 → H_P1 → H_P2 → Home
-  Cup(TRUE):   C_P2 → C_P1 → C_P3 → (READY+RELEASE+CONTINUE) → C_P4 → Home
-  Cup(FALSE):  C_P2 → C_P1 → C_P3 → (READY+RELEASE+ABORT) → C_P1 → C_P2 → Home
+  Cup(TRUE):   C_P2 → C_P1 → GRIP → C_P5 → C_P3 → READY+RELEASE+CONTINUE → C_P4 → Home
+  Cup(FALSE):  C_P2 → C_P1 → GRIP → C_P5 → C_P3 → READY+RELEASE+ABORT → C_P5 → C_P1 → C_P2 → Home
+  C_P5 = CposOffset(C_P1, DCp3), DCp3.dz=100mm (P1 Z+10cm, 防碰撞)
 
 
 // ================================================================
@@ -166,7 +182,6 @@ SocketReadStr(Socket1, tra, 90000)
 MovL Home                       // → 回原点
 SocketClose(Socket1)            // Phase 0 结束, 关闭 8600
 
-Wait 1s
 Wait 1s
 
 // ================================================================
@@ -254,6 +269,7 @@ while strflag == 1
 
 // ================================================================
 // [5] Cup 运动 — 抓杯 → 递送
+//    v10: 新增 C_P5 安全高度点 (Z=C_P1.Z+10cm, 防碰撞)
 // ================================================================
 MovL C_P2                       // 到预抓取点
 SocketSendStr(Socket0, 'RELEASE')        // → PC: 灵巧手 RELEASE (张开)
@@ -261,11 +277,15 @@ Wait 1s
 MovL C_P1                       // 到抓取点
 SocketSendStr(Socket0, 'GRIP')           // → PC: 灵巧手 GRIP (夹紧)
 Wait 1s
-MovL C_P3                       // 到递杯位置
-Wait 3s
+// --- 计算 C_P5 (v10 新增: Z+10cm 安全高度) ---
+DCp3.dz = 100                   // Z+100mm
+C_P5 = CposOffset(C_P1, DCp3)   // P5 = P1 位姿 + Z偏移
+MovL C_P5                       // → 安全高度点
+Wait 1s
+MovL C_P3                       // → 递杯位置
 
 // ================================================================
-// [6] Phase D: HandInCup 判定 (v4 新增)
+// [6] Phase D: HandInCup 判定 (v4 新增, v10: 删除 C_P3 和 READY 间多余 Wait)
 //    机械臂到达 P3 → READY (PC 启动 HandInCup, hand_in_cup_active=True)
 //    → wait 2s (给人抓杯+PC HandInCup 检测稳定)
 //    → RELEASE → PC 判定 → CONTINUE / ABORT
@@ -319,8 +339,11 @@ endif
 // --- [7b] ABORT 分支: 无人接杯 → 保持夹紧 → 放回原位 ---
 // 注: 当 PC 发送 ABORT 时, PC 未调用 release_object()
 // 机械臂带着杯子放回原位再松手
+// v10: 先经 C_P5 安全高度再回 C_P1, 避免碰撞桌子
 if strflag_abort == 0
     // 注意: 此时灵巧手仍然夹着杯子 (PC 端未松手)
+    MovL C_P5                   // → 安全高度点 (v10 新增)
+    Wait 1s
     MovL C_P1                   // → 回到抓取点 (放回水杯)
     Wait 1s
     SocketSendStr(Socket0, 'RELEASE')    // → PC: 灵巧手 RELEASE (松杯) — 第二次 RELEASE
@@ -380,7 +403,8 @@ endif
 // 5. 位姿变量声明:
 //    H_P1, H_P2, H_P3, H_P4: CPOS (Handle 位姿)
 //    C_P1, C_P2, C_P3, C_P4: CPOS (Cup 位姿)
-//    DCp1, DCp2:             DCPOS (偏移量)
+//    DCp1, DCp2, DCp3:       DCPOS (偏移量, DCp3 v10 新增: C_P5 Z+100mm)
+//    C_P5:                   CPOS (v10 新增: 递送安全高度点)
 //    DummyCpos:              CPOS (临时变量, 用于解析 CONTINUE/ABORT 响应)
 //    P0:                     CPOS (当前位姿)
 //    Home:                   CPOS (预定义原点)

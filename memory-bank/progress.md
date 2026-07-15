@@ -2,196 +2,72 @@
 
 ## 已实现功能
 
-### 瓶身抓取
-- [x] RealSense 实时版 + EpicEye 单次触发版
-- [x] 位姿转换链路验证 Demo + 手眼标定工具
+### 双相机体系
+- [x] Camera A (342222071364, RealSense_R) + Camera B (UGREEN 1080P, OpenCV)
+- [x] Camera A pipeline 全生命周期共享 (GREETING→HANDLE, 只开一次)
+- [x] Camera B 预加载 (GREETING 启动, 椅子+人就位全程运行)
+- [x] Orchestrator 3 状态: IDLE → GREETING → HANDLE (单次, exit(0))
+- [x] CRP/TXT/状态机 TCP 协议一致性验证 + 修复
+- [x] CRP SocketClose 修复 (Socket1→Socket0)
+- [x] CRP 重复 Wait 删除
 
-### 把手抓取
-- [x] RealSense Handle 6D 版 (微调 YOLOv8n + SAM2 + 扫描线分离)
-- [x] 红色胶带辅助检测 / PoseStabilizer
-- [x] Handle offset fine_tune: [0.048, -0.037, 0.074]
+### HandleCupDetector 轻量化
+- [x] 独立检测器 Orchestrator/handle_cup_detector.py + config.yaml
+- [x] Handle: YOLO kettle → 白色把手 HSV+RGB → 红色胶带(简化) → 3D
+- [x] Cup: YOLO cup → bbox 裁剪(left/right) + 采样 → 3D
+- [x] 去 SAM2+PCA 6D, skip_frames 90→5
+- [x] 固定 ABC 模式: 基系 ABC 来自 config.yaml
+- [x] 红色胶带检测对齐 RealSense_R/detect_red_tape (HSV+最大连通域)
+- [x] 白色把手 HSV 阈值适配 (min_value:80, min_rgb:90)
 
-### 水杯抓取
-- [x] 水杯 6D 检测 + 双检测器共享 Pipeline
-- [x] Cup offset fine_tune: back=[0.051,-0.008,0.104], left=[0.048,-0.050,0.082]
-
-### Handle+Cup 融合
-- [x] estun_handle_cup_run.py 全流程
-- [x] back/left 双模式 + P3 多角度示教 + P4 Y后退 CRP
-- [x] P3 倒水偏移 Z+2~3cm 运动优化 (10°/15°/20°/30°)
-- [x] Cup 检测修复 (PoseStabilizer 代际同步)
-- [x] Handle P1 B 角防跳变: <90→89, >90→91 (4 run + Demo + state_machine)
-
-### 灵巧手控制
-- [x] USB 串口 / 手势 / 速度控制 / 使能
-- [x] 手势扩展: HAND_SHAKE(19) / HELLO_1(20) / HELLO_2(21)
-- [x] 压力检测 v1: get_pressure / wait_for_pressure / wait_for_pressure_release
-- [x] 压力检测 v2: 移植同事基线+增量双阈值
+### Phase B fixed 模式
+- [x] compute_grasp_rotation 仅非 fixed 分支调用
+- [x] 稳定器+标定在 ctx.handle_cup_detector 赋值前创建 (竞态修复)
+- [x] Pipeline 不在 daemon 线程 close (对齐 estun_greeting)
 
 ### 打招呼 Phase 0
 - [x] Phase0Server 类: 4 步单连接协议
-- [x] YOLOv8n 人检测 (独立 Camera pipeline)
-- [x] 挥手: Hello_1↔Hello_2 ×3 → RESET (do_gesture 一步到位)
-- [x] 握手: RESET→压力→HAND_SHAKE→松手→RESET
-- [x] 压力检测配置化: 全部阈值从 estun_config.yaml 读取
-- [x] CRP greeting 段: 全 MovL, speed/label 对齐
-- [x] CRP orchestrator 段:
-  - Phase 0 speed/label 对齐 greeting CRP
-  - H_P3/H_P4→sudu, C_P3→sudu+MovJ→MovL
-  - Phase D 5 点位修正 (GH_ZHAOSHOU1→C_P4/Home/C_P1/C_P2/C_P2)
-  - ABORT C_P1→sudu, 其余 V100
-- [x] `state_machine.py` GreetingHandler: `_execute_wave(ctx)` do_gesture + stop_event + 压力配置化
-- [x] `estun_greeting_handle_cup_run.py`: 同回归 do_gesture
-- [x] `estun_config.yaml`: wave_speed 清除, wave_interval=0.15
-- [x] Phase 0 协议 PC 端验证通过
-- [ ] **实机测试**: greeting 单相机 + 状态机双相机
+- [x] Camera A 人检测复用 HandleCupDetector pipeline
+- [x] CRP orchestrator 段完整
+- [x] 实机测试: Phase 0 通过 ✅
 
 ### 通信协议
-- [x] pack_three / Orchestrator CRP / 同事 CRP
-- [x] READY/CONTINUE/ABORT 协议 + TranStrToCpos 括号约定
-- [x] RELEASE 双语义修复: hand_in_cup_active 标志区分 Phase C 松把手 vs Phase D 判定
-- [x] **CRP 一致性修复** (2026-07-14): orchestrator CRP 补全 SocketCreate(8080)/If/GetCurCPos + Phase D socket Socket1→Socket0
-- [x] **TXT 伪代码同步** (2026-07-14): v8 changelog + Phase 0 段 + 双 Socket 架构 + socket 引用统一
-- [x] **CRP Phase D 逻辑修复** (2026-07-14): strflag_cont/abort 变量 + TranStrToCpos 标志分离 + If 条件 == + CONTINUE C_P4 计算 + 标签规范化
-- [x] **Python RELEASE 分支修正** (2026-07-14): abort_mode 优先判断 + 人未就位走正常判定 + hand_in_cup_active 生命周期
-- [x] **Cup 检测 intrinsics 补全** (2026-07-14): depth_intrinsics / c2d_extr / d2c_extr
-- [x] **Camera B CPU 解耦** (2026-07-14): PersonDetector YOLO gpu→cpu
-- [x] **退出加速** (2026-07-14): disable_hand skip_reset + HandInCup close daemon 超时
-- [x] **HandleCupDetector 轻量化** (2026-07-14):
-  - 新建 `Orchestrator/handle_cup_detector.py` + `Orchestrator/config.yaml`
-  - YOLO kettle + 白色把手 HSV+RGB + 红色胶带(R通道优势) → 3D
-  - 去掉 SAM2 + PCA 6D, skip_frames 90→5
-  - fixed 模式: 基系 ABC 来自 config
-  - `state_machine.py` Phase B 适配: Handle+Cup 统一基系 ABC
-  - Cup left/right bbox 裁剪
-
-### 双相机体系
-- [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (819612071851, RealSense)
-- [x] EyeToHand: PersonDetector + HandInCup + 3D→1D 标定工具
-- [x] Orchestrator 3 状态: IDLE → GREETING → HANDLE (单次, exit(0))
-- [x] Camera A 按需开闭: GREETING 独立 pipeline, HANDLE Phase B 开→发送后关
-- [x] Camera B 全生命周期共享: PersonDetector pipeline, 人就位+HandInCup 复用帧
-- [x] 人就位门控 HandInCup: READY 时查 is_person_seated, 未就位→ABORT
-- [x] HandInCup ≤5s 超时检测, TRUE 提前结束
-- [x] CRP/TXT/状态机 TCP 协议一致性验证 + 修复
+- [x] pack_three / READY/CONTINUE/ABORT
+- [x] RELEASE 双语义
+- [x] Phase D 判定逻辑
 
 ### HandInCup MediaPipe 重构
-- [x] YOLOv8n-Pose → MediaPipe Hands (21 landmarks, 帧间跟踪)
-- [x] landmarks-in-bbox 计分制: wrist(×2) + MCP(×1) + TIP(×1) ≥ 2, bbox_margin=20px
-- [x] curled gate: wrist在bbox内→跳过; wrist不在→curled≥2 (防开掌划过)
-- [x] 深度: YOLO→画面采样; fallback→cup_depth_expected 预标定值
-- [x] 杯 ROI 回退: YOLO 失败 → cup_roi_fallback; --calibrate-roi 标定工具 (含深度)
-- [x] 递送位姿 P3 已填入 config
-- [x] 独立测试通过 (hand_in_cup.py)
-- [x] 状态机联调: 统一共享实例 + reset() 修复 + draw_visualization() 集成
+- [x] YOLOv8m + MediaPipe Hands (21 landmarks)
+- [x] landmarks-in-bbox 计分制 + curled gate
+- [x] 纯 RGB 判定
+- [x] 杯 ROI 回退 + 标定工具
 
 ### 人就位检测 (Camera B)
-- [x] `calibrate_chair()`: YOLO chair class=56 → 中心偏好 + 稳定窗口
-- [x] `detect_person_seated()`: person∩chair/chair_area ≥ 0.4 → 累积10帧
-- [x] `EyeToHand/config.yaml`: 新增 `chair` 配置段
-- [x] 独立测试模式 `run()`: 椅子标定 + 就位状态可视化
-- [x] 实机测试: 椅子标定 + 人就位判定效果 ✅ (2026-07-10)
+- [x] 椅子实时检测 (每帧 YOLO, 中心偏好)
+- [x] 非对称阈值 (进10/出30)
+- [x] has_chair 门控修复 (去掉鸡生蛋逻辑)
 
-### EyeToHand 标定
-- [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
-- [x] result.yaml: {a,b,c,d} + detector.py: person_to_base_x()
-- [ ] 暂未接入 (递送 X 用 delivery.X_TEACH)
+### 日志系统
+- [x] Orchestrator/logger.py — 终端+文件双输出
+- [x] state_machine 关键事件日志 (Phase A/B/C/D)
+- [x] HandInCup 超时去重
 
-## 已实现功能
-
-### 瓶身抓取
-- [x] RealSense 实时版 + EpicEye 单次触发版
-- [x] 位姿转换链路验证 Demo + 手眼标定工具
-
-### 把手抓取
-- [x] RealSense Handle 6D 版 (微调 YOLOv8n + SAM2 + 扫描线分离)
-- [x] 红色胶带辅助检测 / PoseStabilizer
-- [x] Handle offset fine_tune: [0.048, -0.037, 0.074]
-
-### 水杯抓取
-- [x] 水杯 6D 检测 + 双检测器共享 Pipeline
-- [x] Cup offset fine_tune: back=[0.051,-0.008,0.104], left=[0.048,-0.050,0.082]
-
-### Handle+Cup 融合
-- [x] estun_handle_cup_run.py 全流程
-- [x] back/left 双模式 + P3 多角度示教 + P4 Y后退 CRP
-- [x] P3 倒水偏移 Z+2~3cm 运动优化 (10°/15°/20°/30°)
-- [x] Cup 检测修复 (PoseStabilizer 代际同步)
-- [x] Handle P1 B 角防跳变: <90→89, >90→91 (4 run + Demo + state_machine)
-
-### 灵巧手控制
-- [x] USB 串口 / 手势 / 速度控制 / 使能
-- [x] 手势扩展: HAND_SHAKE(19) / HELLO_1(20) / HELLO_2(21)
-- [x] 压力检测 v1: get_pressure / wait_for_pressure / wait_for_pressure_release
-- [x] 压力检测 v2: 移植同事基线+增量双阈值
-
-### 打招呼 Phase 0
-- [x] Phase0Server 类: 4 步单连接协议
-- [x] YOLOv8n 人检测 (独立 Camera pipeline)
-- [x] 挥手: Hello_1↔Hello_2 ×3 → RESET (do_gesture 一步到位)
-- [x] 握手: RESET→压力→HAND_SHAKE→松手→RESET
-- [x] 压力检测配置化: 全部阈值从 estun_config.yaml 读取
-- [x] CRP greeting 段: 全 MovL, speed/label 对齐
-- [x] 回退 `do_gesture` (移除 KinematicsConverter / wave_speed)
-- [ ] **实机测试**: greeting 单相机 + 状态机双相机
-
-### 通信协议
-- [x] pack_three / Orchestrator CRP / 同事 CRP
-- [x] READY/CONTINUE/ABORT 协议 + TranStrToCpos 括号约定
-- [x] RELEASE 双语义修复: hand_in_cup_active 标志区分 Phase C 松把手 vs Phase D 判定
-
-### 双相机体系
-- [x] Serial 绑定: Camera A (342222071364, RealSense_R) + Camera B (UGREEN 1080P, OpenCV)
-- [x] Camera B D435i → UGREEN 替换: camera.py / person_detector 重写 / hand_in_cup 纯 RGB
-- [x] EyeToHand: PersonDetector + HandInCup + 3D→1D 标定工具
-- [x] Orchestrator 3 状态: IDLE → GREETING → HANDLE (单次, exit(0))
-- [x] Camera A 按需开闭: GREETING 独立 pipeline, HANDLE Phase B 开→发送后关
-- [x] Camera B 生命周期: IDLE 关 → GREETING enter 开 → HANDLE 继续 → exit 关
-- [x] 人就位门控 HandInCup: READY 时查 is_person_seated, 未就位→ABORT
-- [x] HandInCup ≤5s 超时检测, TRUE 提前结束
-- [x] CRP/TXT/状态机 TCP 协议一致性验证 + 修复
-
-### HandInCup MediaPipe 重构
-- [x] YOLOv8n-Pose → MediaPipe Hands (21 landmarks, 帧间跟踪)
-- [x] landmarks-in-bbox 计分制: wrist(×2) + MCP(×1) + TIP(×1) ≥ 2, bbox_margin=20px
-- [x] curled gate: wrist在bbox内→跳过; wrist不在→curled≥2 (防开掌划过)
-- [x] ~~深度辅助~~ → 纯 RGB 判定 (Camera B UGREEN 替换后移除)
-- [x] 杯 ROI 回退: YOLO 失败 → cup_roi_fallback; --calibrate-roi 标定工具
-- [x] 递送位姿 P3 已填入 config
-- [x] 独立测试通过 (hand_in_cup.py)
-- [x] 状态机联调: 统一共享实例 + reset() 修复 + draw_visualization() 集成
-
-### 人就位检测 (Camera B)
-- [x] `calibrate_chair()` 废弃 → `_detect_chair_live()` 每帧实时检测 (不锁定)
-- [x] `detect_person_seated()`: 非对称阈值 (进10帧/出5帧) + `_chair_baseline` 锚定 (面积差≤30%更新)
-- [x] `EyeToHand/config.yaml`: `chair` 段 (overlap_threshold / seated_stable_frames / leave_frames)
-- [x] 独立测试模式 `run()`: 椅子实时 + 就位状态可视化
-- [x] `is_chair_calibrated` → `has_chair`; `start_camera` 参数/方法
-
-### HandInCup 纯 RGB 精度评估
-- [x] 纯 RGB 判定精度验证通过 ✅ (2026-07-14)
-- [x] score≥5 绕过 curl 后误判率可接受 ✅ (2026-07-14)
-
-### UGREEN 720p 帧率确认
-- [x] YOLO+MediaPipe 在 1280×720 上的推理延迟可接受 ✅ (2026-07-14)
-
-### EyeToHand 标定
-- [x] calibrate.py 重写: 3D→1D 人体标定 (SVD)
-- [x] result.yaml: {a,b,c,d} + detector.py: person_to_base_x()
-- [ ] 暂未接入 (递送 X 用 delivery.X_TEACH)
+### 修复
+- [x] MediaPipe clearcut 遥测禁用 (hand_in_cup.py)
+- [x] Camera B D435i serial 死代码删除
+- [x] HandInCup 超时刷屏修复
 
 ## 待完成
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 UGREEN Camera B 杯 ROI 标定 | `python EyeToHand/hand_in_cup.py --calibrate-roi` |
-| 🔴 双相机全流程测试 | `Orchestrator/main.py` + `handlepluscup-orchestrator.crp` |
-| 🟡 EyeToHand 标定实操 | 3D→1D 人体标定 |
+| 🔴 Phase C/D 全流程测试 | PREGRIP/GRIPDONE/CUP/READY/RELEASE 完整链路 |
+| 🟡 人就位检测改进 | bbox 稳定性, 防 flicker |
+| 🟡 EyeToHand 标定接入 | 3D→1D 人体标定 (暂用 delivery.X_TEACH) |
+| 🟡 skip_frames 实机微调 | 当前=5 |
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)
-- ~~Camera B D435i 频繁断联~~ → 已替换为 UGREEN Camera 1080P
-- EyeToHand result.yaml a,b,c,d 默认占位
-- P4 Y 后退 15/20° 线性插值未实测验证
-- 机械臂端 MovJ widget ZONE datavar 无法正确解析 → 已全部改为 MovL
-- UGREEN Camera B 纯 RGB，无深度数据 (HandInCup 依赖 curled gate 防误判)
+- UGREEN Camera B 纯 RGB, 无深度数据
+- EyeToHand result.yaml 标定暂未接入
+- 人就位 YOLO 漏检 → leave_frames=30 临时缓解

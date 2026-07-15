@@ -37,6 +37,9 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+# 禁 MediaPipe clearcut 遥测 (必须在 import mediapipe 之前)
+os.environ.setdefault("GLOG_minloglevel", "3")
+
 import yaml
 import cv2
 import numpy as np

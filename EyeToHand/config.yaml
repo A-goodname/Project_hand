@@ -13,7 +13,7 @@ chair:
   conf_threshold: 0.4
   overlap_threshold: 0.4
   seated_stable_frames: 10
-  leave_frames: 5
+  leave_frames: 30             # 退出帧数 (30帧≈1s@30fps, 防YOLO漏检误触发)
 delivery:
   X_TEACH: 0.2295
   Y_TEACH: 0.4427

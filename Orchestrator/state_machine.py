@@ -38,6 +38,7 @@ if _project_root not in sys.path:
 # ---- 导入 ----
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 from Orchestrator.handle_cup_detector import HandleCupDetector
+from Orchestrator.logger import session_log
 from EyeToHand.person_detector import PersonDetector
 
 from EyeToHand.hand_in_cup import HandInCupDetector
@@ -201,6 +202,7 @@ class SharedContext:
 
     # Camera A 检测器 (HandleGraspAndPourHandler 写入)
     handle_cup_detector: Optional[HandleCupDetector] = None
+    _camera_a_to_close: Optional[HandleCupDetector] = None  # 延迟关闭, 由 main 线程处理
     T_cam2ee: Optional[np.ndarray] = None
 
     # 人就位门控 (main loop 写入, TCP handler 读取)
@@ -346,7 +348,6 @@ class GreetingHandler(StateHandler):
     def __init__(self):
         super().__init__("GREETING")
         self._server: Optional[socket.socket] = None
-        self._pipeline = None        # Camera A 独立 pipeline (仅 color)
         self._yolo_model = None
         self._person_stable = 0
         self._person_required = 3    # 人进门检测连续帧数
@@ -375,19 +376,22 @@ class GreetingHandler(StateHandler):
     def on_enter(self, ctx: SharedContext):
         self._start(ctx)
         ctx.greeting_complete.clear()
-        # Camera B 延后到 Phase 0 结束后再启动, 避免影响 Phase B 检测速度
+        # Camera B 预加载 (UGREEN, CPU YOLO, 不抢 GPU)
+        if ctx.person_detector is not None:
+            ctx.person_detector.start_camera()
+            ctx.run_seated_detection = True
+            print("[GREETING] Camera B + 人就位检测已启动")
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
         # 非阻塞 accept
         self._accept_tcp(ctx)
 
-        # 向主循环提供 Camera A 预览帧 (非阻塞, 1ms 超时)
-        if self._pipeline is not None:
+        # 向主循环提供 Camera A 预览帧 (复用 HandleCupDetector)
+        det = ctx.handle_cup_detector
+        if det is not None:
             try:
-                frames = self._pipeline.wait_for_frames(1)
-                color_frame = frames.get_color_frame()
-                if color_frame:
-                    ctx.frames_a = (np.asanyarray(color_frame.get_data()), None, None, None)
+                color, depth, depth_cmap, _ = det.get_frames()
+                ctx.frames_a = (color, depth, depth_cmap, None) if color is not None else None
             except Exception:
                 pass
 
@@ -430,10 +434,24 @@ class GreetingHandler(StateHandler):
         init_hand(hand_port=hand_port, initial_gesture="RESET")
         print("[GREETING] 灵巧手已初始化")
 
-        # 打开 Camera A 独立 pipeline (仅 color, Phase 0 专用)
+        # Camera A — 复用 HandleCupDetector pipeline (color+depth), Phase 0 只用 color
         # 注意: 必须用 Camera A serial (眼在手上), 不是 Camera B
         cam_a_serial = ctx.camera_a_serial or "342222071364"
-        self._open_camera(cam_a_serial)
+        if ctx.handle_cup_detector is None:
+            import torch
+            _dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+            _orch_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+            _orch_cfg = {}
+            try:
+                with open(_orch_path, "r", encoding="utf-8") as f:
+                    _orch_cfg = yaml.safe_load(f)
+            except Exception:
+                pass
+            ctx.handle_cup_detector = HandleCupDetector(
+                orch_config=_orch_cfg,
+                serial=cam_a_serial, device=_dev,
+            )
+            print("[GREETING] HandleCupDetector pipeline 已启动 (Phase 0 复用 color)")
 
         # TCP 服务器 8600
         port = int(greeting_cfg.get("port", 8600))
@@ -455,45 +473,28 @@ class GreetingHandler(StateHandler):
             except Exception:
                 pass
             self._server = None
-        self._close_camera()
+        # Camera A pipeline 不关闭 — 由 HANDLE 继续使用
 
     # ================================================================
-    # Camera A 独立 pipeline (Phase 0 专用, 仅 color)
+    # Camera A pipeline — 复用 HandleCupDetector (Phase 0 只用 color)
     # ================================================================
 
-    def _open_camera(self, serial):
-        """打开 Camera A 彩色流 (Phase 0 专用)."""
-        import pyrealsense2 as rs
-        self._pipeline = rs.pipeline()
-        config = rs.config()
-        if serial:
-            config.enable_device(serial)
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        self._pipeline.start(config)
-        print("[GREETING] Camera A 彩色流已启动 (Phase 0)")
-
-    def _get_camera_frame(self):
-        """获取一帧 Camera A 彩色图像."""
-        if self._pipeline is None:
+    @staticmethod
+    def _get_camera_frame(ctx):
+        """从 HandleCupDetector pipeline 获取 color 帧."""
+        det = ctx.handle_cup_detector
+        if det is None:
             return None
-        try:
-            frames = self._pipeline.wait_for_frames(5000)
-            color = frames.get_color_frame()
-            if not color:
-                return None
-            return np.asanyarray(color.get_data())
-        except Exception:
-            return None
+        color, _, _, _ = det.get_frames()
+        return color
 
-    def _close_camera(self):
-        """关闭 Phase 0 Camera pipeline."""
-        if self._pipeline is not None:
-            try:
-                self._pipeline.stop()
-                print("[GREETING] Camera A 已关闭")
-            except Exception:
-                pass
-            self._pipeline = None
+    @staticmethod
+    def _close_camera(ctx):
+        """不关闭 pipeline — HandleCupDetector 由 HANDLE 继续使用."""
+        pass
+
+    # _open_camera 已移除, 由 _start 中创建 HandleCupDetector 替代
+    _open_camera = None  # type: ignore[assignment]
 
     # ================================================================
     # YOLO 人检测 (进门)
@@ -534,7 +535,7 @@ class GreetingHandler(StateHandler):
         self._person_stable = 0
         deadline = time.time() + timeout
         while time.time() < deadline and not ctx.stop_event.is_set():
-            frame = self._get_camera_frame()
+            frame = self._get_camera_frame(ctx)
             if frame is None:
                 time.sleep(0.05)
                 continue
@@ -703,7 +704,7 @@ class GreetingHandler(StateHandler):
                 return
             print(f"[GREETING] Step 2 recv: {data.decode('utf-8', errors='replace').strip()}")
             self._wait_for_person(ctx, timeout=120.0)
-            self._close_camera()
+            self._close_camera(ctx)
             r = self._fmt_pose6(self._zhaoshou2) + "\n"
             conn.sendall(r.encode("utf-8"))
             print(f"[GREETING] Step 2 reply ZHAOSHOU2: {r.strip()}")
@@ -736,7 +737,7 @@ class GreetingHandler(StateHandler):
         except Exception as e:
             print(f"[GREETING] 异常: {e}")
         finally:
-            self._close_camera()
+            self._close_camera(ctx)
             try:
                 conn.close()
             except Exception:
@@ -827,12 +828,8 @@ class HandleGraspAndPourHandler(StateHandler):
     def on_enter(self, ctx: SharedContext):
         self._start(ctx)
         ctx.handle_cup_complete.clear()
-
-        # Phase 0 结束后启动 Camera B + 人就位检测
-        if ctx.person_detector is not None:
-            ctx.person_detector.start_camera()
+        # Camera B 已在 GREETING 预启动, 只需恢复人就位检测
         ctx.run_seated_detection = True
-        print("[HANDLE] Camera B + 人就位检测已启动")
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
         # 获取 Camera A 帧 (Phase B 期间有帧, 之后为 None)
@@ -888,6 +885,7 @@ class HandleGraspAndPourHandler(StateHandler):
 
         # ---- 灵巧手 (GREETING 已初始化, 不再重试使能) ----
         self._hand_available = is_hand_available()
+        session_log(f"灵巧手状态: {'可用' if self._hand_available else '不可用(模拟)'}")
 
         # ---- TCP 服务器 ----
         host = estun["tcp_server"]["host"]
@@ -905,7 +903,37 @@ class HandleGraspAndPourHandler(StateHandler):
         ctx.hand_on_cup = None
         self._frame_counter = 0
 
-        # Camera A / 稳定器 / 标定 在 _handle_client_impl Phase B 按需初始化
+        # ---- Camera A: 复用 GREETING 创建的 HandleCupDetector, 只补稳定器+标定 ----
+        # 兜底: 如果 GREETING 没创建, 在此创建
+        if ctx.handle_cup_detector is None:
+            import torch
+            _dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+            ctx.handle_cup_detector = HandleCupDetector(
+                orch_config=self._orch_cfg,
+                serial=ctx.camera_a_serial, device=_dev,
+            )
+            print("[INFO] Camera A HandleCupDetector 已创建 (兜底)")
+
+        stab_cfg = self._orch_cfg.get("stabilization", {})
+        self._handle_stabilizer = PoseStabilizer(
+            window=stab_cfg.get("window", 3),
+            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
+            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
+        )
+        self._cup_stabilizer = PoseStabilizer(
+            window=stab_cfg.get("window", 3),
+            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
+            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
+        )
+        self._handle_stabilizer.capture_generation()
+        self._cup_stabilizer.capture_generation()
+
+        calib_path = os.path.join(
+            _project_root,
+            estun.get("calibration", {}).get("result_path", "calib_data/calibration_result.yaml")
+        )
+        ctx.T_cam2ee = load_cam2ee(calib_path)
+        session_log("Camera A 稳定器+标定已就绪")
 
     def _load_offsets(self, cfg, estun):
         """加载全部偏移 / 几何参数 (移植自 estun_handle_cup_run.py 模块级)."""
@@ -1041,8 +1069,8 @@ class HandleGraspAndPourHandler(StateHandler):
         T_cam2ee = ctx.T_cam2ee
         if det is None or T_cam2ee is None:
             return
-        assert self._handle_stabilizer is not None, "handle_stabilizer 未初始化"
-        assert self._cup_stabilizer is not None, "cup_stabilizer 未初始化"
+        if self._handle_stabilizer is None or self._cup_stabilizer is None:
+            return  # 稳定器尚未就绪, 等待
 
         self._frame_counter += 1
         if self._frame_counter % self._skip_frames != 1:
@@ -1099,6 +1127,7 @@ class HandleGraspAndPourHandler(StateHandler):
         try:
             conn, addr = self._server.accept()
             print(f"[INFO] 机器人已连接: {addr}")
+            session_log(f"TCP 8080 机器人已连接: {addr}")
             t = threading.Thread(
                 target=self._handle_client_impl,
                 args=(conn, addr, ctx),
@@ -1155,6 +1184,8 @@ class HandleGraspAndPourHandler(StateHandler):
             if len(parts) == 6:
                 robot_xyz = (float(parts[0]), float(parts[1]), float(parts[2]))
                 robot_ABC = (float(parts[3]), float(parts[4]), float(parts[5]))
+                session_log(f"Phase A 初始位姿: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) "
+                            f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f})")
                 print(f"[INFO] 机器人当前末端: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) "
                       f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f})")
             else:
@@ -1173,36 +1204,13 @@ class HandleGraspAndPourHandler(StateHandler):
         R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
         t_ee_base = np.array(robot_xyz, dtype=float)
 
-        # ---- [Phase B] 打开 Camera A, 检测 Handle+Cup, 发送后关闭 ----
-        print("[INFO] 打开 Camera A (HandleCupDetector)...")
-        estun = ctx.estun_config
-        import torch
-        _dev = "cuda:0" if torch.cuda.is_available() else "cpu"
-        det = HandleCupDetector(
-            orch_config=self._orch_cfg,
-            serial=ctx.camera_a_serial, device=_dev,
-        )
-        ctx.handle_cup_detector = det
-
-        calib_path = os.path.join(
-            _project_root,
-            estun.get("calibration", {}).get("result_path", "calib_data/calibration_result.yaml")
-        )
-        ctx.T_cam2ee = load_cam2ee(calib_path)
-
-        stab_cfg = self._orch_cfg.get("stabilization", {})
-        self._handle_stabilizer = PoseStabilizer(
-            window=stab_cfg.get("window", 3),
-            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
-            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
-        )
-        self._cup_stabilizer = PoseStabilizer(
-            window=stab_cfg.get("window", 3),
-            pos_thresh=stab_cfg.get("pos_threshold", 0.01),
-            angle_thresh=stab_cfg.get("angle_threshold", 5.0),
-        )
-        self._handle_stabilizer.capture_generation()
-        self._cup_stabilizer.capture_generation()
+        # ---- [Phase B] Camera A 已预加载, 直接使用 ----
+        det = ctx.handle_cup_detector
+        T_cam2ee = ctx.T_cam2ee
+        if det is None or T_cam2ee is None:
+            print("[ERROR] Camera A 未预加载")
+            _cleanup()
+            return
 
         print("[INFO] 等待稳定目标位姿 (Handle + Cup)...")
         T_cam2ee = ctx.T_cam2ee
@@ -1230,15 +1238,12 @@ class HandleGraspAndPourHandler(StateHandler):
                 # ============================================================
                 h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
                 R_obj_ee = euler_to_rotation_matrix(*mean_euler_ee, order="zyx")
-                R_grasp_ee = compute_grasp_rotation(
-                    R_obj_ee, self._orientation_mode, self._handle_r_offset, R_ee_base,  # type: ignore[arg-type]
-                    grasp_direction=self._grasp_direction)
 
                 # 预声明分支变量 (Pylance narrowing)
-                _fixed_R_grasp_ee: np.ndarray = np.eye(3)  # type: ignore[assignment]
-                _fixed_R_target_ee: np.ndarray = np.eye(3)  # type: ignore[assignment]
-                _R_grasp_ee_corrected: np.ndarray = np.eye(3)  # type: ignore[assignment]
-                _R_pour_ee: np.ndarray = np.eye(3)  # type: ignore[assignment]
+                _fixed_R_grasp_ee: np.ndarray = np.eye(3)
+                _fixed_R_target_ee: np.ndarray = np.eye(3)
+                _R_grasp_ee_corrected: np.ndarray = np.eye(3)
+                _R_pour_ee: np.ndarray = np.eye(3)
 
                 if self._orientation_mode == "fixed":
                     assert self._fixed_abc is not None
@@ -1253,6 +1258,9 @@ class HandleGraspAndPourHandler(StateHandler):
                     _fixed_R_grasp_ee = R_grasp_ee
                     _fixed_R_target_ee = R_target_ee
                 else:
+                    R_grasp_ee = compute_grasp_rotation(
+                        R_obj_ee, self._orientation_mode, self._handle_r_offset, R_ee_base,
+                        grasp_direction=self._grasp_direction)
                     rot_base_1 = R_ee_base @ R_grasp_ee
                     pos_base_1 = transform_pose_to_base(h_pos_ee_compensated, robot_xyz, robot_ABC)
                     A1, B1, C1 = rotation_matrix_to_euler_angles(rot_base_1)
@@ -1363,7 +1371,7 @@ class HandleGraspAndPourHandler(StateHandler):
                         ((pos_base_3, (A3, B3, C3)))
                     )
                     conn.sendall(msg.encode("utf-8"))
-                    print(f"[SEND] Handle: {msg}")
+                    session_log(f"Phase B SEND Handle: {msg}")
                     target_sent = True
                 except (BrokenPipeError, ConnectionResetError) as e:
                     print(f"[WARN] 发送 Handle 失败: {e}")
@@ -1377,15 +1385,10 @@ class HandleGraspAndPourHandler(StateHandler):
             _cleanup()
             return
 
-        # ---- Camera A 已不再需要, 关闭 pipeline ----
-        if ctx.handle_cup_detector is not None:
-            try:
-                ctx.handle_cup_detector.close()
-                print("[INFO] Camera A pipeline 已关闭 (位姿已发送)")
-            except Exception:
-                pass
-            ctx.handle_cup_detector = None
-            ctx.T_cam2ee = None
+        # ---- Camera A 仅置空引用 (同 estun_greeting: pipeline 保持运行到程序退出) ----
+        ctx.handle_cup_detector = None
+        ctx.T_cam2ee = None
+        session_log("Camera A 引用已释放")
 
         # ---- [Phase C & D] 指令循环 ----
         conn.settimeout(2.0)
@@ -1393,11 +1396,16 @@ class HandleGraspAndPourHandler(StateHandler):
         hand_judged = False        # 第一次 RELEASE (hand-in-cup 判定) 已处理
         abort_mode = False         # TRUE=CONTINUE, FALSE=ABORT 进入放回模式
 
+        _last_heartbeat = time.time()
         try:
             while not ctx.stop_event.is_set():
                 try:
                     data = conn.recv(1024)
                 except socket.timeout:
+                    # 每 10s 心跳, 确认在等机器人指令
+                    if time.time() - _last_heartbeat > 10:
+                        print(f"[WAIT] 等待机器人指令... ({time.strftime('%H:%M:%S')})")
+                        _last_heartbeat = time.time()
                     continue
 
                 if not data:
@@ -1410,7 +1418,9 @@ class HandleGraspAndPourHandler(StateHandler):
                 if cmd == "PREGRIP":
                     if self._hand_available:
                         hand_pre_grip()
-                    print("[INFO] PREGRIP")
+                        session_log("PREGRIP — 灵巧手半闭合")
+                    else:
+                        session_log("PREGRIP — 灵巧手不可用, 跳过")
 
                 elif cmd == "GRIPDONE":
                     if self._hand_available:
@@ -1431,7 +1441,7 @@ class HandleGraspAndPourHandler(StateHandler):
                     if not cup_p3_sent and cup_pose_data is not None:
                         try:
                             conn.sendall(cup_pose_data.encode("utf-8"))
-                            print(f"[SEND] Cup: {cup_pose_data}")
+                            session_log(f"Phase C SEND Cup: {cup_pose_data}")
                             cup_p3_sent = True
                         except (BrokenPipeError, ConnectionResetError) as e:
                             print(f"[WARN] 发送 Cup 失败: {e}")
@@ -1495,6 +1505,7 @@ class HandleGraspAndPourHandler(StateHandler):
                             try:
                                 # 发送格式与机器人端 TranStrToCpos("<",">") 配对
                                 conn.sendall(b"<0,0,0,0,0,0>")
+                                session_log("Phase D CONTINUE (人手在杯)")
                                 print("[SEND] CONTINUE (<0,0,0,0,0,0>)")
                             except Exception as e:
                                 print(f"[WARN] 发送 CONTINUE 失败: {e}")
@@ -1508,6 +1519,7 @@ class HandleGraspAndPourHandler(StateHandler):
                             try:
                                 # 发送格式与机器人端 TranStrToCpos("[","]") 配对
                                 conn.sendall(b"[0,0,0,0,0,0]")
+                                session_log("Phase D ABORT (无人接杯)")
                                 print("[SEND] ABORT ([0,0,0,0,0,0])")
                             except Exception as e:
                                 print(f"[WARN] 发送 ABORT 失败: {e}")

@@ -39,10 +39,10 @@ cup_euler_left: [-90, 89, -90]
 # ---- 白色把手检测 ----
 # 参数来源: reference/机械臂_同事运行包_20260713/visionpro.py
 white_handle:
-  search_left_frac: 0.68        # 把手在水壶右侧, 从 kettle bbox 68% 处开始搜索
+  search_left_frac: 0.85        # 把手在水壶右侧, 从 kettle bbox 80% 处开始搜索
   max_saturation: 115           # HSV 饱和度上限
-  min_value: 110                # HSV 明度下限
-  min_rgb: 120                  # RGB 三通道最小值下限 (排除暗色)
+  min_value: 80                 # HSV 明度下限 (降, 容纳阴影中的把手)
+  min_rgb: 90                   # RGB 三通道最小值下限 (降, 同)
   max_rgb_spread: 150           # RGB 三通道最大差值 (排除彩色)
   min_component_area: 80.0      # 白色轮廓最小面积 (px)
   max_component_area: 18000.0   # 白色轮廓最大面积
@@ -55,17 +55,10 @@ white_handle:
   roi_margin_x: 14              # ROI 外扩 (x)
   roi_margin_y: 10              # ROI 外扩 (y)
 
-# ---- 红色胶带检测 ----
+# ---- 红色胶带检测 (基于 RealSense_R/detect_red_tape 简化) ----
 red_handle:
-  low_hue_max: 8                # 红色低 hue 上限 (0~8)
-  high_hue_min: 172             # 红色高 hue 下限 (172~180)
-  min_saturation: 90            # HSV 饱和度下限
-  min_value: 70                 # HSV 明度下限
-  min_r: 120                    # R 通道最小值
-  min_rg_delta: 25              # R-G 最小差值
-  min_rb_delta: 30              # R-B 最小差值
-  min_area: 120.0               # 红色轮廓最小面积
-  max_area: 3600.0              # 红色轮廓最大面积
-  max_width: 120                # 红色轮廓最大宽度
-  max_height: 110               # 红色轮廓最大高度
-  ignore_top_frac: 0.18         # 忽略画面顶部比例 (排除水壶本体红色)
+  low_hue_max: 10               # 红色低 hue 上限 (0~10)
+  high_hue_min: 170             # 红色高 hue 下限 (170~180)
+  min_saturation: 50            # HSV 饱和度下限
+  min_value: 50                 # HSV 明度下限
+  min_area: 20.0                # 红色最小有效面积(像素)

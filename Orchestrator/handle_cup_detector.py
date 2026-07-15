@@ -178,47 +178,25 @@ def find_white_handle_roi(color_image, kettle_bbox, cfg_white):
 def find_handle_red_tag(color_image, cfg_red, roi=None):
     """在 ROI 内检测红色胶带, 返回 (contour, mask) 或 (None, mask).
 
-    移植自 visionpro.py:VisionServer.find_handle_red_tag().
-    关键增强: HSV 双阈值 + R 通道优势检查.
+    基于 RealSense_R/detect_red_tape 简化: HSV 双阈值 → 开运算去噪 → 取最大连通域 → min_area 过滤.
+    移除了 visionpro.py 的 R 通道优势检查、评分系统等复杂逻辑.
     """
     image_h, image_w = color_image.shape[:2]
     hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
 
-    low_h_max = int(cfg_red.get("low_hue_max", 8))
-    high_h_min = int(cfg_red.get("high_hue_min", 172))
-    min_s = int(cfg_red.get("min_saturation", 90))
-    min_v = int(cfg_red.get("min_value", 70))
+    low_h_max = int(cfg_red.get("low_hue_max", 10))
+    high_h_min = int(cfg_red.get("high_hue_min", 170))
+    min_s = int(cfg_red.get("min_saturation", 50))
+    min_v = int(cfg_red.get("min_value", 50))
+    min_area = float(cfg_red.get("min_area", 20.0))
 
-    lower1 = np.array([0, min_s, min_v], dtype=np.uint8)
-    upper1 = np.array([low_h_max, 255, 255], dtype=np.uint8)
-    lower2 = np.array([high_h_min, min_s, min_v], dtype=np.uint8)
-    upper2 = np.array([180, 255, 255], dtype=np.uint8)
+    mask1 = cv2.inRange(hsv, (0, min_s, min_v), (low_h_max, 255, 255))
+    mask2 = cv2.inRange(hsv, (high_h_min, min_s, min_v), (180, 255, 255))
+    mask = cv2.bitwise_or(mask1, mask2)
 
-    mask = cv2.bitwise_or(
-        cv2.inRange(hsv, lower1, upper1),
-        cv2.inRange(hsv, lower2, upper2),
-    )
-
-    # R 通道优势检查 (排除肤色/棕黄色误检)
-    b_ch, g_ch, r_ch = cv2.split(color_image)
-    r16 = r_ch.astype(np.int16)
-    g16 = g_ch.astype(np.int16)
-    b16 = b_ch.astype(np.int16)
-    min_r = int(cfg_red.get("min_r", 120))
-    min_rg = int(cfg_red.get("min_rg_delta", 25))
-    min_rb = int(cfg_red.get("min_rb_delta", 30))
-
-    red_dominant = (
-        (r16 >= min_r)
-        & ((r16 - g16) >= min_rg)
-        & ((r16 - b16) >= min_rb)
-    ).astype(np.uint8) * 255
-    mask = cv2.bitwise_and(mask, red_dominant)
-
-    # 形态学
-    kernel = np.ones((5, 5), np.uint8)
+    # 开运算去噪
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     # ROI 约束
     if roi is not None:
@@ -226,49 +204,22 @@ def find_handle_red_tag(color_image, cfg_red, roi=None):
         roi_mask = np.zeros_like(mask)
         roi_mask[y0:y1 + 1, x0:x1 + 1] = 255
         mask = cv2.bitwise_and(mask, roi_mask)
-    else:
-        ignore_top_frac = float(cfg_red.get("ignore_top_frac", 0.18))
-        if ignore_top_frac > 0:
-            ignore_top = int(image_h * ignore_top_frac)
-            mask[:ignore_top, :] = 0
 
-    # 轮廓过滤 + 评分
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    min_area = float(cfg_red.get("min_area", 120.0))
-    max_area = float(cfg_red.get("max_area", 3600.0))
-    max_w = int(cfg_red.get("max_width", 120))
-    max_h = int(cfg_red.get("max_height", 110))
-
-    candidates = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < min_area or area > max_area:
-            continue
-        x, y, w, h = cv2.boundingRect(cnt)
-        if w < 6 or h < 6:
-            continue
-        if w > max_w or h > max_h:
-            continue
-        cx = x + w / 2.0
-        cy = y + h / 2.0
-        aspect = w / float(h)
-        if aspect < 0.15 or aspect > 6.0:
-            continue
-        fill = area / float(w * h)
-        if fill < 0.35:
-            continue
-
-        rectangular_score = fill
-        size_score = min(area / max(max_area, 1.0), 1.0)
-        upper_score = 1.0 - cy / image_h
-        score = 2.0 * rectangular_score + 1.2 * upper_score + 0.4 * size_score + 0.1 * (cx / image_w)
-        candidates.append((score, cnt))
-
-    if not candidates:
+    # 取最大连通域
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if num_labels <= 1:
         return None, mask
+    areas = [(i, stats[i, cv2.CC_STAT_AREA]) for i in range(1, num_labels)]
+    largest_idx, largest_area = max(areas, key=lambda x: x[1])
+    if largest_area < min_area:
+        return None, mask
+    mask = (labels == largest_idx).astype(np.uint8) * 255
 
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1], mask
+    # 从 mask 提取轮廓
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None, mask
+    return contours[0], mask
 
 
 # ============================================================
@@ -766,7 +717,7 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def close(self):
-        """停止 pipeline."""
+        """停止 pipeline. (不调 destroyAllWindows — 由 main 线程统一清理)"""
         if self._pipeline is not None:
             try:
                 self._pipeline.stop()
@@ -774,7 +725,6 @@ class HandleCupDetector:
             except Exception:
                 pass
             self._pipeline = None
-        cv2.destroyAllWindows()
 
     # ------------------------------------------------------------
     #  独立测试
@@ -818,9 +768,9 @@ class HandleCupDetector:
                         p = h_info["pos_cam"]
                         print(f"[Handle] cam=({p[0]:.3f},{p[1]:.3f},{p[2]:.3f})")
                     else:
-                        kettle = "Y" if h_info["kettle_bbox"] else "N"
-                        white = "Y" if h_info["white_roi"] else "N"
-                        red = "Y" if h_info["red_contour"] else "N"
+                        kettle = "Y" if h_info["kettle_bbox"] is not None else "N"
+                        white = "Y" if h_info["white_roi"] is not None else "N"
+                        red = "Y" if h_info["red_contour"] is not None else "N"
                         dots = f"kettle={kettle} white={white} red={red}"
                         print(f"[Handle] no detection ({dots})")
 
