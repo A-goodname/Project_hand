@@ -567,11 +567,11 @@ class GreetingHandler(StateHandler):
                     break
                 print(f"  {i+1}/{self._wave_cycles}")
                 _h.do_gesture(Gesture.HELLO_1, delay=0.5)
-                time.sleep(self._wave_interval / 2)
+                time.sleep(self._wave_interval / 4)
                 if ctx.stop_event.is_set():
                     break
                 _h.do_gesture(Gesture.HELLO_2, delay=0.5)
-                time.sleep(self._wave_interval / 2)
+                time.sleep(self._wave_interval / 4)
 
             print("[GREETING] RESET — 挥手结束, 复位")
             _h.do_gesture(Gesture.RESET, delay=0.5)
@@ -828,7 +828,9 @@ class HandleGraspAndPourHandler(StateHandler):
     def on_enter(self, ctx: SharedContext):
         self._start(ctx)
         ctx.handle_cup_complete.clear()
-        # Camera B 已在 GREETING 预启动, 只需恢复人就位检测
+        # Camera B 已在 GREETING 预启动, 恢复人就位检测.
+        # 注意: GREETING 时人在 Camera A 前(打招呼/握手), Camera B 画面中无人;
+        # HANDLE 阶段人走到椅子坐下, 此时 Camera B 才需要检测.
         ctx.run_seated_detection = True
 
     def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
@@ -1467,7 +1469,7 @@ class HandleGraspAndPourHandler(StateHandler):
                         if ctx.hand_in_cup_detector is not None:
                             ctx.hand_in_cup_detector.reset()
                         # 等待 main loop 完成检测 (≤5s, TRUE 提前结束)
-                        HAND_IN_CUP_TIMEOUT = 5.0
+                        HAND_IN_CUP_TIMEOUT = 10.0
                         while not ctx.stop_event.is_set():
                             if ctx.hand_on_cup:
                                 print("[INFO] HandInCup: TRUE (提前检测到)")

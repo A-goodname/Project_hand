@@ -2,56 +2,52 @@
 
 ## 当前焦点
 
-**Orchestrator 联调 — Phase 0 通过, Phase A-D 调试中。CRP Cup 递送段新增 C_P5 防碰撞点。**
+**Orchestrator 联调 — Phase 0 ✅, Phase A-C ✅, Phase D HandInCup 判定通过 ✅，CONTINUE 路径调试中。**
 
 ## 最近变更
 
-1. **Camera A pipeline 全生命周期共享** (2026-07-15):
-   - GREETING._start() 创建 HandleCupDetector (color+depth), Phase 0 人检测复用其 color 帧
-   - HANDLE._start() 检测已存在 → 只补稳定器+标定
+### v11 联调修复 (2026-07-15)
 
-2. **Camera B 预加载 + 就位后停止** (2026-07-15):
-   - 提到 GREETING.on_enter 启动
-   - 人就位确认后 `run_seated_detection=False`, 停止 Camera B YOLO, Handle+Cup 独占资源
+1. **Handle P2 可达性修复**:
+   - estun_config `pre_offset.t_offset`: `[0.0,-0.10,0.03]` → `[0,0.10,-0.05]`
+   - P2 更靠近机器人可达空间，逆解成功
 
-3. **红色胶带检测重写** (2026-07-15):
-   - 对齐 RealSense_R/detect_red_tape: HSV双阈值(S≥50 V≥50) + 开运算 + 最大连通域 + min_area≥20
-   - 移除 visionpro.py 的 R优势/Morph close/多级过滤/评分系统
+2. **CRP Handle 流程简化 (删 PREGRIP)**:
+   - 第一次 P2 后不再发送 PREGRIP：`P2→P1→GRIPDONE` 直接夹紧
+   - RESET 从 P2 移到 P1：`P1→RESET→P2→Home`
+   - P2 后无灵巧手动作
 
-4. **白色把手阈值** (2026-07-15): min_value 110→80, min_rgb 120→90, search_left_frac 0.68→0.80
+3. **CRP while 循环优化**:
+   - 删除 Phase B/C `SocketReadStr` while 内的 `Wait 500ms`
+   - SocketReadStr 持续监听，避免 Python 发包时 CRP 在 Wait 中丢包
 
-5. **CRP 修改** (2026-07-15):
-   - SocketClose 修正: Socket1→Socket0
-   - 删除 Phase0→PhaseA 重复 Wait + C_P3→READY 间多余 Wait
-   - 新增 C_P5: CposOffset(C_P1, DCp3), DCp3.dz=100mm, 正常 P1→P5→P3, ABORT P3→P5→P1
-   - C_P5 MovL 后补 Wait 1s
+4. **CRP 倒水延时**: `Wait 5s` → `Wait 3s`
 
-6. **Phase B fixed 模式修复** (2026-07-15):
-   - compute_grasp_rotation 仅非 fixed 分支调用
-   - 稳定器+标定在 ctx.handle_cup_detector 之前创建
+5. **CRP C_P4 安全退避**: `DCp2.dz = Home.z-C_P1.z` → 固定 `DCp2.dz = 100mm`
 
-7. **TOCTOU 竞态修复** (2026-07-15):
-   - Camera A 不在 daemon 线程 close, Pipeline 存活到程序退出 (对齐 estun_greeting)
+6. **CRP CONTINUE IF**: 删除 `equal` 条件判断
 
-8. **日志系统** (2026-07-15):
-   - Orchestrator/logger.py — 终端+文件双输出
-   - 关键事件日志: Phase A/B/C/D, 人就位, HandInCup
+7. **HandInCup 检测调通**:
+   - YOLO model: yolov8m → **yolov8n** (更轻量)
+   - device 加入 config: `hand_in_cup.device: cuda`
+   - 超时 5s → **10s** (含 CUDA warmup 首帧 ~380ms)
+   - 诊断日志: 打印每步耗时 + cup/hand 状态 + stable 计数
+   - 独立测试通过: cup 稳定 ~35ms, stable 10/5 ✅
 
-9. **修复集** (2026-07-15):
-   - 椅子检测: 去掉 has_chair 门控
-   - 人就位: leave_frames 5→30, YOLO 漏检容忍
-   - HandInCup 超时刷屏: 仅首次打印
-   - MediaPipe clearcut: hand_in_cup.py 内 GLOG_minloglevel=3
-   - Camera B D435i serial 死代码删除
-   - Handle P3 left 模式各角度 Y-2cm (10°/15°/20°/30°)
+8. **人就位 + HandInCup 跳帧**:
+   - 人就位: 每 3 帧跑一次 (main.py `_pd_skip = 3`)
+   - HandInCup: 每 2 帧跑一次 (main.py `_hic_skip = 2`)
+   - Camera B 分辨率已配置 1280×720
 
-10. **Skill + TXT 更新** (2026-07-15):
-    - Skill: CRP 修改规则重写 (7条实战陷阱), Camera B→UGREEN, HandInCup→MediaPipe
-    - TXT: v10 changelog + C_P5 路径 + 多余 Wait 删除
+9. **MediaPipe clearcut**: 增强 env var (`GLOG_stderrthreshold=4`, `GRPC_VERBOSITY=NONE`)，shutdown 仍有残留
+
+10. **Skill 更新**: data-as-string 陷阱 — socketclose inside if blocks 必须 dict
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | Phase C/D 全流程测试 | PREGRIP/GRIPDONE/CUP/READY/RELEASE 完整链路 |
-| 🟡 | 人就位检测改进 | bbox 稳定性追踪方案 |
+| 🔴 | CONTINUE 路径全流程测试 | C_P4→RESET→Home→SocketClose 完整链路 |
+| 🟡 | ABORT 路径测试 | P3→P5→P1→RELEASE→P2→Home |
+| 🟡 | MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 级日志仍有泄漏 |
+| 🟢 | HandInCup 诊断日志清理 | 测试稳定后可降级或移除 |

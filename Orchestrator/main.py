@@ -18,9 +18,14 @@ Orchestrator — 系统入口
 """
 
 # 禁用 MediaPipe clearcut 遥测 — 必须在任何 MediaPipe import 之前
+# GLOG_minloglevel: 0=INFO 1=WARNING 2=ERROR 3=FATAL → 3=只显FATAL
+# GLOG_stderrthreshold: 4=完全不写stderr (clearcut shutdown ERROR 也被抑制)
+# GRPC_VERBOSITY: gRPC 内部日志 (clearcut 使用 gRPC 上传遥测)
 import os as _os
 _os.environ["GLOG_minloglevel"] = "3"
+_os.environ["GLOG_stderrthreshold"] = "4"
 _os.environ["GLOG_logtostderr"] = "0"
+_os.environ["GRPC_VERBOSITY"] = "NONE"
 
 import os
 import sys
@@ -121,6 +126,10 @@ def main():
 
     try:
         _pd_was_seated = False       # 去重日志
+        _pd_skip_counter = 0         # 人就位检测跳帧计数
+        _pd_skip = 3                 # 每 3 帧跑一次 (CPU YOLO ~50ms, 不减慢 handle)
+        _hic_skip_counter = 0        # HandInCup 跳帧计数
+        _hic_skip = 2                # 每 2 帧跑一次 (降低 YOLO+MediaPipe 频率)
 
         while not ctx.stop_event.is_set():
             # ============================================================
@@ -137,8 +146,9 @@ def main():
             else:
                 ctx.frames_b = None
 
-            # ---- 人就位检测 (GREETING 完成后启动, READY 时停止) ----
-            if ctx.run_seated_detection and ctx.frames_b is not None:
+            # ---- 人就位检测 (跳帧: 每 N 帧跑一次, 避免 CPU YOLO 阻塞 handle 检测) ----
+            _pd_skip_counter += 1
+            if ctx.run_seated_detection and ctx.frames_b is not None and _pd_skip_counter % _pd_skip == 0:
                 color_b = ctx.frames_b[0]
                 if color_b is not None and pd is not None:
                     seated = pd.detect_person_seated(color_b)
@@ -152,13 +162,14 @@ def main():
                         if new_seated:
                             ctx.run_seated_detection = False  # 人就位确认, 停止Camera B YOLO
 
-            # ---- Hand-in-cup 检测 (READY 后 ≤5s, TRUE 提前结束) ----
+            # ---- Hand-in-cup 检测 (READY 后 ≤10s, TRUE 提前结束) ----
+            _hic_skip_counter += 1
             if ctx.hand_in_cup_active and ctx.hand_in_cup_detector is not None:
-                if time.time() - ctx.hand_in_cup_start_time > 5.0:
+                if time.time() - ctx.hand_in_cup_start_time > 10.0:
                     if ctx.hand_on_cup is not False:  # 首次超时
                         ctx.hand_on_cup = False
-                        session_log("HandInCup 超时 5s")
-                elif ctx.frames_b is not None:
+                        session_log("HandInCup 超时 10s")
+                elif ctx.frames_b is not None and _hic_skip_counter % _hic_skip == 0:
                     color_b = ctx.frames_b[0]
                     if color_b is not None:
                         ctx.hand_in_cup_detector.update(color_b)

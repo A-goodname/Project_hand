@@ -4,7 +4,7 @@ model:
   target_class_id: 0
   device: cpu
 ugreen:
-  camera_id: 3  # DSHOW: 1=D435i RGB, 3=UGREEN 1080P
+  camera_id: 3
   width: 1280
   height: 720
   fps: 30
@@ -13,7 +13,7 @@ chair:
   conf_threshold: 0.4
   overlap_threshold: 0.4
   seated_stable_frames: 10
-  leave_frames: 30             # 退出帧数 (30帧≈1s@30fps, 防YOLO漏检误触发)
+  leave_frames: 30
 delivery:
   X_TEACH: 0.2295
   Y_TEACH: 0.4427
@@ -26,19 +26,20 @@ calibration:
   scale: 1.0
   bias: 0.0
 hand_in_cup:
-  cup_model: model/yolov8m.pt
+  cup_model: model/yolov8n.pt
   hand_model: model/hand_landmarker.task
+  device: cuda
   conf_threshold: 0.5
   hand_min_detection_conf: 0.5
   hand_min_tracking_conf: 0.5
   required_stable: 5
   dist_factor: 1.2
-  bbox_margin: 40             # [分辨率相关] bbox 外扩像素, 720p→40, 480p→20
-  curled_threshold: 35        # [分辨率相关] 手指弯曲判定像素阈值, 720p→35, 480p→25
+  bbox_margin: 40
+  curled_threshold: 35
   curled_min_fingers: 2
-cup_roi_fallback:             # [分辨率相关] YOLO 失败时回退 ROI, 改分辨率后需重新标定
+cup_roi_fallback:
   enabled: true
-  x1: 608
-  y1: 90
-  x2: 661
-  y2: 163
+  x1: 623
+  y1: 230
+  x2: 687
+  y2: 308

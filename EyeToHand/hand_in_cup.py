@@ -38,7 +38,12 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # 禁 MediaPipe clearcut 遥测 (必须在 import mediapipe 之前)
-os.environ.setdefault("GLOG_minloglevel", "3")
+# 注意: 用强制赋值替代 setdefault — 如果其他库先设置了更低的 loglevel,
+# setdefault 不会覆盖, 导致 clearcut ERROR 级日志泄漏.
+os.environ["GLOG_minloglevel"] = "3"
+os.environ["GLOG_stderrthreshold"] = "4"
+os.environ["GLOG_logtostderr"] = "0"
+os.environ["GRPC_VERBOSITY"] = "NONE"
 
 import yaml
 import cv2
@@ -129,6 +134,9 @@ class HandInCupDetector:
         if not cup_model_path:
             cup_model_path = cfg["cup_model"]
 
+        # device: 参数 > config > 默认 "cuda"
+        device = cfg.get("device", device)
+
         self._conf_threshold = conf_threshold if conf_threshold > 0 else cfg["conf_threshold"]
         self._required_stable = required_stable if required_stable > 0 else cfg["required_stable"]
         self._dist_factor = dist_factor if dist_factor > 0 else cfg["dist_factor"]
@@ -187,8 +195,11 @@ class HandInCupDetector:
         Args:
             color_image: BGR 图像 (H, W, 3).
         """
+        _t0 = time.time()
+
         # 1. 检测杯 bbox
-        cup_bbox, _ = self._detect_cup(color_image)
+        cup_bbox, cup_source = self._detect_cup(color_image)
+        _t1 = time.time()
         self._last_cup_bbox = cup_bbox
         self._last_hands = []
         self._last_best_hand = None
@@ -196,6 +207,7 @@ class HandInCupDetector:
         self._last_curled = 0
         cup_center = None
         hit = False
+        hands = []  # 预声明, 避免诊断日志引用未定义变量
 
         if cup_bbox is not None:
             x1, y1, x2, y2 = cup_bbox
@@ -205,6 +217,7 @@ class HandInCupDetector:
 
             # 2. 检测手部 landmarks
             hands = self._detect_hands(color_image)
+            _t2 = time.time()
             self._last_hands = hands
 
             if hands:
@@ -250,11 +263,27 @@ class HandInCupDetector:
         self._last_cup_center = cup_center
 
         # 6. 累积
+        _prev_stable = self._stable_count
         if hit:
             self._stable_count += 1
         else:
             self._stable_count = 0
         self._on_cup = self._stable_count >= self._required_stable
+
+        # --- 诊断日志: 首次或状态变化时打印 ---
+        _t3 = time.time()
+        if not hasattr(self, '_diag_counter'):
+            self._diag_counter = 0
+        self._diag_counter += 1
+        _first = (self._diag_counter <= 3)
+        _changed = (_prev_stable != self._stable_count) or self._on_cup
+        if _first or _changed:
+            cup_str = f'bbox={cup_bbox} src={cup_source}' if cup_bbox else 'MISS'
+            hand_str = f'n_hands={len(hands)}' if cup_bbox else '-'
+            hit_str = f'hit={hit} score={self._last_score} curled={self._last_curled}/{self._curled_min_fingers}'
+            stable_str = f'stable={self._stable_count}/{self._required_stable}' if self._stable_count > 0 else ''
+            timing = f'cup={(_t1-_t0)*1000:.0f}ms hand={(_t2-_t1)*1000:.0f}ms total={(_t3-_t0)*1000:.0f}ms' if cup_bbox else f'cup={(_t1-_t0)*1000:.0f}ms'
+            print(f'[HandInCup #{self._diag_counter}] {cup_str} | {hand_str} | {hit_str} {stable_str} | {timing}')
 
     # ------------------------------------------------------------
 
