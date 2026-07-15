@@ -28,7 +28,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 | 通信协议 | TCP 单 Session 全流程 | 简单可靠, 与 ESTUN 兼容; 避免多连接状态同步 |
 | 配置管理 | YAML 文件 (模块级 config.yaml) | 不改代码可调参数 |
 | HandInCup | YOLOv8m(cup) + MediaPipe Hands(21 landmarks) | landmarks-in-bbox 计分 + 握拳 gate; 遮挡时杯ROI回退 |
-| Cup P3 递送 | XYZ/ABC 全示教固定 (delivery.X_TEACH) | 3D→1D 人体标定工具就绪但暂未接入, X 暂用示教值 |
+| Cup P3 递送 | XYZ/ABC 全示教固定 (delivery.X_TEACH) | UGREEN Camera B 无深度, 3D→1D 标定已废弃 |
 
 ## 设计模式
 
@@ -70,9 +70,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 
 ### Cup P3 递送位姿模式
 
-- X: 全示教固定值 `delivery.X_TEACH` (3D→1D 人体标定工具就绪, 暂未接入)
-- Y, Z, A, B, C: 固定 — `EyeToHand/config.yaml` delivery 段预示教
-- 人体位置仅在 CUP 指令时取一次最新稳定值, PersonDetector 随后暂停
+- XYZABC: 全部示教固定 — `EyeToHand/config.yaml` delivery 段 (UGREEN 无深度, 3D→1D 标定已废弃)
 
 ### HandInCup 检测模式
 
@@ -89,7 +87,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 
 - `PersonDetector` 打开 UGREEN Camera B (OpenCV VideoCapture)
 - Camera B 生命周期: IDLE 关 → GREETING enter 开 → HANDLE 继续
-- main loop 通过标志位 (`run_seated_detection` / `hand_in_cup_active`) 切换检测逻辑
+- main loop 通过 phase 变量切换检测逻辑 (已替代旧标志位)
 - 椅子检测: 每帧实时 YOLO, 取画面中心最近 (不锁定)
 - 人就位: 非对称阈值 (进10出5) + `_chair_baseline` 尺寸锚定 (面积差≤30%更新)
 - 纯 RGB 无深度 — HandInCup 判定仅依赖 landmarks-in-bbox 计分 + curled gate
@@ -133,7 +131,7 @@ RealSense_R/  (旧相机, 手动像素映射) ← Camera A 检测模块
   ├── test_6D.py / test_handle_6D.py / test_cup_6D.py
   └── realsense_shared.py            ← BaseRealSenseDetector
 
-RealSense/  (新相机, rs.align)       ← Camera B 基类
+RealSense/  (新相机, rs.align)       ← Camera A 新版 (内参完好时使用)
   └── realsense_shared.py            ← BaseRealSenseDetector
 
 EyeToHand/                           ← 眼在手外模块

@@ -87,12 +87,16 @@
 
 | 任务 | 说明 |
 |------|------|
+| 🔴 Cup P3↔P1/P4 速度优化 | CRP C_P3↔C_P1/C_P4 MovL 提速, 减少递送等待 |
+| 🔴 人就位检测鲁棒性 | YOLO 漏检导致误判, 需更稳定的检测策略 |
+| 🟡 加水实测 | 完整流程加水倒水, 验证防溅 + HandInCup 判定 |
+| 🟡 抓取姿态微调 | 末端抓取姿态 + 灵巧手手势微调优化抓取成功率 |
+| ✅ 独立部署包 | reference/orchestrator_standalone/ 已完成 |
 | 🟢 完整流程稳定性测试 | 多次连续运行 |
 | 🟢 MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |
-| 🟢 EyeToHand 标定接入 | 3D→1D 人体标定 (暂用 delivery.X_TEACH) |
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)
-- UGREEN Camera B 纯 RGB, 无深度数据
-- EyeToHand result.yaml 标定暂未接入
+- UGREEN Camera B 纯 RGB 无深度 — 3D→1D 人体标定不可行 (已废弃, P3 X 全示教)
+- EyeToHand result.yaml 标定已废弃 (Camera B 无深度无法获得 Z)
 - MediaPipe clearcut shutdown ERROR 无法完全抑制

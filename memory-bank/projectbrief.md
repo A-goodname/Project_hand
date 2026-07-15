@@ -14,7 +14,7 @@
 
 - 机械臂: ESTUN 机器人 (TCP 通信)
 - 灵巧手: Omnihand (USB 串口通信)
-- 相机: RealSense D435i (主用), Epic Eye Pixel Pro (灰度备用), Orbbec Gemini 215 (微距备用)
-- 检测算法: YOLOv8 / YOLO-World / 微调 YOLOv8n / SAM2
-- 位姿计算: PCA + PointNet++ / 深度投影
+- 相机: Camera A = RealSense D435i (眼在手上), Camera B = UGREEN 1080P (眼在手外, 纯RGB)
+- 检测算法: YOLOv8n (微调kettle) + YOLOv8m/YOLOv8n (cup) + MediaPipe Hands + HSV 白把手/红胶带
+- 位姿计算: 固定 ABC 模式 (基系 config 直读) + 深度反投影
 - 环境: Python 3.11+, Conda (Proj), PyTorch CUDA 12.6

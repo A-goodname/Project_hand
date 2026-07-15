@@ -42,6 +42,10 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
+| 🔴 | Cup P3↔P1/P4 速度优化 | CRP 中 C_P3↔C_P1/C_P4 段提速, 加快递送+退避 |
+| 🔴 | 人就位检测鲁棒性 | 减少 YOLO 漏检导致的误判, leave_frames 临时缓解不够 |
+| 🟡 | 加水实测 | 完整流程加水倒水, 验证防溅 + HandInCup 判定 |
+| 🟡 | 抓取姿态微调 | 末端抓取姿态 + 灵巧手手势微调优化抓取成功率 |
+| ✅ | 独立部署包 | reference/orchestrator_standalone/ 15 文件已完成 |
 | 🟢 | 完整流程稳定性测试 | 多次连续运行验证 |
 | 🟢 | MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |
-| 🟢 | HandInCup 诊断日志清理 | 减少终端输出 |
