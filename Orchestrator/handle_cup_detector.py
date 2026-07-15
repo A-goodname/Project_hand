@@ -611,11 +611,13 @@ class HandleCupDetector:
             handle_result["white_roi"] = white_roi
             self._last_white_roi = white_roi
 
-            # 红色胶带
-            effective_roi = white_roi if white_roi is not None else kettle_bbox
-            red_contour, _red_mask = find_handle_red_tag(
-                color_image, self._cfg_red, roi=effective_roi,
-            )
+            # 红色胶带 (仅在白色把手定位成功后才搜)
+            if white_roi is None:
+                red_contour = None
+            else:
+                red_contour, _red_mask = find_handle_red_tag(
+                    color_image, self._cfg_red, roi=white_roi,
+                )
             handle_result["red_contour"] = red_contour
             self._last_red_contour = red_contour
 

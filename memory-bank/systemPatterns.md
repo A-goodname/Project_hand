@@ -94,29 +94,33 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 - 人就位: 非对称阈值 (进10出5) + `_chair_baseline` 尺寸锚定 (面积差≤30%更新)
 - 纯 RGB 无深度 — HandInCup 判定仅依赖 landmarks-in-bbox 计分 + curled gate
 
-### 状态机 — 3 状态闭环
+### 4 阶段顺序调度 (v12 重构, 替代状态机)
 
 ```text
-IDLE ──(人就位)──→ GREETING ──(Phase 0 完成)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
+greeting ──(Phase 0 done)──→ handle_detect ──(targets_sent)──→ seated_check ──(ready_received)──→ hand_in_cup ──(hand_judged)──→ exit
 ```
 
-| 状态 | Camera A (眼在手上, 旧相机) | Camera B (眼在手外, 新相机) | TCP |
-|------|----------|----------|-----|
-| IDLE | 闲置 | 椅子标定 + 人就位检测 | 无 |
-| GREETING | 独立 pipeline, 人进门检测→关闭 | 闲置 (椅子已标定) | 8600 |
-| HANDLE_GRASP_AND_POUR | Handle+Cup 6D 检测 | HandInCup + 人就位确认 | 8080 |
+| 阶段 | Camera A | Camera B | 检测器 | TCP |
+|------|----------|----------|--------|-----|
+| greeting | Phase 0 人检测→4步协议 | 椅子标定 (竞争不大) | YOLOv8n person | 8600 |
+| handle_detect | Handle+Cup 全速 | **PAUSED** (不拉帧) | HandleCupDetector | 8080 Phase A-B |
+| seated_check | 已关闭 | 人就位全速 | PersonDetector | 8080 Phase C |
+| hand_in_cup | 已关闭 | HandInCup 全速 | HandInCupDetector | 8080 Phase D |
 
-- `HandInCupDetector` 由 main.py 创建, 通过 `SharedContext.hand_in_cup_detector` 共享给状态机 (避免双实例 reset() 失效)
-- `PersonDetector` 新增椅子标定 + 人就位检测: `calibrate_chair()` + `detect_person_seated()`
-- **RELEASE 双语义**: `hand_in_cup_active` 标志区分 Phase C 松把手 vs Phase D HandInCup 判定
-- **Phase D 时序**: READY (启动 HandInCup) → Wait 2s (检测稳定) → RELEASE (判定) → CONTINUE/ABORT
+- **任何时刻只有一个检测器运行** — 消除 YOLO 竞争, 移除跳帧补丁
+- Phase 过渡: TCP daemon 线程写入 `SharedContext` Event, main loop 轮询
+- `hand_on_cup is None` → Phase C 松把手; `is not None` → Phase D 判定
+- `_camera_a_to_close`: Phase B 后 daemon 线程保存引用, main 线程安全关闭 pipeline
 
 ## 模块关系
 
 ```text
 Orchestrator/                        ← 系统入口
-  ├── main.py                        ← 双相机主循环 + Person/HandInCup 切换
-  └── state_machine.py               ← 2 状态 + 单 Session TCP handler
+  ├── main.py                        ← 4-phase 主循环 + 可视化
+  ├── state_machine.py               ← SharedContext + GreetingHandler + HandleHandler
+  ├── handle_cup_detector.py         ← Camera A 轻量检测器
+  ├── config.yaml                    ← 检测参数
+  └── logger.py                      ← 终端+文件双输出
 
 Estun/                               ← 顶层入口 (单相机)
   ├── estun_handle_cup_run.py        ← RealSense Handle+Cup 融合 (参考实现)

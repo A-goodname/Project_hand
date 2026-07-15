@@ -41,8 +41,8 @@ cup_euler_left: [-90, 89, -90]
 white_handle:
   search_left_frac: 0.85        # 把手在水壶右侧, 从 kettle bbox 80% 处开始搜索
   max_saturation: 115           # HSV 饱和度上限
-  min_value: 80                 # HSV 明度下限 (降, 容纳阴影中的把手)
-  min_rgb: 90                   # RGB 三通道最小值下限 (降, 同)
+  min_value: 110                # HSV 明度下限 (降, 容纳阴影中的把手)
+  min_rgb: 120                  # RGB 三通道最小值下限 (降, 同)
   max_rgb_spread: 150           # RGB 三通道最大差值 (排除彩色)
   min_component_area: 80.0      # 白色轮廓最小面积 (px)
   max_component_area: 18000.0   # 白色轮廓最大面积

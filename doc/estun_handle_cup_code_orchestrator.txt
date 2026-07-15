@@ -1,6 +1,24 @@
-ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程: P4 Y后退 + HandInCup 判定)
+ESTUN 把手+水杯融合抓取示教器代码 (Orchestrator 双相机全流程: 4 阶段调度 + HandInCup 判定)
 ============================================================
-与 Orchestrator/state_machine.py (HandleGraspAndPourHandler) 配合使用.
+与 Orchestrator/state_machine.py (HandleGraspAndPourHandler / GreetingHandler) 配合使用.
+CRP 文件: doc/handlepluscup-orchestrator.crp (80 widgets, CONTINUE/ABORT 测试通过)
+
+=== v12 (2026-07-15) 编排重构 + 联调修复 ===
+1. 状态机 → 4 阶段顺序调度:
+   - 删除 StateMachine/StateHandler/IdleHandler, 改为 phase 变量调度
+   - greeting → handle_detect → seated_check → hand_in_cup (单线顺序)
+   - 任何时刻只有一个检测器运行, 消除 YOLO 竞争, 删除跳帧补丁
+2. SharedContext 简化: 删 run_seated_detection/hand_in_cup_active/handle_cup_complete
+   新增 greeting_done/targets_sent/ready_received/hand_judged Events
+3. CRP CONTINUE CposOffset 修复: pointa/pointb 交换 → "参数错误"
+   修正: pointa=DCp2(DCPOS), pointb=C_P3(CPOS) → C_P4=CposOffset(C_P3,DCp2) ✓
+4. CRP TranStrToCpos 信号位姿修复: <0,0,0,0,0,0>原点不可达 → 发送 Phase A 机器人初始位姿
+5. CRP SocketReadStr 超时: 5s → 15s (匹配 Python 10s + 余量)
+6. CRP 慢速: 倒水 H_P3↔H_P4 和 ABORT P3↔P4 使用 sudu (非 V100)
+7. Python _camera_a_to_close 修复: Phase B 后 daemon 线程保存引用, main 线程关闭
+8. Python hand_judged 时机修复: 从 CONTINUE/ABORT 发送 → daemon 线程最终清理时
+9. Python HandInCup 循环修复: hand_on_cup is None → None or not (False 时继续检测)
+10. Python 白色把手回退删除: HandleCupDetector 找不到白色把手不再搜壶身红色
 
 === v11 相比 v10 的关键变化 (2026-07-15) ===
 1. Handle 预抓取偏移调整: estun_config pre_offset.t_offset [0.0,-0.10,0.03] → [0,0.10,-0.05], P2 更靠近可达空间

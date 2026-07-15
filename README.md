@@ -1,287 +1,170 @@
 # 机械臂+灵巧手抓取系统
 
-通过相机检测抓取目标，计算6D位姿，经手眼标定和工具偏移补偿后，通过TCP发送给ESTUN机器人，控制灵巧手完成抓取。
+双相机 (眼在手上 + 眼在手外) 全流程自动抓取-倒水-递杯. Camera A 检测把手+水杯 3D 位姿, Camera B 检测人就位+HandInCup 判定, TCP 发送给 ESTUN 机器人控制 OmniHand 灵巧手.
 
-## 环境配置
+## 硬件需求
 
-### Python 版本
+| 设备 | 型号 | 连接 | 用途 |
+|------|------|------|------|
+| Camera A | RealSense D435i (serial `342222071364`) | USB 3.0 | 眼在手上: Handle+Cup 3D 检测 |
+| Camera B | UGREEN 1080P | USB | 眼在手外: 人就位 + HandInCup |
+| 灵巧手 | OmniHand | USB 串口 (默认 COM5) | 抓取/手势/压力检测 |
+| 机械臂 | ESTUN | TCP (LAN) | 执行抓取动作 |
+| GPU | NVIDIA (CUDA 12.6) | — | YOLO 推理加速 |
 
-- Python >=3.11, <3.12
+## 运行前准备
 
-### 前置步骤 (手动安装)
+首次运行前按顺序完成:
 
-依赖分三部分安装，请按顺序执行：
-
-#### 步骤 1: 安装 PyTorch (CUDA 12.6)
+### 1. 环境安装
 
 ```bash
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-```
-
-#### 步骤 2: 安装 EpicEye SDK
-
-参考 `epiceyesdk_samples_project/python/README.md`，打包 whl 并安装。
-
-#### 步骤 3: 安装其余依赖
-
-```bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 包含所有固定版本的 pip 依赖（numpy, opencv-python, ultralytics, pyrealsense2, pyorbbecsdk2 等）。
+EpicEye SDK 需要手动打包 whl 安装 (参考 `epiceyesdk_samples_project/python/README.md`).
 
-## 目录结构
+### 2. 确认硬件连接
 
-| 路径 | 说明 |
-| ------ | ------ |
-| `Estun/estun_run.py` | **主入口 (RealSense实时版-瓶身)**，整合检测→位姿转换→TCP服务器→灵巧手控制 |
-| `Estun/estun_epiceye_run.py` | **主入口 (EpicEye单次触发版-瓶身)**，EpicEye相机单次拍照→6D抓取 |
-| `Estun/estun_handle_run.py` | **主入口 (RealSense Handle 6D版)**，微调YOLOv8n+SAM2+扫描线分离把手→3点位姿 |
-| `Estun/estun_config.yaml` | 机器人IP、灵巧手串口、灵巧手偏移、抓取模式、把手偏移等配置 |
-| `Estun/utils_shared.py` | 共享工具库：坐标变换工具 + 灵巧手控制，瓶身入口共用 |
-| `Estun/estun_demo.py` | 演示脚本：RealSense版位姿转换链路验证 (瓶身, 无硬件依赖) |
-| `Estun/estun_epiceye_demo.py` | 演示脚本：EpicEye版位姿转换链路验证 (瓶身, 无硬件依赖) |
-| `Estun/estun_handle_demo.py` | 演示脚本：RealSense Handle版位姿转换链路验证 (把手, 无硬件依赖) |
-| `Estun/estun_cup_demo.py` | **演示脚本：水杯单检测位姿转换验证**，独立 pipeline，支持 back/left handle_side 多模式角度约束 |
-| `Estun/estun_handle_cup_demo.py` | **演示脚本：Handle+Cup 融合版**，双检测器共享 pipeline 位姿转换验证 (无硬件依赖) |
-| `Estun/estun_handle_cup_run.py` | **主入口 (Handle+Cup 融合版)**，Handle 抓取+倒水 + Cup 抓取+递杯，含 TCP+CUP 指令，支持 back/left 双模式 |
-| `Estun/estun_greeting_handle_cup_run.py` | **主入口 (打招呼+Handle+Cup 融合版)**，Phase 0 打招呼(4步协议, port 8600) + Phase A-C Handle+Cup 抓取(port 8080)，YOLO人检测+挥手(速度插值 very_fast/medium/very_slow)+握手(压力检测配置化) |
-| `Estun/estun_teach_p3.py` | **P3 倒水位置示教脚本**，支持 back/left 分模式 + 多角度 (10°/15°/20°/30°) |
-| `Estun/estun_test.py` | TCP 服务器模拟脚本，持续发送位姿并处理 GRIP/RELEASE 指令 |
-| `Estun/__init__.py` | Estun 包标记文件 |
-| `EyeToHand/` | **眼在手外模块**：人体检测 (PersonDetector)、椅子标定 → 人就位判定、**人手-杯把手重合检测** (HandInCupDetector, YOLOv8m+MediaPipe Hands)、**UGREEN Camera B 适配** (camera.py, 纯 RGB) |
-| `Orchestrator/` | **双相机流程编排**：3 状态状态机 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)、Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)、HandInCup 判定、双相机主循环 |
-| `calib_data/` | 手眼标定工具（采集+标定+可视化）及标定结果 |
-| `RealSense_R/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (旧版, 无 rs.align, 手动像素映射) |
-| `RealSense/` | RealSense D435i + YOLO 6D检测 + SAM分割 + 把手检测 (新版, 使用 rs.align 简化深度对齐, 适用于内参完好的相机) |
-| `Orbbec/` | Orbbec Gemini 215微距相机模块 |
-| `EpicEye/` | Epic Eye Pixel Pro相机模块（灰度YOLO检测） |
-| `Omnihand/` | 灵巧手USB串口控制（手势、速度、使能） |
-| `KettleTraining/` | 水壶检测模型微调 (数据采集/标注/训练/测试) |
-| `doc/` | 机器人通信协议、代码模板等文档 |
-| `doc/Module_Rules.md` | 各硬件模块开发规则汇总 |
-| `doc/Handle_Process.md` | 把手检测流程及关键设计决策记录 |
-| `doc/Handle_Cup_Process.md` | **把手+水杯融合流程文档**，6 点位姿计算、共享 pipeline 架构、配置参数说明 |
-| `doc/Greeting_Flow.md` | **打招呼+Handle+Cup 全流程文档**，Phase 0/Phase A-C 协议时间线、位姿来源、文件一览 |
-| `doc/Project_Workflow.md` | 完整项目流程文档 (双相机体系 + 通信协议 + 标定) |
-| `doc/Yolo_World.md` | YOLO-World 零样本检测配置与使用说明 |
-| `doc/Grip_Process.md` | 位姿转换流程文档（末端接触+工具偏移两阶段） |
-| `doc/Kettle_Training_Task.md` | 水壶检测模型微调详细流程 |
-| `doc/python_script_template.*` | Python 代码架构模板 (含中文+英文标点规范) |
+- [ ] Camera A USB 连接, serial 与 `RealSense_R/D435i_info.yaml` 一致
+- [ ] Camera B USB 连接, 记下 OpenCV 设备索引 (运行 `python -c "import cv2; [print(i) for i in range(5) if cv2.VideoCapture(i).isOpened()]"` 测试)
+- [ ] OmniHand 串口连接, 确认 `Estun/estun_config.yaml` → `hand.port`
+- [ ] 机械臂与控制 PC 在同一局域网
 
-## 快速开始
+### 3. 配置 IP 与端口
 
-### RealSense 实时版 (瓶身)
+编辑 `Estun/estun_config.yaml`:
 
-1. 连接 RealSense 相机和灵巧手（USB串口）
-2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
-3. 运行 `python Estun/estun_run.py`
-4. 机器人作为TCP客户端连接本服务器，接收6D目标位姿
+| 参数 | 说明 |
+|------|------|
+| `estun.tcp_server.host` | **本机 IP** (机械臂作为客户端连接) |
+| `estun.tcp_server.port` | 8080 (Phase A-D 抓取) |
+| `estun.greeting.port` | 8600 (Phase 0 打招呼) |
+| `estun.hand.port` | OmniHand 串口号 (如 COM5) |
 
-### EpicEye 单次触发版 (瓶身)
+编辑 `EyeToHand/config.yaml`:
 
-1. 连接 EpicEye 相机和灵巧手（USB串口）
-2. 确认 `EpicEye/epiceye_config.yaml` 中 `handeye_matrix` 已正确填入
-3. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
-4. 运行 `python Estun/estun_epiceye_run.py`
-5. 机器人作为TCP客户端连接本服务器，接收6D目标位姿
+| 参数 | 说明 |
+|------|------|
+| `ugreen.camera_id` | Camera B 的 OpenCV 设备索引 (0/1/2/3...) |
 
-### RealSense Handle 6D 版 (把手)
+### 4. 标定 Camera B 杯 ROI
 
-1. 连接 RealSense 相机和灵巧手（USB串口）
-2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
-3. 确认 `RealSense_R/config.yaml` 中 `handle.skip_frames` 跳帧参数和 `handle.handle_side` 把手侧
-4. 可选: 在把手上贴红色胶带并启用 `red_tape.enabled` 辅助检测
-5. 运行 `python Estun/estun_handle_run.py`
-6. 机器人作为TCP客户端连接本服务器，接收 P1(抓取点)/P2(预抓取点)/P3(目标点) 三组位姿
-7. 机器人依次发送 PREGRIP/GRIPDONE/RESET 指令控制灵巧手
-
-### RealSense Handle + Cup 融合版 (把手抓取+倒水+水杯抓取)
-
-1. 连接 RealSense 相机和灵巧手（USB串口）
-2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）和 `hand.port`（串口号）
-3. 确认 `RealSense_R/config.yaml` 中 `cup.handle_side` 为 `back` 或 `left`
-4. 配置 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.{side}` 和 `pour_angle`
-5. 运行 `python Estun/estun_handle_cup_run.py`
-6. 机器人作为TCP客户端连接本服务器，接收 Handle P1/P2/P3 三组位姿
-7. 倒水完成后机械臂发 `CUP` 指令获取 Cup P1/P2/P3 位姿
-8. 支持 back/left 双模式，P3 支撑多倒水角度 (10°/15°/20°/30°)
-
-### 打招呼 + Handle + Cup 融合版 (Phase 0 打招呼 + 抓取)
-
-1. 连接 RealSense 相机和灵巧手（USB串口）
-2. 修改 `Estun/estun_config.yaml` 中的 `host`（本机IP）、`hand.port`（串口号）
-3. 确认 `greeting` 段中 `zhaoshou1_pose` / `zhaoshou2_pose` / `woshou_pose` 示教值已填入 (mm/deg)
-4. 运行 `python Estun/estun_greeting_handle_cup_run.py`
-5. 机器人先连接 8600 执行打招呼 CRP (4步协议), 再连接 8080 执行 Handle+Cup CRP
-6. 打招呼阶段: 按 `q` 可跳过 Phase 0 直接进入抓取
-
-### P3 倒水位置示教
-
-1. 运行 `python Estun/estun_teach_p3.py`，按提示沿 X/Y/Z 方向微调末端位置
-2. 设置 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` 切换倒水角度
-3. 示教数据按角度索引 (10/15/20/30) + back/left 分模式存储
-
-### 双相机全流程 (Orchestrator) 快速开始
-
-1. 连接 **Camera A** (RealSense D435i, serial `342222071364`) 和 **Camera B** (UGREEN Camera 1080P)
-2. 首次使用确认 `EyeToHand/config.yaml` → `ugreen.camera_id` (通常为 1)，分辨率 1920×1080@30fps
-3. **首次使用必须标定杯 ROI 回退区域** (见下方)
-4. 修改 `Estun/estun_config.yaml` → `host`、`hand.port`
-5. 运行 `python Orchestrator/main.py`
-
-### Camera B 杯 ROI 标定 (UGREEN 替换后必须执行)
-
-UGREEN Camera 无深度数据，HandInCup 纯 RGB 判定。YOLO 检测不到杯 (class 41) 时回退到固定 ROI。
+UGREEN Camera 无深度, YOLO 检测不到杯时回退到固定 ROI:
 
 ```bash
 python EyeToHand/hand_in_cup.py --calibrate-roi
 ```
 
-1. 确保 UGREEN Camera 对准杯放置区域
-2. 鼠标拖拽框选杯所在的固定区域
+1. 确保 Camera B 对准杯放置区域
+2. 鼠标拖拽框选杯区域
 3. 按 `s` 保存 → 写入 `EyeToHand/config.yaml` → `cup_roi_fallback`
-4. 按 `r` 重选，按 `q` 退出
 
-### PersonDetector / HandInCup 独立测试
+### 5. 手眼标定确认
+
+- [ ] `calib_data/calibration_result.yaml` 存在
+- [ ] `T_cam_to_gripper` 矩阵非单位阵 (查看 `handeye.use_method`)
+- [ ] 如更换相机/重新安装 → 运行 `calib_data/collect_data.py` + `calib_data/calibrate_handeye.py`
+
+### 6. 抓取偏移微调
+
+首次部署或机械结构变更时必须重调:
+
+| 偏移 | 配置文件 | 关键参数 |
+|------|----------|----------|
+| Handle 抓取 | `estun_config.yaml` | `handle_grasp.gripper_offset.t_handle_offset` |
+| Cup 抓取 (back) | `estun_config.yaml` | `cup_grasp.gripper_offset.t_cup_offset` |
+| Cup 抓取 (left) | `estun_config.yaml` | `cup_grasp.gripper_offset.t_cup_offset_left` |
+
+微调方法: 运行对应 `_demo.py` (如 `estun_handle_cup_demo.py`), 启用 `fine_tune_mode`, 手动微调后自动回算新偏移.
+
+### 7. 示教位姿 + 模型确认
+
+- [ ] P3 倒水偏移: `estun_config.yaml` → `handle_grasp.p3_teach_offset` (按角度+模式索引)
+- [ ] Cup P3 递送: `EyeToHand/config.yaml` → `delivery.*_TEACH`
+- [ ] 打招呼位姿: `estun_config.yaml` → `greeting.zhaoshou*_pose / woshou_pose`
+- [ ] 模型文件: `model/kettle_yolov8n_finetune.pt`, `model/hand_landmarker.task`
+- [ ] YOLO 基础模型首次运行自动下载
+
+## 快速开始
+
+### 主入口: 双相机全流程
 
 ```bash
-# 椅子标定 + 人就位检测
+python Orchestrator/main.py
+```
+
+4 阶段顺序执行: `greeting → handle_detect → seated_check → hand_in_cup`.
+
+1. 先启动 Python 端, 再运行机器人 CRP
+2. CRP 文件: `doc/handlepluscup-orchestrator.crp` (80 widgets, 下载到示教器)
+3. 按 `q` 退出
+
+### 单独测试
+
+```bash
+# Camera A Handle+Cup 检测
+python Orchestrator/handle_cup_detector.py
+
+# Camera B 人就位检测
 python EyeToHand/person_detector.py
 
-# HandInCup 实时检测
+# Camera B HandInCup 检测
 python EyeToHand/hand_in_cup.py
-
-# HandInCup 实时诊断 (按 d 诊断当前帧)
-python EyeToHand/hand_in_cup.py --diagnose-live
 ```
 
-## 配置说明
+## 配置速查
 
-所有配置通过YAML文件管理，无需改代码：
-
-- **RealSense 检测模型/目标类别 (瓶身)** → 修改对应模块 `config.yaml` 中的 `model.name` 和 `model.target_class_id` (`RealSense_R/` 或 `RealSense/`)
-- **RealSense 水壶检测模型 (把手)** → 修改对应模块 `config.yaml` 中的 `kettle_model.model` (微调YOLOv8n) 或 `yolo_world.model` (YOLO-World)
-- **RealSense 把手检测参数** → 修改对应模块 `config.yaml` 中的 `handle` 段 (side/skip_frames/center_deviation_ratio 等)
-- **RealSense 水杯检测参数** → 修改对应模块 `config.yaml` 中的 `cup` 段 (height/rim_radius/rim_offset_ratio/handle_side)
-- **EpicEye 检测模型/目标类别** → 修改 `EpicEye/epiceye_config.yaml` 中的 `model.gray_path` 和 `model.class_id`
-- **切换运行设备** → 修改对应相机模块配置文件中的 `model.device`（gpu/cpu）
-- **修改机器人参数** → 修改 `Estun/estun_config.yaml`
-- **调整瓶身抓取位置** → 微调 `Estun/estun_config.yaml` 中的 `gripper_offset.t_offset`
-- **调整把手抓取位置** → 微调 `Estun/estun_config.yaml` 中的 `handle_grasp.gripper_offset.t_handle_offset`
-- **切换抓取模式** → 修改 `Estun/estun_config.yaml` 中的 `orientation_mode`（free/vertical/horizontal/fixed）
-- **切换抓取方向** → 修改 `Estun/estun_config.yaml` 中的 `grasp_direction`（right/left）
-- **固定姿态配置** → 修改 `Estun/estun_config.yaml` 中的 `fixed_abc.right` / `fixed_abc.left` (fixed 模式)
-- **把手跳帧控制** → 修改对应模块 `config.yaml` 中的 `handle.skip_frames`（每N帧检测一次）
-- **把手抓取点偏移** → 微调 `Estun/estun_config.yaml` 中的 `handle_grasp.pre_offset` / `handle_grasp.target_offset`
-- **红色胶带辅助检测** → 修改对应模块 `config.yaml` 中的 `red_tape.enabled` / `red_tape.min_area`
-- **SAM 模型选择** → 修改对应模块 `config.yaml` 中的 `sam.model` (当前为 sam2_b.pt)
-- **调整水杯偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `cup_grasp.gripper_offset.t_cup_offset` (back 模式) 或 `t_cup_offset_left` (left 模式)
-- **P3 倒水角度切换** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.pour_angle` (10/15/20/30)
-- **P3 示教偏移 (back/left)** → 修改 `Estun/estun_config.yaml` 中的 `handle_grasp.p3_teach_offset.back` / `.left` 各角度 `t_offset` 和 `r_abc`
-- **Camera B UGREEN 相机** → 修改 `EyeToHand/config.yaml` → `ugreen` 段 (camera_id/width/height/fps)
-- **眼在手外椅子标定** → 修改 `EyeToHand/config.yaml` → `chair` 段 (conf_threshold / stabilize_frames / overlap_threshold / seated_stable_frames)
-- **眼在手外人体检测** → 修改 `EyeToHand/config.yaml` 中的 `model`、`delivery.*` 参数
-- **杯 ROI 回退标定** → 运行 `python EyeToHand/hand_in_cup.py --calibrate-roi` 鼠标框选杯区域
-- **眼在手外标定** → 运行 `EyeToHand/calibration/calibrate.py` 采集 N 点拟合 `a,b,c,d` (3D→1D 人体标定, 暂未接入)
-
-## 核心流程
-
-### 瓶身抓取
-
-```text
-相机检测 → 手眼标定转末端系 → 工具偏移补偿 → 转基坐标系 → TCP发送 → 灵巧手抓取
-```
-
-详细位姿转换算法见 `doc/Grip_Process.md`。
-
-### 把手抓取
-
-```text
-检测阶段:
-  微调YOLOv8n → SAM2 (GPU/CPU) → 水平扫描线分离把手 → (可选)红色胶带替换位置
-
-稳定阶段:
-  PoseStabilizer (仅检测帧执行) → cam→ee → 补偿+对齐 → 基坐标系
-                                                                        ↓
-发送3点位姿: P1(抓取点)/P2(预抓取点)/P3(目标点)
-            (P1 固定 C 值到 [-100, -80] 区间, 使手指垂直把手)
-```
-
-详细把手检测流程见 `doc/Handle_Process.md`。
-
-### 把手+水杯融合 (Handle + Cup)
-
-```text
-Phase A: 机器人发送末端初始位姿 (5s 超时)
-Phase B: 双检测器 (共享 pipeline) 同步检测 →
-          Handle 稳定 → cam2ee → P1(抓取)/P2(预抓取)
-          Cup 稳定 → cam2ee → P1/P2/P3
-          P3_pour = Cup P1 基系 + P3_TEACH_OFFSET (按角度/模式索引)
-          → 发送 Handle 三个位姿 <P1>[P2]{P3}
-Phase C: 指令循环: PREGRIP → GRIPDONE → RESET → CUP → RELEASE → GRIP
-```
-
-流程文档见 `doc/Handle_Cup_Process.md`。
-
-### 双相机全流程 (Orchestrator)
-
-```text
-Camera A (眼在手上)                  Camera B (眼在手外)
-      ↓                                    ↓
-Handle+Cup 6D 检测                  PersonDetector (人体X + 椅子标定 + 人就位)
-      ↓                                    ↓
-手眼标定 (cam→ee)                    HandInCup (YOLOv8m+MediaPipe Hands)
-      ↓                                    ↓
-TCP 8080 pack_three                 TCP 8600 Phase 0 打招呼
-      ↓                                    ↓
-      └────────────┬───────────────────────┘
-                   ↓
-          ESTUN 机器人 + Omnihand 灵巧手
-
-
-3 状态闭环:
-  IDLE ──(人就位)──→ GREETING ──(Phase 0 完成)──→ HANDLE_GRASP_AND_POUR ──(SocketClose)──→ IDLE
-
-各状态职责:
-  IDLE:                   Camera B 关闭 → 直接 GREETING
-  GREETING:               Camera B 启动 + 人就位检测启动; Camera A 独立 pipeline + TCP 8600 Phase 0
-  HANDLE_GRASP_AND_POUR:  单 TCP Session 8080 全流程:
-    Phase A: Robot → PC  [x,y,z,A,B,C]       初始末端位姿 (m/deg)
-    Phase B: PC → Robot  <H_P1>[H_P2]{H_P3}  Handle 三组位姿
-    Phase C: 指令循环 PREGRIP → GRIPDONE → RESET → CUP
-             PC → Robot  <C_P1>[C_P2]{P3}    Cup 位姿 (P3=递送, 全示教)
-             灵巧手: RELEASE(松把手) → GRIP(抓杯)
-    Phase D: READY (启动 HandInCup) → Wait 2s → RELEASE (判定)
-             TRUE:  release_object() + CONTINUE → P4退避 → RESET → Home
-             FALSE: ABORT → P1放回 → RELEASE → P2退避 → RESET → Home
-```
-
-- **Camera A** (眼在手上, serial `342222071364`, `RealSense_R/` 手动像素映射): Handle+Cup 6D 检测
-- **Camera B** (眼在手外, **UGREEN Camera 1080P**, `EyeToHand/camera.py` OpenCV 封装): 人体检测 + 椅子标定 + 人就位 + HandInCup 检测 (纯 RGB, 无深度)
-- **Cup P3**: XYZ/ABC 全示教固定值 (3D→1D 人体标定工具就绪, 暂未接入)
-- **HandInCup**: YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks 帧间跟踪), landmarks-in-bbox 计分制 + curled gate (score≥5 绕过 curl), **纯 RGB 判定**
-- **RELEASE 双语义**: READY 之前 → 松把手; READY 之后 → HandInCup 判定触发 (hand_in_cup_active 标志区分)
-- 代码: `Orchestrator/state_machine.py` + `Orchestrator/main.py` + `EyeToHand/hand_in_cup.py` + `EyeToHand/person_detector.py` + `EyeToHand/camera.py`
+| 你想改什么 | 去哪改 |
+|-----------|--------|
+| 本机 IP / 串口号 | `Estun/estun_config.yaml` |
+| Handle/Cup 抓取偏移 | `Estun/estun_config.yaml` → `handle_grasp` / `cup_grasp` |
+| P3 倒水角度 | `Estun/estun_config.yaml` → `p3_teach_offset.pour_angle` |
+| Camera B 设备索引 | `EyeToHand/config.yaml` → `ugreen.camera_id` |
+| Cup P3 递送位姿 | `EyeToHand/config.yaml` → `delivery.*_TEACH` |
+| 杯 ROI 回退 | `python EyeToHand/hand_in_cup.py --calibrate-roi` |
+| 检测模型/固定ABC/跳帧 | `Orchestrator/config.yaml` |
+| 白色把手/红色胶带 HSV | `Orchestrator/config.yaml` → `white_handle` / `red_handle` |
+| 人就位/HandInCup 阈值 | `EyeToHand/config.yaml` → `chair` / `hand_in_cup` |
 
 ## 关键概念
 
-- **物体坐标系约定**：PCA 输出的 Z 轴指向相机 (test_6D 内部处理)，Y 轴统一向下 (utils_shared.compute_grasp_rotation 处理，由 `grasp_direction` 控制方向)，两次修正消除 PCA 符号歧义
-- **手眼标定**：标定相机到末端法兰的变换矩阵，结果存储在 `calib_data/calibration_result.yaml`，支持Tsai/Park/Horaud等多种算法
-- **工具偏移**：补偿灵巧手物理安装角度（C=-90°）带来的位置和旋转偏差
-- **代际计数器**：防止客户端断开重连后旧帧数据污染新连接的目标位姿
-- **抓取模式**：free（跟随物体朝向）、vertical（末端Z轴水平约束）、fixed（固定姿态）、horizontal（待实现）
-- **红色胶带辅助**：HSV 双阈值红色检测，替换把手 3D 位置，旋转保持 PCA 不变
-- **偏移参考系**：P2/P3 的 pre_offset / target_offset 定义在抓取点末端系 (grasp ee frame) 下，非当前末端系
-- **扫描线分离**：按 `handle_side` 取最外段（right=最右段/left=最左段），底部+顶部双向剔除 x 中心偏离行
-- **Cup handle_side 模式**：`RealSense_R/config.yaml` 中 `cup.handle_side` 控制水杯检测侧（back/left），影响 bbox 裁剪 + 角度约束与偏移选择: back 模式 B 角 [70,90]+C 角 [-120,-100]; left 模式仅 C 角 [-100,-80] 并选用独立偏移 t_cup_offset_left
-- **P3 多角度示教**：`estun_config.yaml` 中 `p3_teach_offset.{side}` 按 B 角度数 key (10/15/20/30)，`pour_angle` 切换当前使用角度，加载自动转字符串键防整数键 bug
-- **双相机体系**：Camera A (眼在手上, serial 342222071364, `RealSense_R/` 手动像素映射) + Camera B (眼在手外, **UGREEN Camera 1080P**, `EyeToHand/camera.py` OpenCV 封装, 替代原 D435i serial 819612071851)
-- **Orchestrator 状态机**：3 状态闭环 (IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE)，Phase 0 打招呼 (TCP 8600) + Phase A-D 抓取递送 (TCP 8080)，人就位触发 + 椅子标定
-- **Cup P3 递送位姿**：XYZ/ABC 来自 `EyeToHand/config.yaml` delivery 段全示教 (3D→1D 人体标定工具就绪, 暂未接入)
-- **HandInCup 检测**：YOLOv8m (杯 bbox) + MediaPipe Hands (21 landmarks)，landmarks-in-bbox 计分 + curled gate (score≥5 绕过)；`bbox_margin`/`curled_threshold` 分辨率相关；独立模块 `EyeToHand/hand_in_cup.py`
-- **UGREEN Camera B**：纯 RGB 1920×1080@30fps，`EyeToHand/camera.py` OpenCV VideoCapture 封装，分辨率通过 `EyeToHand/config.yaml` → `ugreen` 段可配置
-- **杯 ROI 回退标定**：YOLO 检测不到杯时使用固定 ROI (`cup_roi_fallback`)，运行 `python EyeToHand/hand_in_cup.py --calibrate-roi` 鼠标框选标定
-- **RELEASE 双语义**：`hand_in_cup_active` 标志区分 — Phase C 松把手 vs Phase D HandInCup 判定
-- **新协议指令**：`READY` (Robot→PC, 到达 P3 启动 HandInCup)、`CONTINUE` `<0,0,0,0,0,0>` (PC→Robot, TRUE 松手退避)、`ABORT` `[0,0,0,0,0,0]` (PC→Robot, FALSE 放回杯子)
-- **CRP 已知限制**：MovJ widget 的 ZONE datavar 在机械臂 Lua 运行时无法正确解析 → 全部使用 MovL
+- **4 阶段调度**: greeting → handle_detect → seated_check → hand_in_cup, 任何时刻只有一个检测器运行
+- **pack_three**: `<P1>[P2]{P3}` 格式发送三组抓取位姿, CRP `TranStrToCpos` 按 bracket 标记解析
+- **固定 ABC**: Handle+Cup 姿态角从 `Orchestrator/config.yaml` 直接读取基系固定值, 不通过 PCA 计算
+- **PoseStabilizer**: 缓存 N 帧中值稳定, 代际计数器 `_gf` 防断连后旧帧污染
+- **HandInCup**: YOLOv8n(杯) + MediaPipe Hands(21 landmarks), landmarks-in-bbox 计分 + curled gate 判定
+- **CONTINUE/ABORT**: Python 发 `<x,y,z,A,B,C>` (CONTINUE) 或 `[x,y,z,A,B,C]` (ABORT), CRP 两个 `TranStrToCpos` (cmd=`<` / cmd=`[`) 解析, If `strflag_cont/abort == 0` 路由分支
+- **RELEASE 双语义**: HandInCup 未启动 → 松把手; 已启动 → 判定触发
+
+## 目录结构
+
+| 路径 | 说明 |
+|------|------|
+| `Orchestrator/` | **主入口**: 4 阶段调度 + 双相机检测 + TCP 服务 |
+| `Estun/` | 单相机入口 (RealSense/EpicEye), 坐标变换, 灵巧手控制 |
+| `RealSense_R/` | Camera A 检测模块 (D435i 旧版, 手动像素映射) |
+| `RealSense/` | Camera A 检测模块 (D435i 新版, rs.align) |
+| `EyeToHand/` | Camera B: PersonDetector + HandInCup + UGREEN Camera |
+| `Omnihand/` | 灵巧手 USB 串口控制 |
+| `calib_data/` | 手眼标定数据 + 结果 |
+| `KettleTraining/` | 水壶 YOLO 微调 |
+| `EpicEye/` `Orbbec/` | 灰度/微距相机模块 (非主用) |
+| `doc/` | 协议文档 + CRP 文件 + 流程文档 |
+| `memory-bank/` | 跨会话项目上下文 |
+| `model/` | YOLO + MediaPipe 模型文件 |
+
+## 文档索引
+
+| 文档 | 内容 |
+|------|------|
+| `doc/handlepluscup-orchestrator.crp` | **最新 CRP** (80 widgets, Phase 0 + A-D, 下载到示教器) |
+| `doc/estun_handle_cup_code_orchestrator.txt` | CRP 伪代码 + 版本变更记录 |
+| `doc/Greeting_Flow.md` | Phase 0 + Phase A-D 协议时间线 |
+| `doc/Handle_Cup_Process.md` | Handle+Cup 位姿计算 + 偏移参数 |
+| `doc/Handle_Process.md` | 把手检测设计决策记录 |
+| `doc/Grip_Process.md` | 瓶身位姿转换算法 |
+| `doc/Module_Rules.md` | 各硬件模块开发规则 |
+| `doc/Project_Workflow.md` | 完整架构 + 双相机 + 标定流程 |
+| `doc/Kettle_Training_Task.md` | 水壶模型微调 SOP |

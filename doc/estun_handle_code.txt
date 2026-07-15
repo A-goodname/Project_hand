@@ -1,4 +1,7 @@
-ESTUN 把手抓取示教器代码
+ESTUN 把手抓取示教器代码 (⚠️ 旧版 — SocketSendStr 在 while 循环内导致超时 bug)
+==================================================================================
+当前版本见 `handlepluscup-orchestrator.crp` 和 `estun_handle_cup_code_orchestrator.txt`.
+
 ========================
 与 estun_handle_run.py 配合使用, 本机发送 P1/P2/P3 三个位姿,
 机械臂按流程运动, 通过 SocketSendStr 发送指令控制灵巧手.

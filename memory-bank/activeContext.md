@@ -2,52 +2,46 @@
 
 ## 当前焦点
 
-**Orchestrator 联调 — Phase 0 ✅, Phase A-C ✅, Phase D HandInCup 判定通过 ✅，CONTINUE 路径调试中。**
+**Orchestrator 重构完成 — 状态机 → 4 阶段顺序调度. CONTINUE/ABORT 双分支均测试通过 ✅**
 
 ## 最近变更
 
-### v11 联调修复 (2026-07-15)
+### v12 编排重构 + 联调修复 (2026-07-15)
 
-1. **Handle P2 可达性修复**:
-   - estun_config `pre_offset.t_offset`: `[0.0,-0.10,0.03]` → `[0,0.10,-0.05]`
-   - P2 更靠近机器人可达空间，逆解成功
+1. **状态机 → 4 阶段调度**:
+   - 删除 StateHandler/StateMachine/IdleHandler/OrchestratorState
+   - 主循环改为 `greeting → handle_detect → seated_check → hand_in_cup` 顺序阶段
+   - 任何时刻只有一个检测器运行: greeting(Camera B椅子标定,竞争不大) → handle_detect(Camera A, Camera B暂停) → seated_check(Camera B恢复) → hand_in_cup(Camera B)
+   - 删除全部跳帧补丁 (`_pd_skip`, `_hic_skip`, `skip_frames` 保留但保留检测跳帧)
 
-2. **CRP Handle 流程简化 (删 PREGRIP)**:
-   - 第一次 P2 后不再发送 PREGRIP：`P2→P1→GRIPDONE` 直接夹紧
-   - RESET 从 P2 移到 P1：`P1→RESET→P2→Home`
-   - P2 后无灵巧手动作
+2. **SharedContext 简化**:
+   - 删除 `run_seated_detection`, `hand_in_cup_active`, `handle_cup_complete`
+   - 新增 `greeting_done` / `targets_sent` / `ready_received` / `hand_judged` 四个 Event
 
-3. **CRP while 循环优化**:
-   - 删除 Phase B/C `SocketReadStr` while 内的 `Wait 500ms`
-   - SocketReadStr 持续监听，避免 Python 发包时 CRP 在 Wait 中丢包
+3. **CRP CposOffset 修复**:
+   - CONTINUE 分支 C_P4 = CposOffset(C_P3, DCp2) 的 pointa/pointb 引用点交换 → "参数错误"
+   - 修正: pointa→DCp2(DCPOS), pointb→C_P3(CPOS)
 
-4. **CRP 倒水延时**: `Wait 5s` → `Wait 3s`
+4. **CONTINUE/ABORT 信号修复**:
+   - Python 发可达位姿 (Phase A 收到的机器人初始位姿) 替代全零
+   - CRP TranStrToCpos 成功解析
 
-5. **CRP C_P4 安全退避**: `DCp2.dz = Home.z-C_P1.z` → 固定 `DCp2.dz = 100mm`
+5. **`_camera_a_to_close` 修复**: Phase B 完成后保存引用, main 线程关闭
 
-6. **CRP CONTINUE IF**: 删除 `equal` 条件判断
+6. **hand_judged 时机修复**: 从 CONTINUE/ABORT 发送后 → daemon 线程最终清理时
 
-7. **HandInCup 检测调通**:
-   - YOLO model: yolov8m → **yolov8n** (更轻量)
-   - device 加入 config: `hand_in_cup.device: cuda`
-   - 超时 5s → **10s** (含 CUDA warmup 首帧 ~380ms)
-   - 诊断日志: 打印每步耗时 + cup/hand 状态 + stable 计数
-   - 独立测试通过: cup 稳定 ~35ms, stable 10/5 ✅
+7. **HandInCup 循环修复**: `hand_on_cup is None` → `None or not` (False 时继续检测)
 
-8. **人就位 + HandInCup 跳帧**:
-   - 人就位: 每 3 帧跑一次 (main.py `_pd_skip = 3`)
-   - HandInCup: 每 2 帧跑一次 (main.py `_hic_skip = 2`)
-   - Camera B 分辨率已配置 1280×720
+8. **白色把手回退删除**: handle_cup_detector 找不到白色把手时不再搜壶身红色
 
-9. **MediaPipe clearcut**: 增强 env var (`GLOG_stderrthreshold=4`, `GRPC_VERBOSITY=NONE`)，shutdown 仍有残留
+9. **CRP 速度**: 倒水 H_P3↔H_P4 和 ABORT P3↔P4 使用 sudu(慢速)
 
-10. **Skill 更新**: data-as-string 陷阱 — socketclose inside if blocks 必须 dict
+10. **Skill 更新**: 新增 CposOffset 陷阱 / TranStrToCpos 信号规则 / HandInCup 循环规则 / 4 阶段架构
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | CONTINUE 路径全流程测试 | C_P4→RESET→Home→SocketClose 完整链路 |
-| 🟡 | ABORT 路径测试 | P3→P5→P1→RELEASE→P2→Home |
-| 🟡 | MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 级日志仍有泄漏 |
-| 🟢 | HandInCup 诊断日志清理 | 测试稳定后可降级或移除 |
+| 🟢 | 完整流程稳定性测试 | 多次连续运行验证 |
+| 🟢 | MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |
+| 🟢 | HandInCup 诊断日志清理 | 减少终端输出 |

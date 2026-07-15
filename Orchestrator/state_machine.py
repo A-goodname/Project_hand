@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Orchestrator 状态机
-===================
-双相机 3 状态全流程: IDLE → GREETING → HANDLE_GRASP_AND_POUR → IDLE
+Orchestrator — 共享状态 + TCP 服务
+==================================
+双相机 5 阶段顺序调度: greeting → seated_detect → handle_detect → seated_check → hand_in_cup
 
-状态说明:
-  - IDLE:                   Camera B 椅子标定 → 人就位检测 → 触发
-  - GREETING:               Camera A 独立 pipeline + TCP 8600 Phase 0 (招手→挥手→握手)
-  - HANDLE_GRASP_AND_POUR:  单 TCP Session 8080 全流程 (抓壶倒水 → 抓杯递送 → HandInCup 判定)
+TCP 服务:
+  - GreetingHandler:   Phase 0 打招呼 (TCP 8600, 招手→挥手→握手)
+  - HandleGraspAndPourHandler: Phase A→D 抓取倒水递送 (TCP 8080)
 
 与 estun_handle_cup_run.py 的关键差异:
   - Cup P3 XYZ/ABC 全示教固定 (EyeToHand/config.yaml delivery 段)
   - 递送后增加 Hand-in-cup 判定 (TRUE→CONTINUE / FALSE→ABORT)
-  - Phase 0 打招呼集成到 GREETING 状态 (TCP 8600)
-  - 全程单 TCP 连接, SocketClose 后回 IDLE
+  - Phase 0 打招呼 (TCP 8600)
+  - 单 TCP 连接, SocketClose 后退出
 """
 
 import os
@@ -21,8 +20,6 @@ import socket
 import sys
 import threading
 import time
-from abc import ABC, abstractmethod
-from enum import Enum, auto
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -150,192 +147,66 @@ class PoseStabilizer:
 
 
 # ============================================================
-# 状态定义
-# ============================================================
-
-class OrchestratorState(Enum):
-    IDLE = auto()
-    GREETING = auto()              # Phase 0 打招呼 (Camera A 独立 pipeline + TCP 8600)
-    HANDLE_GRASP_AND_POUR = auto()
-
-
-# ============================================================
 # 共享上下文
 # ============================================================
 
 @dataclass
 class SharedContext:
-    """跨状态共享的数据与依赖.
+    """主循环与 TCP daemon 线程间的共享状态.
 
     配置字段 (main.py 填充):
       - eye_to_hand_config: EyeToHand/config.yaml
       - estun_config:       Estun/estun_config.yaml["estun"]
       - realsense_config:   RealSense/config.yaml (Camera A, Handle+Cup)
-      - eye_to_hand_serial: Camera B serial
+      - eye_to_hand_serial: Camera B serial (已废弃)
 
-    运行时字段 (状态/主循环 写入):
-      - person_detector, stop_event
-      - hand_in_cup_active, hand_on_cup
-      - handle_cup_complete, frames_a, frames_b
+    运行时字段:
+      - person_detector:    Camera B 人就位检测器 (main.py 全生命周期)
+      - hand_in_cup_detector: HandInCup 判定 (main.py 创建, 主循环注入帧)
+      - handle_cup_detector: Camera A Handle+Cup 检测器 (GREETING 创建, HANDLE 复用)
+      - stop_event:         程序退出信号
+      - frames_a / frames_b: 可视化帧缓存
     """
     # ---- 配置 (初始化时填入) ----
     eye_to_hand_config: dict
     estun_config: dict
     realsense_config: dict
-    eye_to_hand_serial: str         # Camera B serial
-    camera_a_serial: str = ""       # Camera A serial (Phase 0 人进门检测)
+    eye_to_hand_serial: str         # Camera B serial (已废弃)
+    camera_a_serial: str = ""       # Camera A serial
 
     # ---- 运行时 ----
     person_detector: Optional[PersonDetector] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
 
-    # Hand-in-cup 检测 (TCP handler 控制开关, main loop 更新结果)
-    hand_in_cup_active: bool = False
+    # Hand-in-cup 检测 (main loop 更新结果, TCP handler 读取)
     hand_on_cup: Optional[bool] = None              # True/False/None(未就绪)
-    hand_in_cup_detector: Optional["HandInCupDetector"] = None  # 共享实例, main.py 创建
+    hand_in_cup_start_time: float = 0.0
+    hand_in_cup_detector: Optional["HandInCupDetector"] = None
 
-    # GREETING 完成标志
-    greeting_complete: threading.Event = field(default_factory=threading.Event)
+    # 人就位 (main loop 更新结果, TCP handler 读取)
+    is_person_seated: bool = False
 
-    # HANDLE_GRASP_AND_POUR 完成标志
-    handle_cup_complete: threading.Event = field(default_factory=threading.Event)
+    # ---- Phase 过渡事件 (TCP daemon 线程写入, main loop 读取) ----
+    greeting_done: threading.Event = field(default_factory=threading.Event)    # Phase 0 TCP 完成
+    targets_sent: threading.Event = field(default_factory=threading.Event)     # Phase B pack_three 发送完成
+    ready_received: threading.Event = field(default_factory=threading.Event)   # TCP 收到 READY
+    hand_judged: threading.Event = field(default_factory=threading.Event)      # CONTINUE/ABORT 发送完成
 
-    # Camera A 检测器 (HandleGraspAndPourHandler 写入)
+    # ---- Camera A 检测器 (GreetingHandler 创建, HandleHandler 复用) ----
     handle_cup_detector: Optional[HandleCupDetector] = None
-    _camera_a_to_close: Optional[HandleCupDetector] = None  # 延迟关闭, 由 main 线程处理
+    _camera_a_to_close: Optional[HandleCupDetector] = None  # 延迟关闭引用, main 线程处理
     T_cam2ee: Optional[np.ndarray] = None
 
-    # 人就位门控 (main loop 写入, TCP handler 读取)
-    run_seated_detection: bool = False       # 主循环门控: 是否运行人就位检测
-    is_person_seated: bool = False           # 每帧结果: 人是否就位
-
-    # HandInCup 计时 (main loop 管理, TCP handler 读取)
-    hand_in_cup_start_time: float = 0.0      # HandInCup 开始时间 (用于 ≤5s 超时)
-
-    # 可视化帧缓存 (main loop 写入)
+    # ---- 可视化帧缓存 (main loop 写入) ----
     frames_a: Optional[tuple] = None  # Camera A (Handle)
     frames_b: Optional[tuple] = None  # Camera B (Person/HandInCup)
 
 
 # ============================================================
-# 状态处理器基类 & 状态机引擎
+# GREETING TCP 服务 (Phase 0 打招呼)
 # ============================================================
 
-class StateHandler(ABC):
-    """状态处理器抽象基类."""
-
-    def __init__(self, name: str):
-        self.name = name
-
-    @abstractmethod
-    def on_enter(self, ctx: SharedContext):
-        """进入状态."""
-
-    @abstractmethod
-    def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        """每 tick 调用. 返回下一状态或 None."""
-
-    def on_exit(self, ctx: SharedContext):
-        """离开状态."""
-
-    def on_error(self, ctx: SharedContext, msg: str):
-        print(f"[STATE_ERROR] {self.name}: {msg}")
-
-
-class StateMachine:
-    """线性状态机."""
-
-    def __init__(self):
-        self._state: OrchestratorState = OrchestratorState.IDLE
-        self._handlers: dict[OrchestratorState, StateHandler] = {}
-
-    def register(self, state: OrchestratorState, handler: StateHandler):
-        self._handlers[state] = handler
-
-    @property
-    def state(self) -> OrchestratorState:
-        return self._state
-
-    def transition_to(self, ctx: SharedContext, target: OrchestratorState):
-        old = self._state
-        if old in self._handlers:
-            try:
-                self._handlers[old].on_exit(ctx)
-            except Exception as e:
-                print(f"[WARN] {old.name}.on_exit 异常: {e}")
-        self._state = target
-        print(f"[STATE] {old.name} → {target.name}")
-        if target in self._handlers:
-            try:
-                self._handlers[target].on_enter(ctx)
-            except Exception as e:
-                print(f"[ERROR] {target.name}.on_enter 异常: {e}")
-                self._handle_error(ctx, f"on_enter 失败: {e}")
-
-    def update(self, ctx: SharedContext):
-        h = self._handlers.get(self._state)
-        if h is None:
-            return
-        try:
-            result = h.on_update(ctx)
-            if result is not None and result != self._state:
-                self.transition_to(ctx, result)
-        except Exception as e:
-            print(f"[ERROR] {self._state.name}.on_update 异常: {e}")
-            self._handle_error(ctx, str(e))
-
-    def _handle_error(self, ctx: SharedContext, msg: str):
-        h = self._handlers.get(self._state)
-        if h is not None:
-            try:
-                h.on_error(ctx, msg)
-            except Exception:
-                pass
-        self.transition_to(ctx, OrchestratorState.IDLE)
-
-
-# ============================================================
-# IDLE 处理器
-# ============================================================
-
-class IdleHandler(StateHandler):
-    """IDLE: Camera B 椅子标定 → 人就位检测 → 触发 GREETING."""
-
-    def __init__(self):
-        super().__init__("IDLE")
-
-    def on_enter(self, ctx: SharedContext):
-        # PersonDetector 由 main.py 全生命周期管理, 此处仅做兜底
-        if ctx.person_detector is None:
-            cam_id = ctx.eye_to_hand_config.get("ugreen", {}).get("camera_id", 1)
-            print(f"[INFO] 启动 PersonDetector (camera_id={cam_id})...")
-            ctx.person_detector = PersonDetector(
-                camera_id=cam_id,
-                config_dict=ctx.eye_to_hand_config,
-                start_camera=False,
-            )
-        # 重置运行时标志
-        ctx.hand_in_cup_active = False
-        ctx.hand_on_cup = None
-        ctx.handle_cup_complete.clear()
-        ctx.greeting_complete.clear()
-        ctx.run_seated_detection = False
-        ctx.is_person_seated = False
-
-    def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        # 直接进入 GREETING — Camera B 在此阶段才启动, 椅子/人就位在 GREETING 中检测
-        return OrchestratorState.GREETING
-
-    def on_exit(self, ctx: SharedContext):
-        # PersonDetector pipeline 保持运行, Camera B 继续用于后续状态
-        pass
-
-
-# ============================================================
-# GREETING 处理器 (Phase 0 打招呼)
-# ============================================================
-
-class GreetingHandler(StateHandler):
+class GreetingHandler:
     """GREETING: Phase 0 打招呼 — 独立 Camera A pipeline + TCP 8600.
 
     4 步协议 (单连接, 移植自 estun_greeting_handle_cup_run.py):
@@ -346,7 +217,6 @@ class GreetingHandler(StateHandler):
     """
 
     def __init__(self):
-        super().__init__("GREETING")
         self._server: Optional[socket.socket] = None
         self._yolo_model = None
         self._person_stable = 0
@@ -370,23 +240,27 @@ class GreetingHandler(StateHandler):
         self._force_release_hold = 2.0
 
     # ================================================================
-    # 生命周期
+    # 生命周期 (由 main.py 调用)
     # ================================================================
 
-    def on_enter(self, ctx: SharedContext):
+    def start(self, ctx: SharedContext):
+        """初始化并启动 GREETING Phase 0. 由 main loop 在 greeting phase 开始时调用."""
         self._start(ctx)
-        ctx.greeting_complete.clear()
+        ctx.greeting_done.clear()
+        ctx.targets_sent.clear()
+        ctx.ready_received.clear()
+        ctx.hand_judged.clear()
+        ctx.is_person_seated = False
+        ctx.hand_on_cup = None
         # Camera B 预加载 (UGREEN, CPU YOLO, 不抢 GPU)
         if ctx.person_detector is not None:
             ctx.person_detector.start_camera()
-            ctx.run_seated_detection = True
-            print("[GREETING] Camera B + 人就位检测已启动")
+            print("[GREETING] Camera B 已启动")
 
-    def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        # 非阻塞 accept
+    def update_preview(self, ctx: SharedContext):
+        """每帧调用: 非阻塞 accept + Camera A 预览帧."""
         self._accept_tcp(ctx)
 
-        # 向主循环提供 Camera A 预览帧 (复用 HandleCupDetector)
         det = ctx.handle_cup_detector
         if det is not None:
             try:
@@ -395,12 +269,8 @@ class GreetingHandler(StateHandler):
             except Exception:
                 pass
 
-        if ctx.greeting_complete.is_set():
-            print(f"[GREETING] Phase 0 完成 ✅")
-            return OrchestratorState.HANDLE_GRASP_AND_POUR
-        return None
-
-    def on_exit(self, ctx: SharedContext):
+    def stop(self, ctx: SharedContext):
+        """清理 GREETING 资源 (不关 Camera A pipeline)."""
         self._stop()
         print("[GREETING] 退出")
 
@@ -742,24 +612,22 @@ class GreetingHandler(StateHandler):
                 conn.close()
             except Exception:
                 pass
-            ctx.greeting_complete.set()
+            ctx.greeting_done.set()
             print(f"[GREETING] 客户端已断开: {addr}")
 
 
 # ============================================================
-# HANDLE_GRASP_AND_POUR 处理器
+# HANDLE TCP 服务 (Phase A→D 抓取+倒水+递送)
 # ============================================================
 
-class HandleGraspAndPourHandler(StateHandler):
-    """HANDLE_GRASP_AND_POUR: 单 TCP Session 全流程.
+class HandleGraspAndPourHandler:
+    """HANDLE: 单 TCP Session 全流程.
 
     内部包含 Handle+Cup 检测 → TCP 通信 → 递送确认.
     全程使用一个 TCP 连接, SocketClose 后完成.
     """
 
     def __init__(self):
-        super().__init__("HANDLE_GRASP_AND_POUR")
-
         # ---- 运行时对象 ----
         self._server: Optional[socket.socket] = None
         self._hand_available = False
@@ -822,19 +690,15 @@ class HandleGraspAndPourHandler(StateHandler):
         self._phase_b_timeout = 30.0
 
     # ================================================================
-    # 生命周期
+    # 生命周期 (由 main.py 调用)
     # ================================================================
 
-    def on_enter(self, ctx: SharedContext):
+    def start(self, ctx: SharedContext):
+        """初始化并启动 HANDLE TCP 服务. 由 main loop 在 handle_detect phase 开始时调用."""
         self._start(ctx)
-        ctx.handle_cup_complete.clear()
-        # Camera B 已在 GREETING 预启动, 恢复人就位检测.
-        # 注意: GREETING 时人在 Camera A 前(打招呼/握手), Camera B 画面中无人;
-        # HANDLE 阶段人走到椅子坐下, 此时 Camera B 才需要检测.
-        ctx.run_seated_detection = True
 
-    def on_update(self, ctx: SharedContext) -> Optional[OrchestratorState]:
-        # 获取 Camera A 帧 (Phase B 期间有帧, 之后为 None)
+    def get_frames_and_detect(self, ctx: SharedContext):
+        """每帧调用: 获取 Camera A 帧 + 跳帧检测 Handle+Cup."""
         if ctx.handle_cup_detector is not None:
             color, depth, depth_colormap, depth_frame = self._get_frames(ctx)
             ctx.frames_a = (color, depth, depth_colormap, depth_frame)
@@ -842,15 +706,12 @@ class HandleGraspAndPourHandler(StateHandler):
         else:
             ctx.frames_a = None
 
-        # 非阻塞 accept TCP
+    def accept_tcp(self, ctx: SharedContext):
+        """非阻塞 accept TCP 8080."""
         self._accept_tcp(ctx)
 
-        # 完成时退出程序 (stop_event 由 _handle_client_impl 设置)
-        if ctx.stop_event.is_set():
-            return None
-        return None
-
-    def on_exit(self, ctx: SharedContext):
+    def stop(self, ctx: SharedContext):
+        """清理 HANDLE 资源."""
         self._stop(ctx)
 
     # ================================================================
@@ -901,7 +762,6 @@ class HandleGraspAndPourHandler(StateHandler):
         print(f"[INFO] TCP 服务器: {host}:{port}")
 
         # ---- 重置运行时标志 ----
-        ctx.hand_in_cup_active = False
         ctx.hand_on_cup = None
         self._frame_counter = 0
 
@@ -1043,9 +903,7 @@ class HandleGraspAndPourHandler(StateHandler):
                 disable_hand()
             except Exception:
                 pass
-        ctx.hand_in_cup_active = False
         ctx.hand_on_cup = None
-        ctx.run_seated_detection = False
 
     # ================================================================
     # Camera A 帧获取 & 检测
@@ -1154,14 +1012,14 @@ class HandleGraspAndPourHandler(StateHandler):
 
         # ---- 嵌套清理函数 (确保任何退出路径都执行清理) ----
         def _cleanup():
-            ctx.hand_in_cup_active = False
             ctx.hand_on_cup = None
+            ctx.targets_sent.set()   # 解除 main loop 阻塞
+            ctx.stop_event.set()
             try:
                 conn.close()
             except Exception:
                 pass
             PoseStabilizer.on_disconnect()
-            ctx.handle_cup_complete.set()
             print(f"[INFO] 客户端已断开: {addr}")
 
         # ---- 预计算工具偏移 ----
@@ -1387,10 +1245,12 @@ class HandleGraspAndPourHandler(StateHandler):
             _cleanup()
             return
 
-        # ---- Camera A 仅置空引用 (同 estun_greeting: pipeline 保持运行到程序退出) ----
+        # ---- Camera A 保存引用供 main 线程关闭, 置空 ctx 引用 ----
+        ctx._camera_a_to_close = ctx.handle_cup_detector
         ctx.handle_cup_detector = None
         ctx.T_cam2ee = None
-        session_log("Camera A 引用已释放")
+        session_log("Camera A 引用已释放, 通知 main 线程进入 seated_check")
+        ctx.targets_sent.set()
 
         # ---- [Phase C & D] 指令循环 ----
         conn.settimeout(2.0)
@@ -1452,23 +1312,20 @@ class HandleGraspAndPourHandler(StateHandler):
                         print("[WARN] CUP: cup_pose_data 未就绪或已发送")
 
                 elif cmd == "READY":
-                    # 停止人就位检测
-                    ctx.run_seated_detection = False
+                    # 通知 main loop 进入 hand_in_cup phase
+                    ctx.ready_received.set()
 
                     if not ctx.is_person_seated:
                         # 无人就位 → 跳过 HandInCup 等待, 直接标记 FALSE
-                        # 不在此发送 ABORT — 等 RELEASE 到来时走正常判定流程
                         print("[INFO] READY: 人未就位 → HandInCup=false, 等待 RELEASE")
-                        ctx.hand_in_cup_active = True
                         ctx.hand_on_cup = False
                     else:
-                        # 人就位 → 启动 HandInCup, 最长检测 5s
-                        print("[INFO] READY: 人就位 → 启动 HandInCup (≤5s)")
-                        ctx.hand_in_cup_active = True
+                        # 人就位 → 启动 HandInCup, 最长检测 10s
+                        print("[INFO] READY: 人就位 → 启动 HandInCup (≤10s)")
                         ctx.hand_in_cup_start_time = time.time()
                         if ctx.hand_in_cup_detector is not None:
                             ctx.hand_in_cup_detector.reset()
-                        # 等待 main loop 完成检测 (≤5s, TRUE 提前结束)
+                        # main loop 在 hand_in_cup phase 每帧运行检测
                         HAND_IN_CUP_TIMEOUT = 10.0
                         while not ctx.stop_event.is_set():
                             if ctx.hand_on_cup:
@@ -1480,7 +1337,6 @@ class HandleGraspAndPourHandler(StateHandler):
                                 break
                             time.sleep(0.05)
                         print(f"[INFO] HandInCup 结束: {'TRUE' if ctx.hand_on_cup else 'FALSE'}")
-                        # 保持 hand_in_cup_active=True, RELEASE 到来时进入 Phase D 判定分支
 
                 elif cmd == "RELEASE":
                     if abort_mode:
@@ -1488,14 +1344,14 @@ class HandleGraspAndPourHandler(StateHandler):
                         if self._hand_available:
                             release_object()
                         print("[INFO] RELEASE (放回后松杯)")
-                    elif not ctx.hand_in_cup_active:
-                        # ---- Phase C: 松把手 (READY 之前的 RELEASE) ----
+                    elif ctx.hand_on_cup is None:
+                        # ---- Phase C: 松把手 (READY 之前, HandInCup 未启动) ----
                         if self._hand_available:
                             release_object()
                         print("[INFO] RELEASE (松把手)")
                     elif not hand_judged:
                         # ---- Phase D 第一次 RELEASE: Hand-in-cup 判定 ----
-                        hand_ok = ctx.hand_on_cup if ctx.hand_on_cup is not None else False
+                        hand_ok = ctx.hand_on_cup
                         print(f"[INFO] Hand-in-cup 判定: {'TRUE' if hand_ok else 'FALSE'}")
                         hand_judged = True
 
@@ -1505,24 +1361,26 @@ class HandleGraspAndPourHandler(StateHandler):
                                 release_object()
                             print("[INFO] RELEASE (松杯)")
                             try:
-                                # 发送格式与机器人端 TranStrToCpos("<",">") 配对
-                                conn.sendall(b"<0,0,0,0,0,0>")
+                                # 发送可达位姿 (m), CRP TranStrToCpos lengthunit=m
+                                sig = f"<{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}>"
+                                conn.sendall(sig.encode("utf-8"))
                                 session_log("Phase D CONTINUE (人手在杯)")
-                                print("[SEND] CONTINUE (<0,0,0,0,0,0>)")
+                                print(f"[SEND] CONTINUE ({sig})")
                             except Exception as e:
                                 print(f"[WARN] 发送 CONTINUE 失败: {e}")
                                 break
                             # 机器人: P4 → RESET → Home → SocketClose
-                            # 循环继续, 等待后续 RESET
+                            # 循环继续, 等待后续 RESET (hand_judged 在最终清理时设置)
                         else:
                             # FALSE: 不松手 → ABORT
                             print("[INFO] 无人接杯 → ABORT")
                             abort_mode = True
                             try:
-                                # 发送格式与机器人端 TranStrToCpos("[","]") 配对
-                                conn.sendall(b"[0,0,0,0,0,0]")
+                                # 发送可达位姿 (m), CRP TranStrToCpos lengthunit=m
+                                sig = f"[{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}]"
+                                conn.sendall(sig.encode("utf-8"))
                                 session_log("Phase D ABORT (无人接杯)")
-                                print("[SEND] ABORT ([0,0,0,0,0,0])")
+                                print(f"[SEND] ABORT ({sig})")
                             except Exception as e:
                                 print(f"[WARN] 发送 ABORT 失败: {e}")
                                 break
@@ -1544,7 +1402,6 @@ class HandleGraspAndPourHandler(StateHandler):
             print(f"[ERROR] 客户端处理异常: {e}")
         finally:
             # ---- 清理 ----
-            ctx.hand_in_cup_active = False
             ctx.hand_on_cup = None
             try:
                 conn.close()
@@ -1554,6 +1411,6 @@ class HandleGraspAndPourHandler(StateHandler):
 
         # ---- 全流程完成, 退出程序 ----
         PoseStabilizer.on_disconnect()
-        ctx.handle_cup_complete.set()
-        print("[INFO] 全流程完成, 退出程序")
+        ctx.hand_judged.set()  # 通知 main loop 退出
         ctx.stop_event.set()
+        print("[INFO] 全流程完成, 退出程序")

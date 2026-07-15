@@ -1,3 +1,5 @@
+[⚠️ 旧版 — 瓶身单目标抓取, 已被 Handle+Cup 版本取代. 当前 CRP: doc/handlepluscup-orchestrator.crp]
+
 SocketCreat(scoketflag) # scoketflag初始值为1，每个Socket函数使用同一个flag，执行成功返回0，失败返回1
 if scoketflag!=0
     return
