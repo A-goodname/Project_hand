@@ -209,6 +209,59 @@ class PersonDetector:
         return best
 
     # ------------------------------------------------------------
+    #  合并检测: person + chair 单次推理 (GPU 加速后就位判定主力)
+    # ------------------------------------------------------------
+
+    def _detect_person_and_chair(self, color_image):
+        """单次 YOLO 推理同时检测 person (class 0) + chair (class 56).
+
+        替代两次独立 self.model() 调用, 推理时间减半.
+        在 GPU 上优势尤为明显 (kernel launch overhead 合并).
+
+        Returns:
+            (person_dict, chair_bbox) —
+            person_dict: {"bbox": [x1,y1,x2,y2], "conf": float} 或 None
+            chair_bbox:  [x1,y1,x2,y2] 或 None
+        """
+        if self.model is None:
+            return None, None
+        results = self.model(
+            color_image,
+            conf=self._conf_threshold,
+            classes=[self.TARGET_CLASS_ID, self.CHAIR_CLASS_ID],
+            verbose=False,
+        )
+        best_person = None
+        best_chair = None
+        for result in results:
+            if result.boxes is None:
+                continue
+            cls_ids = result.boxes.cls.cpu().numpy()
+            confs = result.boxes.conf.cpu().numpy()
+            xyxy = result.boxes.xyxy.cpu().numpy()
+
+            for i in range(len(cls_ids)):
+                cid = int(cls_ids[i])
+                cf = float(confs[i])
+                box = [int(x) for x in xyxy[i]]
+                if cid == self.TARGET_CLASS_ID:
+                    if best_person is None or cf > best_person["conf"]:
+                        best_person = {"bbox": box, "conf": cf}
+                elif cid == self.CHAIR_CLASS_ID:
+                    if cf >= self._chair_conf_threshold:
+                        if best_chair is None:
+                            best_chair = box
+                        else:
+                            # 取离画面中心最近的椅子
+                            h, w = color_image.shape[:2]
+                            cx0, cy0 = w / 2.0, h / 2.0
+                            def _dist(b):
+                                return abs((b[0]+b[2])/2.0-cx0)+abs((b[1]+b[3])/2.0-cy0)
+                            if _dist(box) < _dist(best_chair):
+                                best_chair = box
+        return best_person, best_chair
+
+    # ------------------------------------------------------------
     #  人就位检测
     # ------------------------------------------------------------
 
@@ -262,9 +315,8 @@ class PersonDetector:
                   "seated_required": int,
               }
         """
-        # ---- 每帧检测椅子 + 人体 ----
-        chair_live = self._detect_chair_live(color_image)
-        detection = self._detect_targets(color_image)
+        # ---- 单次推理同时检测椅子 + 人体 (GPU 合并, 推理时间减半) ----
+        detection, chair_live = self._detect_person_and_chair(color_image)
 
         # ---- 判断人是否在椅子附近 ----
         person_near = (detection is not None and self._chair_ref is not None

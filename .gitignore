@@ -20,9 +20,10 @@ EpicEye/captures/
 logs/
 *.log
 
-# 文档 PDF
+# 文档
 doc/*.pdf
 doc/*.crp
+doc/*.bak
 
 # 编译器文件
 .vscode/

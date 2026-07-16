@@ -2,7 +2,7 @@ model:
   name: ./model/yolov8m
   conf_threshold: 0.5
   target_class_id: 0
-  device: cpu
+  device: gpu
 ugreen:
   camera_id: 3
   width: 1280
@@ -13,7 +13,7 @@ chair:
   conf_threshold: 0.4
   overlap_threshold: 0.4
   seated_stable_frames: 10
-  leave_frames: 30
+  leave_frames: 45
 delivery:
   X_TEACH: 0.2295
   Y_TEACH: 0.4427

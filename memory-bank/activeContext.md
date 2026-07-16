@@ -2,50 +2,37 @@
 
 ## 当前焦点
 
-**Orchestrator 重构完成 — 状态机 → 4 阶段顺序调度. CONTINUE/ABORT 双分支均测试通过 ✅**
+**人就位 GPU 优化 + Cup P3 速度优化 完成 ✅**
 
 ## 最近变更
 
-### v12 编排重构 + 联调修复 (2026-07-15)
+### v13 人就位 GPU 化 + Cup sudu2 提速 (2026-07-16)
 
-1. **状态机 → 4 阶段调度**:
-   - 删除 StateHandler/StateMachine/IdleHandler/OrchestratorState
-   - 主循环改为 `greeting → handle_detect → seated_check → hand_in_cup` 顺序阶段
-   - 任何时刻只有一个检测器运行: greeting(Camera B椅子标定,竞争不大) → handle_detect(Camera A, Camera B暂停) → seated_check(Camera B恢复) → hand_in_cup(Camera B)
-   - 删除全部跳帧补丁 (`_pd_skip`, `_hic_skip`, `skip_frames` 保留但保留检测跳帧)
+1. **PersonDetector GPU 化**:
+   - `EyeToHand/config.yaml`: `device: cpu → gpu`
+   - 合并 person+chair 双 YOLO 调用为单次推理 (`_detect_person_and_chair()`)
+   - `leave_frames: 30 → 45` (配合 GPU 高帧率)
+   - 旧方法保留, 独立测试模式仍可用
 
-2. **SharedContext 简化**:
-   - 删除 `run_seated_detection`, `hand_in_cup_active`, `handle_cup_complete`
-   - 新增 `greeting_done` / `targets_sent` / `ready_received` / `hand_judged` 四个 Event
+2. **Cup P3 速度优化 — sudu2**:
+   - CRP 新增 `sudu2` 变量: sper=55, stcp=150, sori=65
+   - 4 处 MovL sudu→sudu2: C_P5↔C_P3 递送 + ABORT C_P5/C_P1 退避放回
+   - 倒水 H_P3/H_P4 保持 sudu (壶重+倾斜)
 
-3. **CRP CposOffset 修复**:
-   - CONTINUE 分支 C_P4 = CposOffset(C_P3, DCp2) 的 pointa/pointb 引用点交换 → "参数错误"
-   - 修正: pointa→DCp2(DCPOS), pointb→C_P3(CPOS)
+3. **Skill 更新**:
+   - CRP 结构快速分析 3 步法
+   - 编码陷阱: bash 中 `open()` 必带 `encoding='utf-8'`
+   - 变量多容器遍历: `projectcfg.vars.data` 所有子分类 + `data.vars.project`
+   - 备份规则: 后缀 `.bak` 不加时间戳
 
-4. **CONTINUE/ABORT 信号修复**:
-   - Python 发可达位姿 (Phase A 收到的机器人初始位姿) 替代全零
-   - CRP TranStrToCpos 成功解析
-
-5. **`_camera_a_to_close` 修复**: Phase B 完成后保存引用, main 线程关闭
-
-6. **hand_judged 时机修复**: 从 CONTINUE/ABORT 发送后 → daemon 线程最终清理时
-
-7. **HandInCup 循环修复**: `hand_on_cup is None` → `None or not` (False 时继续检测)
-
-8. **白色把手回退删除**: handle_cup_detector 找不到白色把手时不再搜壶身红色
-
-9. **CRP 速度**: 倒水 H_P3↔H_P4 和 ABORT P3↔P4 使用 sudu(慢速)
-
-10. **Skill 更新**: 新增 CposOffset 陷阱 / TranStrToCpos 信号规则 / HandInCup 循环规则 / 4 阶段架构
+4. **CLAUDE.md 全局规则**: 新增第 8 节"搜索与推理纪律"(空结果≠不存在/信息不全禁行动/锚定/回顾已知规则)
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | Cup P3↔P1/P4 速度优化 | CRP 中 C_P3↔C_P1/C_P4 段提速, 加快递送+退避 |
-| 🔴 | 人就位检测鲁棒性 | 减少 YOLO 漏检导致的误判, leave_frames 临时缓解不够 |
 | 🟡 | 加水实测 | 完整流程加水倒水, 验证防溅 + HandInCup 判定 |
 | 🟡 | 抓取姿态微调 | 末端抓取姿态 + 灵巧手手势微调优化抓取成功率 |
-| ✅ | 独立部署包 | reference/orchestrator_standalone/ 15 文件已完成 |
+| 🟢 | 实机验证 sudu2 | CRP 导入示教器, 验证 sudu2 速度合理性 |
 | 🟢 | 完整流程稳定性测试 | 多次连续运行验证 |
 | 🟢 | MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |

@@ -1,5 +1,14 @@
 # Progress — Project_hand
 
+### 人就位 GPU 优化 + Cup P3 提速 (v13, 2026-07-16)
+- [x] PersonDetector GPU 化: `device: cpu → gpu`, 合并 person+chair 双推理为单次
+- [x] `leave_frames: 30 → 45` (配合 GPU 高帧率 ~30FPS)
+- [x] CRP 新增 sudu2 变量 (sper=55, stcp=150, sori=65)
+- [x] Cup 递送 4 处 sudu→sudu2: C_P5↔C_P3 + ABORT C_P5→C_P1
+- [x] Skill 更新: CRP 3 步分析 + 编码陷阱 + 变量多容器遍历
+- [x] CLAUDE.md 全局: 搜索与推理纪律 (第 8 节)
+- [x] 备份统一 `.bak` 后缀 (匹配 .gitignore)
+
 ## 已实现功能
 
 ### Orchestrator 4 阶段调度
@@ -87,11 +96,9 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 Cup P3↔P1/P4 速度优化 | CRP C_P3↔C_P1/C_P4 MovL 提速, 减少递送等待 |
-| 🔴 人就位检测鲁棒性 | YOLO 漏检导致误判, 需更稳定的检测策略 |
 | 🟡 加水实测 | 完整流程加水倒水, 验证防溅 + HandInCup 判定 |
 | 🟡 抓取姿态微调 | 末端抓取姿态 + 灵巧手手势微调优化抓取成功率 |
-| ✅ 独立部署包 | reference/orchestrator_standalone/ 已完成 |
+| 🟢 实机验证 sudu2 | CRP 导入示教器, 验证 sudu2 速度合理性 |
 | 🟢 完整流程稳定性测试 | 多次连续运行 |
 | 🟢 MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |
 

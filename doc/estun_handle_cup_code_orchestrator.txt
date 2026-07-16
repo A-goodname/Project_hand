@@ -87,18 +87,18 @@ CRP 文件: doc/handlepluscup-orchestrator.crp (80 widgets, CONTINUE/ABORT 测�
    - handlepluscup-orchestrator.crp: C_P3 1 处 (原为唯一 MovJ, 改为 MovL)
 2. 挥手回归 do_gesture 一步到位, 移除 KinematicsConverter / wave_speed / _speed_cfg
    - wave_interval: 0.15s (每手势保持时间)
-3. Orchestrator CRP 速度 (20 widget):
-   - Phase 0 (4): GH_ZHAOSHOU1 / GH_ZHAOSHOU2 / GH_WOSHOU / Home — 全部 V100, label "MovL"
+3. Orchestrator CRP 速度 (20 widget, v13 新增 sudu2):
+   - Phase 0 (4): GH_ZHAOSHOU1 / GH_ZHAOSHOU2 / GH_WOSHOU / Home — 全部 V100
    - Handle 进 (3): H_P2 → H_P1 → H_P4 — V100
-   - H_P3 倒水: sudu
-   - H_P4 退避: V100
+   - H_P3↔H_P4 倒水: sudu (壶重+倾斜)
    - Handle 返 (3): H_P1 → H_P2 → Home — V100
    - Cup 进 (2): C_P2 → C_P1 — V100
-   - C_P3 递水 (P1→P3): sudu
+   - C_P5↔C_P3 递送 (P1→P5→P3): sudu2 (带水杯, stcp=150)
    - CONTINUE (2): C_P4 → Home — V100
-   - ABORT C_P1 回退 (P3→P1): sudu
+   - ABORT C_P5→C_P1 放回: sudu2 (带水杯)
    - ABORT 返 (2): C_P2 → Home — V100
-   = 3 处 sudu: H_P3(倒水) / C_P3(递水) / ABORT C_P1(回退)
+   = sudu ×2 (H_P3/H_P4 倒水) | sudu2 ×4 (C_P5×2 + C_P3 + C_P1 带杯)
+   速度定义: sudu(sper=50,stcp=50,sori=50) < sudu2(sper=55,stcp=150,sori=65) < V100(sper=60,stcp=250,sori=80)
 4. CRP Phase D 点位修正: 5 个 MovL 从错误引用 GH_ZHAOSHOU1 改为正确点位
    (C_P4→ptmreq3cgnlah0bwcs, Home→ptmquqgw91h2026u, C_P1→ptmqur4rq7rech2h,
     C_P2→ptmqur4s2ie5o53g, Home→ptmquqgw91h2026u)
