@@ -2,37 +2,48 @@
 
 ## 当前焦点
 
-**人就位 GPU 优化 + Cup P3 速度优化 完成 ✅**
+**语音灵巧手控制先行验证 + 主流程优化**（暂停于 2026-07-16 17:55）
+
+暂停位置: UGREEN camera DSHOW id 自动探测方案调研中。
+- 硬编码 id 不稳定（昨天3今天1）
+- Win32_PnPEntity 查不到 UGREEN 视频设备
+- 需要按名称匹配或自动探测
 
 ## 最近变更
 
-### v13 人就位 GPU 化 + Cup sudu2 提速 (2026-07-16)
+### v14 语音控制基础设施 (2026-07-16)
 
-1. **PersonDetector GPU 化**:
-   - `EyeToHand/config.yaml`: `device: cpu → gpu`
-   - 合并 person+chair 双 YOLO 调用为单次推理 (`_detect_person_and_chair()`)
-   - `leave_frames: 30 → 45` (配合 GPU 高帧率)
-   - 旧方法保留, 独立测试模式仍可用
+1. **ASR 方案确定**:
+   - 选型: sherpa-onnx SenseVoice int8 (227MB)，纯 ONNX，零 PyTorch 依赖
+   - funasr 已废弃: torch 2.12 > 2.3 导致输出乱码，PyTorch 降级风险大
+   - 模型路径: `model/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/`
+   - pip: `sherpa-onnx` v1.13.4（已安装）
 
-2. **Cup P3 速度优化 — sudu2**:
-   - CRP 新增 `sudu2` 变量: sper=55, stcp=150, sori=65
-   - 4 处 MovL sudu→sudu2: C_P5↔C_P3 递送 + ABORT C_P5/C_P1 退避放回
-   - 倒水 H_P3/H_P4 保持 sudu (壶重+倾斜)
+2. **语音手势控制**:
+   - `Omnihand/voice_omnihand_control.py` 完成（语法检查通过）
+   - 22 个手势 + 2 条序列 + 3 级速度前缀
+   - 两种输入模式: PTT(按键说话) + AutoVAD(能量阈值自动检测)
+   - VAD 测试通过: 能量阈值 0.015, 静音1.5s 切段, "嗯"/"你好" 正确识别
 
-3. **Skill 更新**:
-   - CRP 结构快速分析 3 步法
-   - 编码陷阱: bash 中 `open()` 必带 `encoding='utf-8'`
-   - 变量多容器遍历: `projectcfg.vars.data` 所有子分类 + `data.vars.project`
-   - 备份规则: 后缀 `.bak` 不加时间戳
+3. **设计文档**: `doc/voice_control_design.md` — 完整语音控制方案 (ASR/TTS选型、决策点、CRP GOTO、命令队列、WAV分类)
 
-4. **CLAUDE.md 全局规则**: 新增第 8 节"搜索与推理纪律"(空结果≠不存在/信息不全禁行动/锚定/回顾已知规则)
+### 主流程待优化 (实机测试反馈)
+
+4. **UGREEN Camera ID**: config.yaml 设 `camera_id: 3`，但 DSHOW 枚举到 [1][2][3] 三个设备，需要实机插拔测试确认哪个是 UGREEN
+5. **P3 等待时间**: CRP SocketReadStr 超时 + Python 端超时均需延长（当前 15s/10s 不够）
+6. **人就位简化**: 椅子检测 + 人就位可简化为人检测（参考 Phase 0 GreetingHandler 的 YOLO person 检测），去掉椅子标定逻辑
+7. **HandInCup 优化**: landmarks-in-bbox 判定需要继续调参，遮挡场景未覆盖
+
+8. **手动 CONTINUE 按键覆盖**: Phase D 期间，空格/'c' 键手动设置 hand_on_cup=True → CONTINUE 分支，避免 HandInCup 长时间检测误判。
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🟡 | 加水实测 | 完整流程加水倒水, 验证防溅 + HandInCup 判定 |
-| 🟡 | 抓取姿态微调 | 末端抓取姿态 + 灵巧手手势微调优化抓取成功率 |
-| 🟢 | 实机验证 sudu2 | CRP 导入示教器, 验证 sudu2 速度合理性 |
-| 🟢 | 完整流程稳定性测试 | 多次连续运行验证 |
-| 🟢 | MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |
+| 🔴 | UGREEN camera ID 确认 | 实机插拔测试，确认 DSHOW id |
+| 🔴 | P3 等待时间延长 | CRP SocketReadStr + Python 双向延长 |
+| 🔴 | 手动 CONTINUE 按键 | 空格/'c' → hand_on_cup=True → 跳过 HandInCup 等待 |
+| 🟡 | 人就位简化为 YOLO 人检测 | 参考 greeting，去椅子逻辑 |
+| 🟡 | HandInCup 继续优化 | 调参 + 遮挡测试 |
+| 🟡 | voice_omnihand_control 实机测 | 连灵巧手测试语音手势流程 |
+| 🟢 | 完整语音控制接入 Orchestrator | voice_control.py + 决策点 CRP |

@@ -1,5 +1,15 @@
 # Progress — Project_hand
 
+### 语音控制基础设施 (v14, 2026-07-16)
+- [x] ASR 选型: sherpa-onnx SenseVoice int8 (227MB, 零 PyTorch)
+- [x] funasr 废弃: torch 2.12 输出乱码, 已卸载 + 清缓存
+- [x] `Omnihand/voice_omnihand_control.py` 完成 (22手势+序列+速度)
+- [x] VAD 能量阈值方案测试通过 ("嗯"/"你好" 正确识别)
+- [x] `doc/voice_control_design.md` 完整方案文档
+- [x] voice_omnihand_control 单手势测试通过 ✅ (2026-07-17)
+- [ ] voice_omnihand_control 序列+速度 测试
+- [ ] 完整语音控制接入 Orchestrator
+
 ### 人就位 GPU 优化 + Cup P3 提速 (v13, 2026-07-16)
 - [x] PersonDetector GPU 化: `device: cpu → gpu`, 合并 person+chair 双推理为单次
 - [x] `leave_frames: 30 → 45` (配合 GPU 高帧率 ~30FPS)
@@ -96,10 +106,17 @@
 
 | 任务 | 说明 |
 |------|------|
+| 🔴 UGREEN camera ID 确认 | 实机插拔测试，DSHOW 枚举到 [1][2][3] 三个设备，需确认哪个是 UGREEN |
+| 🔴 P3 等待时间延长 | CRP SocketReadStr 超时 + Python _handle_client_impl 双向延长 |
+| 🔴 手动 CONTINUE 按键 | 空格/'c' → ctx.hand_on_cup=True → 跳过 HandInCup 等待，直接 CONTINUE |
+| 🟡 人就位简化 | 参考 greeting 的 YOLO person 检测，去椅子标定 + 非对称阈值逻辑 |
+| 🟡 HandInCup 继续优化 | landmarks-in-bbox 调参，遮挡场景未覆盖 |
+| 🟡 voice_omnihand_control 实机测 | 连灵巧手测试语音手势流程 |
 | 🟡 加水实测 | 完整流程加水倒水, 验证防溅 + HandInCup 判定 |
 | 🟡 抓取姿态微调 | 末端抓取姿态 + 灵巧手手势微调优化抓取成功率 |
 | 🟢 实机验证 sudu2 | CRP 导入示教器, 验证 sudu2 速度合理性 |
 | 🟢 完整流程稳定性测试 | 多次连续运行 |
+| 🟢 完整语音控制接入 | voice_control.py + 决策点 CRP |
 | 🟢 MediaPipe clearcut 彻底抑制 | shutdown 时 ERROR 日志泄漏 |
 
 ## 已知问题
@@ -107,3 +124,4 @@
 - UGREEN Camera B 纯 RGB 无深度 — 3D→1D 人体标定不可行 (已废弃, P3 X 全示教)
 - EyeToHand result.yaml 标定已废弃 (Camera B 无深度无法获得 Z)
 - MediaPipe clearcut shutdown ERROR 无法完全抑制
+- UGREEN Camera B DSHOW id 需实机确认 (当前 config=3，枚举到 1/2/3 三个)
