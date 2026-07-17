@@ -161,6 +161,17 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
         if speed_key:
             break
 
+    # 匹配序列 (通过触发词) — 先于手势, 长词优先避免 "握手序列" 被 "握手" 截获
+    best_seq = None
+    best_seq_len = 0
+    for seq_name, triggers in SEQUENCE_TRIGGERS.items():
+        for trigger in triggers:
+            if trigger in text_lower and len(trigger) > best_seq_len:
+                best_seq_len = len(trigger)
+                best_seq = seq_name
+    if best_seq:
+        return ("sequence", None, best_seq)
+
     # 匹配手势 — 关键词占比检查
     best_match = None
     best_len = 0
@@ -178,12 +189,6 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
 
     if best_match:
         return ("gesture", best_match, speed_key)
-
-    # 匹配序列 (通过触发词)
-    for seq_name, triggers in SEQUENCE_TRIGGERS.items():
-        for trigger in triggers:
-            if trigger in text_lower:
-                return ("sequence", None, seq_name)
 
     return None
 
@@ -377,8 +382,16 @@ from Omnihand.omnihand_gesture import KinematicsConverter
 class SpeechRecognizer:
     """sherpa-onnx SenseVoice 语音识别器."""
 
-    def __init__(self, model_dir: str):
-        model_path = os.path.join(model_dir, "model.int8.onnx")
+    def __init__(self, model_dir: str, model_type: str = "auto"):
+        # 模型选择: full > int8
+        full = os.path.join(model_dir, "model.onnx")
+        int8 = os.path.join(model_dir, "model.int8.onnx")
+        if model_type == "full":
+            model_path = full
+        elif model_type == "int8":
+            model_path = int8
+        else:  # auto: 完整版优先
+            model_path = full if os.path.exists(full) else int8
         tokens_path = os.path.join(model_dir, "tokens.txt")
 
         if not os.path.exists(model_path):
@@ -426,14 +439,17 @@ class SpeechRecognizer:
 # 麦克风设备选择
 # ============================================================
 
-def find_mic(keywords: Optional[list] = None) -> Optional[int]:
+def find_mic(preference: str = "auto") -> Optional[int]:
     """查找麦克风设备 ID.
 
-    优先级: UGREEN Camera Audio > 关键词匹配 > 系统默认.
+    preference: auto=UGREEN优先, ugreen=仅UGREEN, default=系统默认.
     返回 None 表示用系统默认.
     """
-    if keywords is None:
-        keywords = ["UGREEN"]
+    if preference == "default":
+        print(f"[Mic] 系统默认")
+        return None
+
+    keywords = ["UGREEN"] if preference in ("auto", "ugreen") else []
     devices = sd.query_devices()
     for keyword in keywords:
         for i, d in enumerate(devices):
@@ -458,13 +474,13 @@ def find_mic(keywords: Optional[list] = None) -> Optional[int]:
 class VoiceInputBase:
     """输入模式基类."""
 
-    def __init__(self, asr: SpeechRecognizer):
+    def __init__(self, asr: SpeechRecognizer, mic_pref: str = "auto"):
         self.asr = asr
         self.running = True
         self.speech_queue = queue.Queue()
         self._worker = threading.Thread(target=self._process_worker, daemon=True)
         self._worker.start()
-        self._mic_device = find_mic()  # None = 系统默认
+        self._mic_device = find_mic(mic_pref)  # None = 系统默认
 
     def _process_worker(self):
         """ASR 处理线程（避免 CFFI 回调中做文件 IO）."""
@@ -543,14 +559,15 @@ class AutoVADInput(VoiceInputBase):
     MAX_SPEECH_S = 10.0
     MIN_SPEECH_S = 0.3
 
-    def __init__(self, asr: SpeechRecognizer):
-        super().__init__(asr)
+    def __init__(self, asr: SpeechRecognizer, mic_pref: str = "auto"):
+        super().__init__(asr, mic_pref)
         self._buffer: List[np.ndarray] = []
         self._in_speech = False
         self._silence_count = 0
         self._silence_blocks = int(self.SILENCE_S * self.SAMPLERATE / self.BLOCKSIZE)
         self._max_blocks = int(self.MAX_SPEECH_S * self.SAMPLERATE / self.BLOCKSIZE)
         self._min_blocks = int(self.MIN_SPEECH_S * self.SAMPLERATE / self.BLOCKSIZE)
+        print(f"[VAD] 能量阈值 (threshold={self.SPEECH_THRESHOLD})")
 
     def _callback(self, indata, frames, time_info, status):
         if not self.running:
@@ -558,8 +575,9 @@ class AutoVADInput(VoiceInputBase):
 
         chunk = indata[:, 0].copy()
         rms = float(np.sqrt(np.mean(chunk ** 2)))
+        is_speech = rms > self.SPEECH_THRESHOLD
 
-        if rms > self.SPEECH_THRESHOLD:
+        if is_speech:
             if not self._in_speech:
                 self._in_speech = True
                 self._buffer = []
@@ -572,21 +590,24 @@ class AutoVADInput(VoiceInputBase):
 
             # 超长截断
             if len(self._buffer) >= self._max_blocks:
-                audio = np.concatenate(self._buffer)
-                self.speech_queue.put(audio)
-                self._buffer = []
-                self._in_speech = False
-                self._silence_count = 0
+                self._flush()
             # 静音结束
             elif self._silence_count >= self._silence_blocks:
                 if len(self._buffer) >= self._min_blocks:
-                    audio = np.concatenate(self._buffer)
-                    self.speech_queue.put(audio)
+                    self._flush()
                 else:
                     print(" (too short)", end="", flush=True)
-                self._buffer = []
-                self._in_speech = False
-                self._silence_count = 0
+                    self._buffer = []
+                    self._in_speech = False
+                    self._silence_count = 0
+
+    def _flush(self):
+        """送出当前语音段."""
+        audio = np.concatenate(self._buffer)
+        self.speech_queue.put(audio)
+        self._buffer = []
+        self._in_speech = False
+        self._silence_count = 0
 
     def run(self):
         print(f"\n[模式] 自动VAD (阈值={self.SPEECH_THRESHOLD}, "
@@ -636,6 +657,12 @@ def load_asr_model() -> str:
 def main():
     parser = argparse.ArgumentParser(description="语音灵巧手控制")
     parser.add_argument("--port", default="COM5", help="灵巧手串口号")
+    parser.add_argument("--mic", default="auto",
+                        choices=["auto", "ugreen", "default"],
+                        help="麦克风: auto=UGREEN优先, ugreen=仅UGREEN, default=系统默认")
+    parser.add_argument("--model", default="auto",
+                        choices=["auto", "int8", "full"],
+                        help="ASR模型: auto=完整版优先, int8=int8量化, full=完整版")
     parser.add_argument("--mode", default="ptt",
                         choices=["ptt", "auto"],
                         help="输入模式: ptt=按键说话, auto=自动VAD")
@@ -658,15 +685,15 @@ def main():
     # 2. 加载 ASR
     print("\n[2/3] 加载 ASR 模型...")
     model_dir = load_asr_model()
-    print(f"  模型目录: {model_dir}")
-    asr = SpeechRecognizer(model_dir)
+    print(f"  模型目录: {model_dir}  (--model={args.model})")
+    asr = SpeechRecognizer(model_dir, model_type=args.model)
 
     # 3. 创建输入模式
-    print(f"\n[3/3] 启动输入模式: {args.mode}")
+    print(f"\n[3/3] 启动输入模式: {args.mode} (mic={args.mic})")
     if args.mode == "auto":
-        voice_input = AutoVADInput(asr)
+        voice_input = AutoVADInput(asr, mic_pref=args.mic)
     else:
-        voice_input = PushToTalkInput(asr)
+        voice_input = PushToTalkInput(asr, mic_pref=args.mic)
 
     def on_result(text: str):
         """处理 ASR 结果，执行手势."""
