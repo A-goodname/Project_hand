@@ -101,6 +101,16 @@ python Orchestrator/main.py
 2. CRP 文件: `doc/handlepluscup-orchestrator.crp` (80 widgets, 下载到示教器)
 3. 按 `q` 退出
 
+### 语音控制 (先行验证)
+
+```bash
+python Omnihand/voice_omnihand_control.py                  # Silero VAD, 全量模型
+python Omnihand/voice_omnihand_control.py --mode ptt       # 按键模式
+python Omnihand/voice_omnihand_control.py --model int8     # int8 量化模型
+```
+
+触发词配置: `Omnihand/voice_commands.json` (改词无需动代码, 缺失时自动回退)
+
 ### 单独测试
 
 ```bash
@@ -127,6 +137,8 @@ python EyeToHand/hand_in_cup.py
 | 检测模型/固定ABC/跳帧 | `Orchestrator/config.yaml` |
 | 白色把手/红色胶带 HSV | `Orchestrator/config.yaml` → `white_handle` / `red_handle` |
 | 人就位/HandInCup 阈值 | `EyeToHand/config.yaml` → `chair` / `hand_in_cup` |
+| 语音控制触发词 | `Omnihand/voice_commands.json` |
+| 语音控制设计 | `doc/voice_control_design.md` |
 
 ## 关键概念
 
@@ -166,5 +178,6 @@ python EyeToHand/hand_in_cup.py
 | `doc/Handle_Process.md` | 把手检测设计决策记录 |
 | `doc/Grip_Process.md` | 瓶身位姿转换算法 |
 | `doc/Module_Rules.md` | 各硬件模块开发规则 |
+| `doc/voice_control_design.md` | 语音控制设计方案 + 先行验证结果 |
 | `doc/Project_Workflow.md` | 完整架构 + 双相机 + 标定流程 |
 | `doc/Kettle_Training_Task.md` | 水壶模型微调 SOP |

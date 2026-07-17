@@ -26,3 +26,5 @@ comtypes==1.4.16
 # 语音控制 (ASR + 麦克风)
 sherpa-onnx==1.13.4
 sounddevice==0.5.5
+# 语音控制 — 拼音模糊匹配 (处理 ASR 同音字错误)
+pypinyin==0.55.0

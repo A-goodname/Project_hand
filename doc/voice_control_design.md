@@ -1,6 +1,6 @@
 # 语音控制拓展 — 设计方案 v1
 
-> 状态: 草案 | 日期: 2026-07-17 | 手势控制单手势测试通过 ✅
+> 状态: **先行验证完成** | 日期: 2026-07-17 | 手势控制 + Silero VAD + 拼音匹配测试通过 ✅
 
 ---
 
@@ -786,52 +786,136 @@ voice_control:
 
 ---
 
-## 附录 A: 语音手势控制 — 先行验证
+## 附录 A: 语音手势控制 — 先行验证 ✅
 
 在接入完整机械臂流程之前，先用灵巧手做语音控制的独立验证。
 不涉及机器人运动、TCP 协议、CRP，只验证 ASR → 命令 → 执行的链路。
 
-### A.1 目标
+实现文件: `Omnihand/voice_omnihand_control.py`
+配置文件: `Omnihand/voice_commands.json`
+
+### A.1 架构
 
 ```
-麦克风 → VAD → ASR → 关键词匹配 → Gesture 枚举 → OmniHand.execute()
+麦克风 → Silero VAD (silero_vad.onnx) → 语音段 → OfflineRecognizer (SenseVoice)
+                                                       │
+                                          ┌────────────────┘
+                                          ▼
+                                    5 层匹配流水线:
+                                    1. 全局命令 (停止/退出)
+                                    2. 速度前缀剥离
+                                    3. 精确子串匹配 (字符级)
+                                    4. 字符模糊匹配 (SequenceMatcher ≥ 0.55)
+                                    5. 拼音模糊匹配 (pypinyin ≥ 0.75) ← 处理同音字
                                           │
-                                          └── beep.wav / error.wav
+                                          ▼
+                                    Gesture 枚举 → OmniHand.execute()
+                                          │
+                                          └── 提示音 (代码生成 beep/error WAV)
 ```
 
-### A.2 手势指令
+### A.2 技术选型
+
+| 组件 | 选择 | 说明 |
+|------|------|------|
+| ASR | sherpa-onnx SenseVoice 全量 (887MB) | `model.onnx` 优先, `model.int8.onnx` (227MB) 回退 |
+| VAD | sherpa-onnx VoiceActivityDetector + silero_vad.onnx | 神经网络 VAD, 替换能量阈值; min_silence=1.0s |
+| 拼音匹配 | pypinyin (TONE3) + SequenceMatcher | 自动覆盖同音同调/近调/声韵母相近, 阈值 0.75 |
+| 字符闸门 | SequenceMatcher ≥ 0.25 | 拼音匹配前置条件, 防止纯拼音碰撞误匹配 |
+| 麦克风 | `--mic auto/ugreen/default` | UGREEN 优先, 回退系统默认 |
+| 模型选择 | `--model auto/full/int8` | 全量优先 |
+
+### A.3 匹配流水线详解
+
+5 层递进匹配, 任一层命中即返回:
+
+| 层 | 方法 | 阈值 | 覆盖场景 |
+|----|------|------|----------|
+| 1 | 全局命令子串 | — | "停止"/"退出" 等 |
+| 2 | 速度前缀剥离 | — | "慢速握拳" → speed=slow, text="握拳" |
+| 3 | 精确子串匹配 | 最长优先 | 标准发音, 序列优先于手势 |
+| 4 | 字符模糊匹配 | 0.55 | 单字替换: "一到时"→"一到十" (0.667) |
+| 5 | 拼音模糊匹配 | 0.75 | 同音字: "卧手"→"握手" (1.000); 近调: "我手"→"握手" (0.875) |
+
+拼音匹配自动覆盖的差异:
+- 同音同调: ratio 1.000 (握→卧 wò, 手→首 shǒu)
+- 声调不同: ratio 0.875-0.909 (我wǒ/握wò)
+- 前后鼻音: ratio ~0.889 (心xīn/星xīng)
+- 字符闸门拦截纯拼音碰撞: "我全"→"握拳" 拼音近但汉字无关 → 拒绝
+
+### A.4 手势指令
 
 | 指令 | 触发短语 | Gesture |
 |------|----------|---------|
-| 握拳 | "握拳"、"攥拳" | `FIST` |
-| 张开 | "张开"、"手掌"、"摊开" | `PAPER` |
-| 抓取 | "抓取"、"抓住" | `GRIP` |
-| 半握 | "半握"、"准备抓" | `PREGRIP` |
-| 握紧 | "握紧" | `GRIPDONE` |
-| 握手 | "握手" | `HAND_SHAKE` |
-| 挥手1 | "挥手1" | `HELLO_1` |
-| 挥手2 | "挥手2" | `HELLO_2` |
-| 复位 | "复位"、"恢复" | `RESET` |
+| 复位 | "复位"、"恢复"、"归零"、"重置" | `RESET` |
+| 张开 | "张开"、"松手"、"手掌"、"摊开"、"五指张开" | `PAPER` |
+| 握拳 | "握拳"、"攥拳"、"拳头" | `FIST` |
+| OK | "OK"、"ok"、"好的" | `OK` |
+| 比心 | "比心"、"爱心" | `HEART` |
+| 点赞 | "点赞"、"厉害" | `LIKE` |
+| 我爱你 | "我爱你"、"ILY" | `ILY` |
+| 数字1~8 | "数字1"~"数字8"、"一"~"八" | `NUM1`~`NUM8` |
+| 合十 | "合十"、"拜拜"、"双手合十"、"双手合拢" | `CLASPING` |
+| 中指 | "中指"、"竖中指" | `MIDDLE` |
+| 指人 | "指人"、"指向"、"指着" | `POINT` |
+| 抓取 | "抓取"、"抓住"、"握住" | `GRIP` |
+| 抓紧 | "抓紧"、"握紧" | `GRIPDONE` |
+| 半握 | "半握"、"准备抓"、"预备抓" | `PREGRIP` |
+| 握手手势 | "握手手势"、"简单握手"、"直接握手" | `HAND_SHAKE` |
+| 挥手1 | "挥手1"、"打招呼1" | `HELLO_1` |
+| 挥手2 | "挥手2"、"打招呼2" | `HELLO_2` |
 
-### A.3 准备工作
+### A.5 手势序列
 
-1. **安装 ASR 依赖**
+| 序列 | 触发短语 | 步骤 |
+|------|----------|------|
+| 打招呼 | "打招呼"、"挥手"、"招手"、"打个招呼" | RESET→HELLO_1/2×3→RESET |
+| **握手** | **"握手"** (默认走序列, 含压力检测) | 压力检测→HAND_SHAKE→等松手→RESET |
+| 数字手势 | "数字手势"、"一到十"、"数字"、"比数字"、"数数" | RESET→NUM1→2→3→4→6→8→合十→RESET (每步 0.8s) |
+
+> **握手歧义说明**: "握手" 默认触发序列(含压力检测), 单手势用 "握手手势"/"简单握手".
+
+### A.6 速度控制
+
+| 前缀 | 效果 |
+|------|------|
+| (无前缀) | 直接动作, 最快 |
+| "快速"/"快" | 软件插值, 0.75s |
+| "中速"/"普通" | 软件插值, 1.0s |
+| "慢速"/"慢" | 软件插值, 3.0s |
+
+### A.7 准备工作
+
+1. **安装依赖**
    ```bash
-   pip install funasr-onnx sounddevice
+   pip install sherpa-onnx sounddevice pypinyin
    ```
 
-2. **创建音频目录**
-   ```bash
-   mkdir Orchestrator\audio
+2. **模型文件**
+   ```
+   model/sherpa-onnx-sense-voice/
+   ├── model.onnx          # 全量 887MB (优先)
+   ├── model.int8.onnx     # int8 227MB (回退)
+   └── tokens.txt
+   model/silero_vad.onnx   # VAD 644KB
    ```
 
-3. **代码生成提示音**（numpy 正弦波 → WAV）
+3. **配置文件**
+   - `Omnihand/voice_commands.json` — 所有触发词 + 匹配参数
+   - 缺失时自动使用内置默认值
 
-4. **测试脚本**
-   - `test_asr.py` — 纯 ASR 测试：VAD → 识别 → 打印文本
-   - `test_voice_hand.py` — 语音手势控制：VAD → ASR → 匹配 → 执行手势
+4. **提示音**（代码生成 numpy 正弦波 → WAV）
+   - `beep.wav` / `error.wav`
 
-### A.4 不涉及
+5. **运行**
+   ```bash
+   python Omnihand/voice_omnihand_control.py                  # Silero VAD, 全量模型
+   python Omnihand/voice_omnihand_control.py --mode ptt       # 按键模式
+   python Omnihand/voice_omnihand_control.py --model int8     # int8 量化模型
+   python Omnihand/voice_omnihand_control.py --mic ugreen     # 指定麦克风
+   ```
+
+### A.8 不涉及
 
 - ❌ CRP / 机器人运动 / TCP 协议
 - ❌ 决策点 / GOTO

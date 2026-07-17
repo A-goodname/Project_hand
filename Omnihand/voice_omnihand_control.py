@@ -2,27 +2,34 @@
 """
 语音灵巧手控制 — Voice OmniHand Control
 ========================================
-基于 sherpa-onnx SenseVoice + 能量阈值 VAD, 语音指令控制 OmniHand 手势。
+基于 sherpa-onnx SenseVoice (全量 887MB / int8 227MB) + Silero VAD,
+语音指令控制 OmniHand 手势。
 
-三种输入模式:
-  - 空格键按下说话，松开识别（最可靠，默认）
-  - 自动 VAD 检测语音段落
+两种输入模式 (默认 auto):
+  - auto: Silero VAD 实时检测语音段落 → OfflineRecognizer 逐段识别
+  - ptt:  回车键录音 3s 后识别（不回显，无 VAD）
   - 'q' 退出
+
+流式方案:
+  SenseVoice 仅支持 OfflineRecognizer, 通过 Silero VAD 实时切分
+  实现伪流式: VAD 静音等待 1s + ASR 推理 ~200-500ms = ~1.5s 端到端延迟.
 
 使用:
   python Omnihand/voice_omnihand_control.py
-  python Omnihand/voice_omnihand_control.py --port COM5 --mode auto
+  python Omnihand/voice_omnihand_control.py --port COM5 --mode ptt
+  python Omnihand/voice_omnihand_control.py --model int8 --mic ugreen
 """
 
 import os
 import sys
 import time
-import wave
+import json
 import queue
 import threading
 import argparse
+from difflib import SequenceMatcher
 from collections import OrderedDict
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Union, Dict, Any
 
 import numpy as np
 import msvcrt
@@ -55,33 +62,123 @@ SPEED_PREFIXES = OrderedDict({
 # 无前缀 → do_gesture() 直接动作 (最快, 无插值)
 
 # ============================================================
-# 指令表
+# 配置加载 — 从 JSON 读取触发词, 拼音预计算
 # ============================================================
 
-SINGLE_GESTURES: List[Tuple[Gesture, List[str]]] = [
-    (Gesture.RESET,      ["复位", "恢复", "归零", "重置"]),
-    (Gesture.PAPER,      ["张开", "松手", "手掌", "摊开"]),
-    (Gesture.FIST,       ["握拳"]),
-    (Gesture.OK,         ["OK", "ok"]),
-    (Gesture.HEART,      ["比心", "爱心"]),
-    (Gesture.LIKE,       ["点赞", "厉害"]),
-    (Gesture.ILY,        ["我爱你", "ILY"]),
-    (Gesture.NUM1,       ["数字1", "一"]),
-    (Gesture.NUM2,       ["数字2", "二"]),
-    (Gesture.NUM3,       ["数字3", "三"]),
-    (Gesture.NUM4,       ["数字4", "四"]),
-    (Gesture.NUM6,       ["数字6", "六"]),
-    (Gesture.NUM8,       ["数字8", "八"]),
-    (Gesture.CLASPING,   ["合十", "拜拜", "双手合十"]),
-    (Gesture.MIDDLE,     ["中指", "竖中指"]),
-    (Gesture.POINT,      ["指人", "指向", "指着"]),
-    (Gesture.GRIP,       ["抓取", "握住"]),
-    (Gesture.GRIPDONE,   ["抓紧"]),
-    (Gesture.PREGRIP,    ["半握", "准备抓"]),
-    (Gesture.HAND_SHAKE, ["握手"]),
-    (Gesture.HELLO_1,    ["挥手1", "打招呼1"]),
-    (Gesture.HELLO_2,    ["挥手2", "打招呼2"]),
-]
+def _load_commands() -> Dict[str, Any]:
+    """加载 voice_commands.json, 失败时返回硬编码默认值."""
+    json_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "voice_commands.json"
+    )
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        print(f"[Config] 已加载 {json_path}")
+        return cfg
+    except Exception as e:
+        print(f"[Config] 加载失败 ({e}), 使用内置默认值")
+        return _default_commands()
+
+
+def _default_commands() -> Dict[str, Any]:
+    """内置默认指令配置 (与 voice_commands.json 保持同步)."""
+    return {
+        "stop_words": [
+            "停止", "急停", "暂停", "停", "停下",
+            "别动", "不动", "不要动", "别做了", "快停", "停一下",
+        ],
+        "exit_words": ["退出", "结束", "关闭"],
+        "sequences": {
+            "打招呼":   {"triggers": ["打招呼", "挥手", "招手", "打个招呼"]},
+            "握手":     {"triggers": ["握手"]},
+            "数字手势": {"triggers": ["数字手势", "一到十", "数字", "比数字", "数数", "一到8"]},
+        },
+        "gestures": {
+            "RESET":      {"triggers": ["复位", "恢复", "归零", "重置"]},
+            "PAPER":      {"triggers": ["张开", "松手", "手掌", "摊开", "五指张开"]},
+            "FIST":       {"triggers": ["握拳", "攥拳", "拳头"]},
+            "OK":         {"triggers": ["OK", "ok", "好的"]},
+            "HEART":      {"triggers": ["比心", "爱心"]},
+            "LIKE":       {"triggers": ["点赞", "厉害"]},
+            "ILY":        {"triggers": ["我爱你", "ILY"]},
+            "NUM1":       {"triggers": ["数字1", "一"]},
+            "NUM2":       {"triggers": ["数字2", "二"]},
+            "NUM3":       {"triggers": ["数字3", "三"]},
+            "NUM4":       {"triggers": ["数字4", "四"]},
+            "NUM6":       {"triggers": ["数字6", "六"]},
+            "NUM8":       {"triggers": ["数字8", "八"]},
+            "CLASPING":   {"triggers": ["合十", "拜拜", "双手合十", "双手合拢"]},
+            "MIDDLE":     {"triggers": ["中指", "竖中指"]},
+            "POINT":      {"triggers": ["指人", "指向", "指着"]},
+            "GRIP":       {"triggers": ["抓取", "抓住", "握住"]},
+            "GRIPDONE":   {"triggers": ["抓紧", "握紧"]},
+            "PREGRIP":    {"triggers": ["半握", "准备抓", "预备抓"]},
+            "HAND_SHAKE": {"triggers": ["握手手势", "简单握手", "直接握手"]},
+            "HELLO_1":    {"triggers": ["挥手1", "打招呼1"]},
+            "HELLO_2":    {"triggers": ["挥手2", "打招呼2"]},
+        },
+        "matching": {
+            "char_threshold": 0.55,
+            "pinyin_enabled": True,
+            "pinyin_threshold": 0.75,
+        },
+    }
+
+
+# ---- 加载配置 ----
+_COMMANDS_CFG = _load_commands()
+_MATCH_CFG = _COMMANDS_CFG.get("matching", {})
+
+# ---- 构建运行时数据结构 ----
+def _build_gesture_list(cfg: Dict[str, Any]) -> List[Tuple[Gesture, List[str]]]:
+    """从 JSON gestures 段构建 SINGLE_GESTURES."""
+    result = []
+    for name, entry in cfg.get("gestures", {}).items():
+        result.append((Gesture[name], entry["triggers"]))
+    return result
+
+
+SINGLE_GESTURES = _build_gesture_list(_COMMANDS_CFG)
+
+SEQUENCE_TRIGGERS: "OrderedDict[str, List[str]]" = OrderedDict()
+for _sn, _se in _COMMANDS_CFG.get("sequences", {}).items():
+    SEQUENCE_TRIGGERS[_sn] = _se["triggers"]
+
+# 手势名称映射 (供 HandController 使用)
+GESTURE_NAMES: Dict[Gesture, str] = {
+    g: p[0] for g, p in SINGLE_GESTURES
+}
+
+# ---- 拼音索引 (预计算, 供模糊匹配) ----
+_PINYIN_ENABLED = False
+_TRIGGER_PINYIN: List[Tuple[str, str, Union[str, Gesture], str]] = []
+
+if _MATCH_CFG.get("pinyin_enabled", True):
+    try:
+        from pypinyin import pinyin as _pypinyin_fn, Style as _PinyinStyle
+
+        def _to_pinyin(text: str) -> str:
+            return "".join(p[0] for p in _pypinyin_fn(text, style=_PinyinStyle.TONE3))
+
+        # 预计算所有 trigger 的拼音
+        for seq_name, triggers in SEQUENCE_TRIGGERS.items():
+            for t in triggers:
+                _TRIGGER_PINYIN.append((_to_pinyin(t), "seq", seq_name, t))
+        for gesture, phrases in SINGLE_GESTURES:
+            for p in phrases:
+                if len(p) > 1:  # 单字不参与拼音匹配
+                    _TRIGGER_PINYIN.append((_to_pinyin(p), "ges", gesture, p))
+        _PINYIN_ENABLED = True
+        print(f"[Pinyin] 已启用 (pypinyin, {len(_TRIGGER_PINYIN)} 条拼音索引)")
+    except ImportError:
+        print("[Pinyin] pypinyin 未安装, 拼音匹配已禁用")
+    except Exception as e:
+        print(f"[Pinyin] 初始化失败 ({e}), 拼音匹配已禁用")
+
+
+# ============================================================
+# 指令表 (序列步骤 - 引用 Gesture 枚举, 保留在 Python)
+# ============================================================
 
 SEQUENCES = OrderedDict({
     "打招呼": [
@@ -98,23 +195,16 @@ SEQUENCES = OrderedDict({
         # 特殊序列 — 需要压力检测，调用 Phase 0 逻辑
     ],
     "数字手势": [
-        (Gesture.RESET, 0.5),
-        (Gesture.NUM1, 0.5),
-        (Gesture.NUM2, 0.5),
-        (Gesture.NUM3, 0.5),
-        (Gesture.NUM4, 0.5),
-        (Gesture.NUM6, 0.5),
-        (Gesture.NUM8, 0.5),
-        (Gesture.CLASPING, 0.5),
-        (Gesture.RESET, 0.5),
+        (Gesture.RESET, 0.8),
+        (Gesture.NUM1, 0.8),
+        (Gesture.NUM2, 0.8),
+        (Gesture.NUM3, 0.8),
+        (Gesture.NUM4, 0.8),
+        (Gesture.NUM6, 0.8),
+        (Gesture.NUM8, 0.8),
+        (Gesture.CLASPING, 0.8),
+        (Gesture.RESET, 0.8),
     ],
-})
-
-# 序列语音触发词
-SEQUENCE_TRIGGERS = OrderedDict({
-    "打招呼":   ["打招呼", "挥手"],
-    "握手":     ["握手序列", "完整握手"],
-    "数字手势": ["数字手势", "一到十"],
 })
 
 # ============================================================
@@ -125,11 +215,22 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
     """
     匹配语音文本 → (命令类型, Gesture, 速度键).
 
-    防误触: 关键词必须在文本中占显著比例, 避免长对话中短词命中.
+    匹配流水线:
+      1. 全局命令 (停止/退出)
+      2. 速度前缀剥离
+      3. 精确子串匹配 — 字符级, 最长优先
+      4. 字符模糊匹配 — SequenceMatcher ≥ char_threshold
+      5. 拼音模糊匹配 — pypinyin + SequenceMatcher ≥ pinyin_threshold (新增)
+
+    防误触:
+      - 1 字触发词: 精确匹配, 不参与模糊/拼音
+      - 序列 vs 手势冲突: 最长触发词优先
+      - 关键词占比检查 (长对话中短词跳过)
 
     返回:
       ("gesture", gesture, speed_key)  — 单手势
       ("sequence", None, 序列名)       — 手势序列
+      ("stop", None, None)             — 停止
       ("exit", None, None)             — 退出
       None                             — 未匹配
     """
@@ -139,17 +240,15 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
     text_lower = text.lower().strip()
     text_len = len(text_lower)
 
-    # 停止命令 (全局生效, 触发词较长, 直接子串匹配)
-    for kw in ["停止", "急停", "暂停", "停", "停下", "别动", "不动", "不要动", "别做了", "快停", "停一下"]:
+    # ---- 1. 全局命令 ----
+    for kw in _COMMANDS_CFG.get("stop_words", []):
         if kw in text_lower:
             return ("stop", None, None)
-
-    # 退出命令
-    for kw in ["退出", "结束", "关闭"]:
+    for kw in _COMMANDS_CFG.get("exit_words", []):
         if kw in text_lower:
             return ("exit", None, None)
 
-    # 检查速度前缀
+    # ---- 2. 速度前缀剥离 ----
     speed_key = None
     clean_text = text_lower
     for sk, prefixes in SPEED_PREFIXES.items():
@@ -161,36 +260,149 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
         if speed_key:
             break
 
-    # 匹配序列 (通过触发词) — 先于手势, 长词优先避免 "握手序列" 被 "握手" 截获
-    best_seq = None
-    best_seq_len = 0
+    # ---- 3. 统一匹配 (精确子串 + 字符模糊 + 拼音模糊) ----
+    char_threshold = _MATCH_CFG.get("char_threshold", 0.55)
+    pinyin_threshold = _MATCH_CFG.get("pinyin_threshold", 0.75)
+
+    # 构建候选列表
+    candidates: List[Tuple[str, Union[str, Gesture], str, str]] = []
     for seq_name, triggers in SEQUENCE_TRIGGERS.items():
         for trigger in triggers:
-            if trigger in text_lower and len(trigger) > best_seq_len:
-                best_seq_len = len(trigger)
-                best_seq = seq_name
-    if best_seq:
-        return ("sequence", None, best_seq)
-
-    # 匹配手势 — 关键词占比检查
-    best_match = None
-    best_len = 0
+            candidates.append(("seq", seq_name, trigger, text_lower))
     for gesture, phrases in SINGLE_GESTURES:
         for phrase in phrases:
-            if phrase in text_lower:
-                # 防误触: 关键词占比检查
-                # 文本 > 6 字且关键词占比 < 30% → 视为对话中的偶然命中, 跳过
-                ratio = len(phrase) / text_len
-                if text_len > 6 and ratio < 0.3:
-                    continue
-                if len(phrase) > best_len:
-                    best_len = len(phrase)
-                    best_match = gesture
+            candidates.append(("ges", gesture, phrase, clean_text))
 
-    if best_match:
-        return ("gesture", best_match, speed_key)
+    # -- 3a. 精确子串匹配 --
+    best_type, best_seq_name, best_gesture = _exact_match(candidates)
+    if best_type == "seq" and best_seq_name is not None:
+        return ("sequence", None, best_seq_name)
+    if best_type == "ges" and best_gesture is not None:
+        return ("gesture", best_gesture, speed_key)
+
+    # -- 3b. 字符模糊匹配 --
+    best_type, best_seq_name, best_gesture = _fuzzy_match(candidates, char_threshold)
+    if best_type == "seq" and best_seq_name is not None:
+        return ("sequence", None, best_seq_name)
+    if best_type == "ges" and best_gesture is not None:
+        return ("gesture", best_gesture, speed_key)
+
+    # -- 3c. 拼音模糊匹配 --
+    if _PINYIN_ENABLED:
+        best_type, best_seq_name, best_gesture = _pinyin_match(
+            clean_text, text_lower, pinyin_threshold
+        )
+        if best_type == "seq" and best_seq_name is not None:
+            return ("sequence", None, best_seq_name)
+        if best_type == "ges" and best_gesture is not None:
+            return ("gesture", best_gesture, speed_key)
 
     return None
+
+
+def _exact_match(
+    candidates: List[Tuple[str, Union[str, Gesture], str, str]]
+) -> Tuple[Optional[str], Optional[str], Optional[Gesture]]:
+    """精确子串匹配, 最长触发词优先."""
+    best_type: Optional[str] = None
+    best_seq_name: Optional[str] = None
+    best_gesture: Optional[Gesture] = None
+    best_trigger_len = 0
+    for typ, val, trigger, search in candidates:
+        if len(trigger) == 1:
+            if trigger != search:
+                continue
+        elif trigger not in search:
+            continue
+        ratio = len(trigger) / len(search) if search else 1
+        if len(search) > 6 and ratio < 0.3:
+            continue
+        if len(trigger) > best_trigger_len:
+            best_trigger_len = len(trigger)
+            best_type = typ
+            if typ == "seq":
+                best_seq_name = val  # type: ignore[assignment]
+                best_gesture = None
+            else:
+                best_seq_name = None
+                best_gesture = val  # type: ignore[assignment]
+    return best_type, best_seq_name, best_gesture
+
+
+def _fuzzy_match(
+    candidates: List[Tuple[str, Union[str, Gesture], str, str]],
+    threshold: float,
+) -> Tuple[Optional[str], Optional[str], Optional[Gesture]]:
+    """字符级模糊匹配, 仅多字候选."""
+    best_type: Optional[str] = None
+    best_seq_name: Optional[str] = None
+    best_gesture: Optional[Gesture] = None
+    best_score = 0.0
+    for typ, val, trigger, search in candidates:
+        if len(trigger) <= 1:
+            continue
+        if abs(len(search) - len(trigger)) > max(len(search), len(trigger)) * 0.5:
+            continue
+        score = SequenceMatcher(None, search, trigger).ratio()
+        if score > best_score:
+            best_score = score
+            best_type = typ
+            if typ == "seq":
+                best_seq_name = val  # type: ignore[assignment]
+                best_gesture = None
+            else:
+                best_seq_name = None
+                best_gesture = val  # type: ignore[assignment]
+    if best_score >= threshold:
+        return best_type, best_seq_name, best_gesture
+    return None, None, None
+
+
+def _pinyin_match(
+    clean_text: str,
+    text_lower: str,
+    threshold: float,
+) -> Tuple[Optional[str], Optional[str], Optional[Gesture]]:
+    """拼音模糊匹配 — 整句转 TONE3 拼音, 与预计算 trigger 拼音比较.
+
+    微小差异自动覆盖 (threshold=0.75):
+      - 声调不同: "wo4shou3" vs "wo3shou3" → 7/8 = 0.875 ✓
+      - 前后鼻音: "xin1" vs "xing1" → 4/5 = 0.889 ✓
+      - 同音同调: "wo4shou3" vs "wo4shou3" → 1.000 ✓
+
+    字符闸门: 输入与 trigger 原始汉字 SequenceMatcher ≥ 0.25,
+    防止纯拼音碰撞误匹配 (如 "我全"→"握拳" 拼音同但汉字无关).
+    """
+    try:
+        text_py = "".join(
+            p[0] for p in _pypinyin_fn(clean_text, style=_PinyinStyle.TONE3)
+        )
+    except Exception:
+        return None, None, None
+
+    best_type: Optional[str] = None
+    best_seq_name: Optional[str] = None
+    best_gesture: Optional[Gesture] = None
+    best_score = 0.0
+    for trigger_py, typ, val, trigger in _TRIGGER_PINYIN:
+        # 字符闸门: 原始汉字至少有一点重叠才比较拼音
+        search_text = text_lower if typ == "seq" else clean_text
+        if SequenceMatcher(None, search_text, trigger).ratio() < 0.25:
+            continue
+        score = SequenceMatcher(None, text_py, trigger_py).ratio()
+        if score > best_score:
+            best_score = score
+            best_type = typ
+            if typ == "seq":
+                best_seq_name = val  # type: ignore[assignment]
+                best_gesture = None
+            else:
+                best_seq_name = None
+                best_gesture = val  # type: ignore[assignment]
+
+    if best_score >= threshold:
+        return best_type, best_seq_name, best_gesture
+    return None, None, None
 
 
 # ============================================================
@@ -227,7 +439,7 @@ class HandController:
         speed_key=None → 直接 do_gesture() (最快, 无插值)
         speed_key=fast/medium/very_slow → 软件插值
         """
-        name = {g: p[0] for g, p in SINGLE_GESTURES}.get(gesture, gesture.name)
+        name = GESTURE_NAMES.get(gesture, gesture.name)
 
         if speed_key is None:
             print(f"[执行] {name} (直接, 无插值)")
@@ -406,33 +618,18 @@ class SpeechRecognizer:
             use_itn=True,
             language="zh",
         )
-        self._temp_wav = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "_voice_temp.wav"
-        )
-        print(f"[ASR] SenseVoice int8 已加载")
+        model_name = os.path.basename(model_path)
+        print(f"[ASR] SenseVoice 已加载 ({model_name})")
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
         """转写音频片段."""
-        # 保存临时 WAV
-        data = (audio * 32767).astype(np.int16).tobytes()
-        with wave.open(self._temp_wav, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(data)
-
-        # ASR 推理
         stream = self.recognizer.create_stream()
         stream.accept_waveform(sample_rate, audio.astype(np.float32))
         self.recognizer.decode_stream(stream)
         return stream.result.text.strip()
 
     def close(self):
-        if os.path.exists(self._temp_wav):
-            try:
-                os.remove(self._temp_wav)
-            except Exception:
-                pass
+        pass
 
 
 # ============================================================
@@ -508,10 +705,8 @@ class VoiceInputBase:
 
 class PushToTalkInput(VoiceInputBase):
     """
-    空格键按下说话，松开识别。
-
-    主线程阻塞在 cv2.waitKey（需要 cv2 窗口，或用 keyboard 库）。
-    简化版：用 input() 模拟 — 按回车开始录音，回车结束。
+    按键说话模式 (PTT): 回车键开始录音 3s，自动识别。
+    简化版实现，无回声消除，适合快速测试。
     """
 
     SAMPLERATE = 16000
@@ -549,69 +744,67 @@ class PushToTalkInput(VoiceInputBase):
 
 class AutoVADInput(VoiceInputBase):
     """
-    自动 VAD 模式：持续监听，能量阈值检测语音段落。
+    自动 VAD 模式：sherpa-onnx VoiceActivityDetector + silero_vad.onnx.
+    持续监听，神经网络 VAD 检测语音段落。
     """
 
     SAMPLERATE = 16000
-    BLOCKSIZE = 512
-    SPEECH_THRESHOLD = 0.015
-    SILENCE_S = 1.2
-    MAX_SPEECH_S = 10.0
-    MIN_SPEECH_S = 0.3
+    BLOCKSIZE = 512  # 对齐 Silero VAD window_size
 
     def __init__(self, asr: SpeechRecognizer, mic_pref: str = "auto"):
         super().__init__(asr, mic_pref)
-        self._buffer: List[np.ndarray] = []
-        self._in_speech = False
-        self._silence_count = 0
-        self._silence_blocks = int(self.SILENCE_S * self.SAMPLERATE / self.BLOCKSIZE)
-        self._max_blocks = int(self.MAX_SPEECH_S * self.SAMPLERATE / self.BLOCKSIZE)
-        self._min_blocks = int(self.MIN_SPEECH_S * self.SAMPLERATE / self.BLOCKSIZE)
-        print(f"[VAD] 能量阈值 (threshold={self.SPEECH_THRESHOLD})")
+        # Silero VAD 初始化
+        silero_path = os.path.join(_project_root, "model", "silero_vad.onnx")
+        if not os.path.exists(silero_path):
+            raise FileNotFoundError(f"Silero VAD 模型未找到: {silero_path}")
+
+        silero_cfg = sherpa_onnx.SileroVadModelConfig(
+            model=silero_path,
+            threshold=0.5,
+            min_speech_duration=0.25,
+            min_silence_duration=1.0,
+            max_speech_duration=10.0,
+        )
+        vad_cfg = sherpa_onnx.VadModelConfig(
+            silero_vad=silero_cfg,
+            sample_rate=self.SAMPLERATE,
+            num_threads=2,
+        )
+        self._detector = sherpa_onnx.VoiceActivityDetector(
+            vad_cfg, buffer_size_in_seconds=60
+        )
+        self._speech_active = False
+        print(f"[VAD] Silero VAD (silero_vad.onnx, threshold=0.5, "
+              f"min_silence=1.0s, max_speech=10s)")
 
     def _callback(self, indata, frames, time_info, status):
         if not self.running:
             raise sd.CallbackStop
 
         chunk = indata[:, 0].copy()
-        rms = float(np.sqrt(np.mean(chunk ** 2)))
-        is_speech = rms > self.SPEECH_THRESHOLD
+        self._detector.accept_waveform(chunk)
 
-        if is_speech:
-            if not self._in_speech:
-                self._in_speech = True
-                self._buffer = []
+        # 语音活动指示（终端显示）
+        if self._detector.is_speech_detected():
+            if not self._speech_active:
+                self._speech_active = True
                 print("\n[VAD]", end="", flush=True)
-            self._buffer.append(chunk)
-            self._silence_count = 0
-        elif self._in_speech:
-            self._buffer.append(chunk)
-            self._silence_count += 1
+        else:
+            self._speech_active = False
 
-            # 超长截断
-            if len(self._buffer) >= self._max_blocks:
-                self._flush()
-            # 静音结束
-            elif self._silence_count >= self._silence_blocks:
-                if len(self._buffer) >= self._min_blocks:
-                    self._flush()
-                else:
-                    print(" (too short)", end="", flush=True)
-                    self._buffer = []
-                    self._in_speech = False
-                    self._silence_count = 0
-
-    def _flush(self):
-        """送出当前语音段."""
-        audio = np.concatenate(self._buffer)
-        self.speech_queue.put(audio)
-        self._buffer = []
-        self._in_speech = False
-        self._silence_count = 0
+        # 检查完成的语音段
+        while not self._detector.empty():
+            seg = self._detector.front  # 属性，非方法
+            audio = np.array(seg.samples, dtype=np.float32)
+            duration = len(audio) / self.SAMPLERATE
+            if duration >= 0.3:  # 过滤过短片段（咳嗽/杂音）
+                self.speech_queue.put(audio)
+            else:
+                print(" (too short)", end="", flush=True)
+            self._detector.pop()
 
     def run(self):
-        print(f"\n[模式] 自动VAD (阈值={self.SPEECH_THRESHOLD}, "
-              f"静音={self.SILENCE_S}s, 最长={self.MAX_SPEECH_S}s)")
+        print(f"\n[模式] Silero VAD 自动检测 (silero_vad.onnx)")
         print("       直接说话即可，'q' 键退出\n")
 
         try:
@@ -639,18 +832,15 @@ class AutoVADInput(VoiceInputBase):
 
 def load_asr_model() -> str:
     """查找 SenseVoice 模型目录."""
-    candidates = [
-        os.path.join(_project_root, "model",
-                     "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"),
-        os.path.join(_project_root, "model",
-                     "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"),
-    ]
-    for d in candidates:
-        if os.path.exists(os.path.join(d, "model.int8.onnx")):
-            return d
+    candidate = os.path.join(_project_root, "model", "sherpa-onnx-sense-voice")
+    if os.path.isdir(candidate) and (
+        os.path.exists(os.path.join(candidate, "model.onnx"))
+        or os.path.exists(os.path.join(candidate, "model.int8.onnx"))
+    ):
+        return candidate
     raise FileNotFoundError(
-        "SenseVoice int8 模型未找到。请下载到 model/ 目录。\n"
-        "  候选路径: " + ", ".join(candidates)
+        f"SenseVoice 模型未找到: {candidate}/\n"
+        "请下载 model.onnx (全量) 或 model.int8.onnx (int8) + tokens.txt 到该目录"
     )
 
 
@@ -663,9 +853,9 @@ def main():
     parser.add_argument("--model", default="auto",
                         choices=["auto", "int8", "full"],
                         help="ASR模型: auto=完整版优先, int8=int8量化, full=完整版")
-    parser.add_argument("--mode", default="ptt",
+    parser.add_argument("--mode", default="auto",
                         choices=["ptt", "auto"],
-                        help="输入模式: ptt=按键说话, auto=自动VAD")
+                        help="输入模式: auto=Silero VAD, ptt=按键说话")
     args = parser.parse_args()
 
     print("=" * 55)

@@ -1,0 +1,53 @@
+{
+  "_comment": "语音指令配置 — 触发词 + 匹配参数. 修改此文件即可调整指令词汇，无需改 Python 代码.",
+
+  "stop_words": [
+    "停止", "急停", "暂停", "停", "停下",
+    "别动", "不动", "不要动", "别做了", "快停", "停一下"
+  ],
+
+  "exit_words": ["退出", "结束", "关闭"],
+
+  "sequences": {
+    "打招呼": {
+      "triggers": ["打招呼", "挥手", "招手", "打个招呼"]
+    },
+    "握手": {
+      "triggers": ["握手"]
+    },
+    "数字手势": {
+      "triggers": ["数字手势", "一到十", "数字", "比数字", "数数", "一到8"]
+    }
+  },
+
+  "gestures": {
+    "RESET":      { "triggers": ["复位", "恢复", "归零", "重置"] },
+    "PAPER":      { "triggers": ["张开", "松手", "手掌", "摊开", "五指张开"] },
+    "FIST":       { "triggers": ["握拳", "攥拳", "拳头"] },
+    "OK":         { "triggers": ["OK", "ok", "好的"] },
+    "HEART":      { "triggers": ["比心", "爱心"] },
+    "LIKE":       { "triggers": ["点赞", "厉害"] },
+    "ILY":        { "triggers": ["我爱你", "ILY"] },
+    "NUM1":       { "triggers": ["数字1", "一"] },
+    "NUM2":       { "triggers": ["数字2", "二"] },
+    "NUM3":       { "triggers": ["数字3", "三"] },
+    "NUM4":       { "triggers": ["数字4", "四"] },
+    "NUM6":       { "triggers": ["数字6", "六"] },
+    "NUM8":       { "triggers": ["数字8", "八"] },
+    "CLASPING":   { "triggers": ["合十", "拜拜", "双手合十", "双手合拢"] },
+    "MIDDLE":     { "triggers": ["中指", "竖中指"] },
+    "POINT":      { "triggers": ["指人", "指向", "指着"] },
+    "GRIP":       { "triggers": ["抓取", "抓住", "握住"] },
+    "GRIPDONE":   { "triggers": ["抓紧", "握紧"] },
+    "PREGRIP":    { "triggers": ["半握", "准备抓", "预备抓"] },
+    "HAND_SHAKE": { "triggers": ["握手手势", "简单握手", "直接握手"] },
+    "HELLO_1":    { "triggers": ["挥手1", "打招呼1"] },
+    "HELLO_2":    { "triggers": ["挥手2", "打招呼2"] }
+  },
+
+  "matching": {
+    "char_threshold": 0.55,
+    "pinyin_enabled": true,
+    "pinyin_threshold": 0.75
+  }
+}
