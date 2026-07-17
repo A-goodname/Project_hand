@@ -8,7 +8,8 @@
 | 深度学习 | PyTorch 2.x (CUDA 12.6), Ultralytics YOLOv8 / YOLOv8-Pose |
 | 计算机视觉 | OpenCV, NumPy, MediaPipe Hands |
 | 3D 处理 | pyrealsense2 (仅 Camera A), 深度反投影 |
-| 通信 | TCP socket, USB 串口 (PySerial), OpenCV VideoCapture (Camera B UGREEN) |
+| 通信 | TCP socket, USB 串口 (PySerial), OpenCV VideoCapture (Camera B UGREEN DSHOW) |
+| 设备探测 | pygrabber (Camera B 名称→DSHOW index 自动匹配) |
 | 配置 | PyYAML |
 
 ## 开发环境

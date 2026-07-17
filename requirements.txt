@@ -20,3 +20,9 @@ pyrealsense2==2.56.5
 pyorbbecsdk2==2.0.18
 ultralytics==8.4.48
 mediapipe==0.10.35
+# Camera B 自动探测 (DSHOW 设备名→索引)
+pygrabber==0.2
+comtypes==1.4.16
+# 语音控制 (ASR + 麦克风)
+sherpa-onnx==1.13.4
+sounddevice==0.5.5

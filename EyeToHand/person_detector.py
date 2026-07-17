@@ -98,6 +98,8 @@ class PersonDetector:
         # ---- 相机 (可选延迟启动) ----
         _ugreen_cfg = config_dict.get("ugreen", {})
         self._camera_id = _ugreen_cfg.get("camera_id", camera_id)
+        self._camera_name = _ugreen_cfg.get("camera_name", "")
+
         self._camera_cfg = {
             "width": _ugreen_cfg.get("width", 1280),
             "height": _ugreen_cfg.get("height", 720),
@@ -129,6 +131,7 @@ class PersonDetector:
     def _open_camera(self):
         self._camera = UGreenCamera(
             camera_id=self._camera_id,
+            camera_name=self._camera_name,
             width=self._camera_cfg["width"],
             height=self._camera_cfg["height"],
             fps=self._camera_cfg["fps"],
@@ -207,6 +210,20 @@ class PersonDetector:
         best = min(valid, key=lambda b:
             abs((b[0] + b[2]) / 2.0 - cx0) + abs((b[1] + b[3]) / 2.0 - cy0))
         return best
+
+    # ------------------------------------------------------------
+    #  纯人检测 (only_person_detect 分支, 仅 YOLO class 0)
+    # ------------------------------------------------------------
+
+    def detect_person_only(self, color_image):
+        """仅检测画面中是否有人 (class 0). 复用已有 YOLO model.
+        不做椅子标定, 不走 overlap 计算.
+
+        Returns:
+            True 或 False.
+        """
+        detection = self._detect_targets(color_image)
+        return detection is not None
 
     # ------------------------------------------------------------
     #  合并检测: person + chair 单次推理 (GPU 加速后就位判定主力)

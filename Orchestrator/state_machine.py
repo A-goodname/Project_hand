@@ -185,6 +185,7 @@ class SharedContext:
 
     # 人就位 (main loop 更新结果, TCP handler 读取)
     is_person_seated: bool = False
+    _person_stable: int = 0           # 纯人检测连续帧计数 (only_person_detect 分支)
 
     # ---- Phase 过渡事件 (TCP daemon 线程写入, main loop 读取) ----
     greeting_done: threading.Event = field(default_factory=threading.Event)    # Phase 0 TCP 完成
@@ -1320,20 +1321,21 @@ class HandleGraspAndPourHandler:
                         print("[INFO] READY: 人未就位 → HandInCup=false, 等待 RELEASE")
                         ctx.hand_on_cup = False
                     else:
-                        # 人就位 → 启动 HandInCup, 最长检测 10s
-                        print("[INFO] READY: 人就位 → 启动 HandInCup (≤10s)")
+                        # 人就位 → 启动 HandInCup
+                        _hic_cfg = ctx.eye_to_hand_config.get("hand_in_cup", {})
+                        _timeout = float(_hic_cfg.get("timeout", 25.0))
+                        print(f"[INFO] READY: 人就位 → 启动 HandInCup (≤{_timeout:.0f}s)")
                         ctx.hand_in_cup_start_time = time.time()
                         if ctx.hand_in_cup_detector is not None:
                             ctx.hand_in_cup_detector.reset()
                         # main loop 在 hand_in_cup phase 每帧运行检测
-                        HAND_IN_CUP_TIMEOUT = 10.0
                         while not ctx.stop_event.is_set():
                             if ctx.hand_on_cup:
                                 print("[INFO] HandInCup: TRUE (提前检测到)")
                                 break
-                            if time.time() - ctx.hand_in_cup_start_time > HAND_IN_CUP_TIMEOUT:
+                            if time.time() - ctx.hand_in_cup_start_time > _timeout:
                                 ctx.hand_on_cup = False
-                                print("[INFO] HandInCup: 超时 → FALSE")
+                                print(f"[INFO] HandInCup: 超时 {_timeout:.0f}s → FALSE")
                                 break
                             time.sleep(0.05)
                         print(f"[INFO] HandInCup 结束: {'TRUE' if ctx.hand_on_cup else 'FALSE'}")

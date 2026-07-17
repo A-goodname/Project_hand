@@ -651,6 +651,7 @@ class HandInCupDetector:
         _ugreen = _cfg.get("ugreen", {})
         cam = UGreenCamera(
             camera_id=_ugreen.get("camera_id", 1),
+            camera_name=_ugreen.get("camera_name", ""),
             width=_ugreen.get("width", 1920),
             height=_ugreen.get("height", 1080),
             fps=_ugreen.get("fps", 30),
@@ -765,6 +766,7 @@ class HandInCupDetector:
         _ugreen = _cfg.get("ugreen", {})
         cam = UGreenCamera(
             camera_id=_ugreen.get("camera_id", 1),
+            camera_name=_ugreen.get("camera_name", ""),
             width=_ugreen.get("width", 1920),
             height=_ugreen.get("height", 1080),
             fps=_ugreen.get("fps", 30),

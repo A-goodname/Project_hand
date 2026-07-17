@@ -4,7 +4,8 @@ model:
   target_class_id: 0
   device: gpu
 ugreen:
-  camera_id: 3
+  camera_id: -1                           # -1=启用 camera_name 自动搜索
+  camera_name: "UGREEN Camera 1080P"      # 按名称匹配 DSHOW 设备
   width: 1280
   height: 720
   fps: 30
@@ -14,6 +15,8 @@ chair:
   overlap_threshold: 0.4
   seated_stable_frames: 10
   leave_frames: 45
+  only_person_detect: true        # true=纯人检测替代椅子标定逻辑
+  person_stable_frames: 10        # 连续检测到人多少帧判定就位
 delivery:
   X_TEACH: 0.2295
   Y_TEACH: 0.4427
@@ -26,6 +29,7 @@ calibration:
   scale: 1.0
   bias: 0.0
 hand_in_cup:
+  timeout: 25.0                   # 判定超时(秒), > CRP总等待(22s=Wait2s+SocketReadStr20s)
   cup_model: model/yolov8n.pt
   hand_model: model/hand_landmarker.task
   device: cuda

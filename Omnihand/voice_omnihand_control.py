@@ -25,6 +25,7 @@ from collections import OrderedDict
 from typing import Optional, Tuple, List
 
 import numpy as np
+import msvcrt
 import sounddevice as sd
 
 # ---- 项目根目录 ----
@@ -61,7 +62,7 @@ SINGLE_GESTURES: List[Tuple[Gesture, List[str]]] = [
     (Gesture.RESET,      ["复位", "恢复", "归零", "重置"]),
     (Gesture.PAPER,      ["张开", "松手", "手掌", "摊开"]),
     (Gesture.FIST,       ["握拳"]),
-    (Gesture.OK,         ["OK", "好的", "可以"]),
+    (Gesture.OK,         ["OK", "ok"]),
     (Gesture.HEART,      ["比心", "爱心"]),
     (Gesture.LIKE,       ["点赞", "厉害"]),
     (Gesture.ILY,        ["我爱你", "ILY"]),
@@ -112,8 +113,8 @@ SEQUENCES = OrderedDict({
 # 序列语音触发词
 SEQUENCE_TRIGGERS = OrderedDict({
     "打招呼":   ["打招呼", "挥手"],
-    "握手":     ["握手", "handshake"],
-    "数字手势": ["数字手势", "数字", "一到十"],
+    "握手":     ["握手序列", "完整握手"],
+    "数字手势": ["数字手势", "一到十"],
 })
 
 # ============================================================
@@ -123,6 +124,8 @@ SEQUENCE_TRIGGERS = OrderedDict({
 def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[str]]]:
     """
     匹配语音文本 → (命令类型, Gesture, 速度键).
+
+    防误触: 关键词必须在文本中占显著比例, 避免长对话中短词命中.
 
     返回:
       ("gesture", gesture, speed_key)  — 单手势
@@ -134,6 +137,12 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
         return None
 
     text_lower = text.lower().strip()
+    text_len = len(text_lower)
+
+    # 停止命令 (全局生效, 触发词较长, 直接子串匹配)
+    for kw in ["停止", "急停", "暂停", "停", "停下", "别动", "不动", "不要动", "别做了", "快停", "停一下"]:
+        if kw in text_lower:
+            return ("stop", None, None)
 
     # 退出命令
     for kw in ["退出", "结束", "关闭"]:
@@ -152,12 +161,17 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
         if speed_key:
             break
 
-    # 匹配手势
+    # 匹配手势 — 关键词占比检查
     best_match = None
     best_len = 0
     for gesture, phrases in SINGLE_GESTURES:
         for phrase in phrases:
-            if phrase in text_lower:  # 在原文中匹配，不是在去前缀后的文本
+            if phrase in text_lower:
+                # 防误触: 关键词占比检查
+                # 文本 > 6 字且关键词占比 < 30% → 视为对话中的偶然命中, 跳过
+                ratio = len(phrase) / text_len
+                if text_len > 6 and ratio < 0.3:
+                    continue
                 if len(phrase) > best_len:
                     best_len = len(phrase)
                     best_match = gesture
@@ -184,6 +198,7 @@ class HandController:
     def __init__(self, port: str = "COM5"):
         self.ctrl = OmniHandSpeedController(port=port, verbose=False)
         self.ctrl.open()
+        self._stop_requested = False
         self._init_hand()
 
     def _init_hand(self):
@@ -237,8 +252,13 @@ class HandController:
             print(f"[WARN] 未知序列: {seq_name}")
             return
 
+        self._stop_requested = False
         print(f"[执行] 序列: {seq_name} ({len(seq)} 步)")
         for gesture, duration in seq:
+            if self._stop_requested:
+                print("  [中断] 序列停止")
+                self.ctrl.gesture.do_gesture(Gesture.RESET, delay=0.3)
+                return
             self.ctrl.gesture.do_gesture(gesture, delay=duration)
 
     def _do_handshake(self):
@@ -322,6 +342,12 @@ class HandController:
 
         self.ctrl.gesture.do_gesture(G.RESET, delay=0.5)
         print("[执行] 握手结束")
+
+    def stop(self):
+        """急停 — 中断序列 + 直接 RESET."""
+        self._stop_requested = True
+        self.ctrl.gesture.do_gesture(Gesture.RESET, delay=0.3)
+        print("  [Hand] 已停止 (RESET)")
 
     def close(self):
         """安全关闭."""
@@ -513,7 +539,7 @@ class AutoVADInput(VoiceInputBase):
     SAMPLERATE = 16000
     BLOCKSIZE = 512
     SPEECH_THRESHOLD = 0.015
-    SILENCE_S = 1.5
+    SILENCE_S = 1.2
     MAX_SPEECH_S = 10.0
     MIN_SPEECH_S = 0.3
 
@@ -577,6 +603,10 @@ class AutoVADInput(VoiceInputBase):
                 device=self._mic_device,
             ):
                 while self.running:
+                    if msvcrt.kbhit() and msvcrt.getch().lower() == b'q':
+                        print("\n[q] 退出")
+                        self.running = False
+                        break
                     time.sleep(0.1)
         except KeyboardInterrupt:
             pass
@@ -646,6 +676,12 @@ def main():
             return
 
         cmd_type, gesture, extra = result
+
+        if cmd_type == "stop":
+            print("  [停止] RESET")
+            if hand:
+                hand.stop()
+            return
 
         if cmd_type == "exit":
             print("  [退出]")

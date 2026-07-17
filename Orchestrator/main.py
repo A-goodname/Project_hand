@@ -166,6 +166,29 @@ def _run_handle_detect(ctx, handle_h):
     handle_h.accept_tcp(ctx)
 
 
+def _run_person_check(ctx, pd):
+    """纯人检测: YOLO class 0 连续 N 帧 → is_person_seated=True.
+    独立于 _run_seated_check, 不做任何椅子标定."""
+    if ctx.is_person_seated:
+        return  # 已就位, 不再跑 YOLO
+
+    color_b = _get_camera_b_frame(ctx)
+    if color_b is None:
+        return
+
+    person_seen = pd.detect_person_only(color_b)
+    if person_seen:
+        ctx._person_stable += 1
+    else:
+        ctx._person_stable = max(0, ctx._person_stable - 1)
+
+    chair_cfg = ctx.eye_to_hand_config.get("chair", {})
+    threshold = chair_cfg.get("person_stable_frames", 10)
+    if ctx._person_stable >= threshold:
+        ctx.is_person_seated = True
+        session_log(f"人就位 (纯人检测, stable={ctx._person_stable})")
+
+
 def _run_seated_check(ctx, pd):
     """seated_check: Camera B 人就位恢复 (Phase B 结束, 人应已到椅子)."""
     color_b = _get_camera_b_frame(ctx)
@@ -180,7 +203,8 @@ def _run_hand_in_cup(ctx, hic):
     color_b = _get_camera_b_frame(ctx)
     if color_b is not None and hic is not None:
         elapsed = time.time() - ctx.hand_in_cup_start_time
-        if elapsed > 10.0 and ctx.hand_on_cup is None:
+        _timeout = float(ctx.eye_to_hand_config.get("hand_in_cup", {}).get("timeout", 25.0))
+        if elapsed > _timeout and ctx.hand_on_cup is None:
             ctx.hand_on_cup = False
             session_log("HandInCup 超时 10s")
         elif ctx.hand_on_cup is None or not ctx.hand_on_cup:
@@ -272,7 +296,11 @@ def main():
                     phase = "seated_check"
 
             elif phase == "seated_check":
-                _run_seated_check(ctx, pd)
+                chair_cfg = ctx.eye_to_hand_config.get("chair", {})
+                if chair_cfg.get("only_person_detect", True):
+                    _run_person_check(ctx, pd)       # 独立纯人检测
+                else:
+                    _run_seated_check(ctx, pd)       # 原有椅子标定路径
                 if ctx.ready_received.is_set():
                     session_log("Phase seated_check → hand_in_cup")
                     phase = "hand_in_cup"
@@ -295,6 +323,11 @@ def main():
                 print("[INFO] 用户按 q 退出")
                 ctx.stop_event.set()
                 break
+
+            # ---- 手动 CONTINUE (Phase D 最高权限) ----
+            if phase == "hand_in_cup" and (key == ord(" ") or key == ord("c")):
+                ctx.hand_on_cup = True
+                session_log("手动 CONTINUE (按键覆盖)")
 
     except KeyboardInterrupt:
         session_log("键盘中断 (Ctrl+C)")
