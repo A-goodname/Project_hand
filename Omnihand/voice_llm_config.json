@@ -1,0 +1,31 @@
+{
+  "_comment": "LLM 语音控制配置. 真 API Key 写在 voice_llm_config.local.json (已 gitignore), 或通过 --api-key 传入.",
+
+  "api_key": "",
+
+  "mimo": {
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "model": "mimo-v2.5",
+    "max_tokens": 1024,
+    "thinking_disabled": true,
+    "timeout_s": 15
+  },
+
+  "tts": {
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": "+10%",
+    "volume": "+0%",
+    "pitch": "+0Hz"
+  },
+
+  "record": {
+    "sample_rate": 16000,
+    "max_duration_s": 10.0,
+    "min_duration_s": 0.3
+  },
+
+  "gesture_defaults": {
+    "duration": 0.5,
+    "speed": null
+  }
+}
