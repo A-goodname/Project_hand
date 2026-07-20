@@ -28,6 +28,5 @@ sherpa-onnx==1.13.4
 sounddevice==0.5.5
 # 语音控制 — 拼音模糊匹配 (处理 ASR 同音字错误)
 pypinyin==0.55.0
-# 语音控制 — LLM (语义理解 + 语音合成)
+# 语音控制 — LLM (语义理解 + MiMo TTS 语音合成)
 openai==2.46.0
-edge-tts==7.2.8

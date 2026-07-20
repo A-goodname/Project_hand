@@ -2,7 +2,7 @@
 
 ### LLM 语义理解 (2026-07-17)
 - [x] MiMo v2.5: speech+text-in text-out, 语义理解替代关键词匹配
-- [x] edge-tts: 晓晓音色, Windows MCI 播放
+- [x] MiMo TTS: 冰糖音色, 0.8s API 合成 WAV, 与 LLM 同 endpoint; 合成阻塞手势并发
 - [x] System prompt: ~1200 chars, 9 examples, 社交交互自主配合手势
 - [x] 双模式: auto (Silero VAD 默认) + ptt (按键)
 - [x] 推理门: LLM+TTS 期间暂停 VAD 收指令

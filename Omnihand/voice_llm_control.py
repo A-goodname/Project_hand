@@ -2,19 +2,19 @@
 """
 LLM 语音灵巧手控制 — Voice LLM Control
 ========================================
-MiMo (多模态, speech+text-in, text-out) + edge-tts (语音合成).
+MiMo (多模态, speech+text-in, text-out) + MiMo TTS (语音合成).
 语义理解替代关键词匹配, 支持自然语言指令.
 
 流程:
   Mic → WAV → MiMo API → JSON动作 + 回复文本
     ├→ HandController 执行手势
-    └→ edge-tts 合成语音 → 播放
+    └→ MiMo TTS 合成语音 → 播放
 
 配置: Omnihand/voice_llm_config.json
 API Key: 环境变量 MIMO_API_KEY
 
 依赖:
-  pip install openai edge-tts sounddevice
+  pip install openai sounddevice
 
 使用:
   set MIMO_API_KEY=sk-xxx
@@ -32,7 +32,6 @@ import wave
 import base64
 import threading
 import argparse
-import subprocess
 from typing import Optional, List
 
 import numpy as np
@@ -101,6 +100,7 @@ MIMO = CFG.get("mimo", {})
 TTS = CFG.get("tts", {})
 REC = CFG.get("record", {})
 GDEF = CFG.get("gesture_defaults", {})
+VAD = CFG.get("vad", {})
 
 # API Key — 优先级: CLI arg > local.json > base.json > env var
 _MIMO_API_KEY_FROM_CFG = CFG.get("api_key", "") or os.environ.get("MIMO_API_KEY", "")
@@ -109,16 +109,20 @@ _MIMO_MODEL = MIMO.get("model", "mimo-v2.5")
 _MIMO_MAX_TOKENS = MIMO.get("max_tokens", 1024)
 _MIMO_TIMEOUT = MIMO.get("timeout_s", 15)
 
-_TTS_VOICE = TTS.get("voice", "zh-CN-XiaoxiaoNeural")
-_TTS_RATE = TTS.get("rate", "+10%")
-_TTS_VOLUME = TTS.get("volume", "+0%")
-_TTS_PITCH = TTS.get("pitch", "+0Hz")
+_TTS_MODEL = TTS.get("model", "mimo-v2.5-tts")
+_TTS_VOICE = TTS.get("voice", "冰糖")
+_TTS_INSTRUCTION = TTS.get("instruction", "用中文自然地说，活泼温暖，语速正常。")
 
 _SAMPLE_RATE = REC.get("sample_rate", 16000)         # VAD 录音用
 _OUT_SAMPLE_RATE = REC.get("output_sample_rate", 8000)  # MiMo 传输用
 _MAX_RECORD_S = REC.get("max_duration_s", 10.0)
 _MIN_RECORD_S = REC.get("min_duration_s", 0.3)
 _VAD_THRESHOLD = 0.01
+
+_VAD_THRESHOLD_PROB = VAD.get("threshold", 0.6)
+_VAD_MIN_SPEECH = VAD.get("min_speech_duration", 0.35)
+_VAD_MIN_SILENCE = VAD.get("min_silence_duration", 2.0)
+_VAD_MAX_SPEECH = VAD.get("max_speech_duration", 10.0)
 
 _GESTURE_DURATION = GDEF.get("duration", 0.5)
 
@@ -206,23 +210,24 @@ def auto_vad_loop(api_key: str, hand: Optional["GestureExecutor"]):
         return
 
     silero_cfg = sherpa_onnx.SileroVadModelConfig(
-        model=silero_path, threshold=0.5,
-        min_speech_duration=0.25, min_silence_duration=1.0,
-        max_speech_duration=10.0,
+        model=silero_path, threshold=_VAD_THRESHOLD_PROB,
+        min_speech_duration=_VAD_MIN_SPEECH, min_silence_duration=_VAD_MIN_SILENCE,
+        max_speech_duration=_VAD_MAX_SPEECH,
     )
     vad_cfg = sherpa_onnx.VadModelConfig(
         silero_vad=silero_cfg, sample_rate=_SAMPLE_RATE, num_threads=2,
     )
     detector = sherpa_onnx.VoiceActivityDetector(vad_cfg, buffer_size_in_seconds=60)
-    busy = threading.Event()  # True = 推理/播放中, 不收新指令
-    running = True
+    exit_event = threading.Event()  # stop/按键q 退出
+    busy = threading.Event()        # True = 推理/播放中, 不收新指令
     speech_active = False
     segment_queue: queue.Queue = queue.Queue()
-    print(f"[VAD] Silero VAD 已启用 (min_silence=1.0s)")
+    print(f"[VAD] Silero VAD: threshold={_VAD_THRESHOLD_PROB} "
+          f"min_speech={_VAD_MIN_SPEECH}s min_silence={_VAD_MIN_SILENCE}s")
 
     def _callback(indata, frames, time_info, status):
         nonlocal speech_active
-        if not running:
+        if exit_event.is_set():
             raise sd.CallbackStop
         chunk = indata[:, 0].copy()
         detector.accept_waveform(chunk)
@@ -247,7 +252,7 @@ def auto_vad_loop(api_key: str, hand: Optional["GestureExecutor"]):
             detector.pop()
 
     def _worker():
-        while running:
+        while not exit_event.is_set():
             try:
                 audio = segment_queue.get(timeout=0.5)
             except queue.Empty:
@@ -276,7 +281,11 @@ def auto_vad_loop(api_key: str, hand: Optional["GestureExecutor"]):
             _log(f"MiMo {elapsed:.1f}s, audio={dur:.1f}s, {len(wav_bytes)}B")
             print(f"\r  [MiMo] {elapsed:.1f}s")
             print(f"  ── response ──\n{response}\n  ──────────────")
-            _process_response(response, hand)
+            if _process_response(response, hand):
+                print("\n[stop] 退出")
+                exit_event.set()
+                busy.clear()
+                break
             # TTS 播放后才恢复收指令
             time.sleep(2.0)
             busy.clear()
@@ -284,28 +293,28 @@ def auto_vad_loop(api_key: str, hand: Optional["GestureExecutor"]):
     worker_thread = threading.Thread(target=_worker, daemon=True)
     worker_thread.start()
 
-    print(f"\n[模式] Auto VAD — 直接说话, 'q' 退出\n")
+    print(f"\n[模式] Auto VAD — 直接说话, 'q' 退出 (或说 '停止')\n")
     try:
         with sd.InputStream(
             samplerate=_SAMPLE_RATE, channels=1, dtype="float32",
             blocksize=512, callback=_callback,
         ):
-            while running:
+            while not exit_event.is_set():
                 if msvcrt.kbhit() and msvcrt.getch().lower() == b'q':
                     print("\n[q] 退出")
-                    running = False
+                    exit_event.set()
                     break
                 time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
-        running = False
+        exit_event.set()
         segment_queue.put(None)
         worker_thread.join(timeout=2)
 
 
-def _process_response(response: str, hand: Optional["GestureExecutor"]):
-    """解析 MiMo 回复并执行."""
+def _process_response(response: str, hand: Optional["GestureExecutor"]) -> bool:
+    """解析 MiMo 回复并执行. 返回 True 表示 stop (程序需退出)."""
     data = parse_llm_response(response)
     actions = validate_actions(data) if data else []
     reply = extract_reply_text(response)
@@ -314,12 +323,13 @@ def _process_response(response: str, hand: Optional["GestureExecutor"]):
     _log(f"actions: {json.dumps(actions, ensure_ascii=False) if actions else '(none)'}")
 
     if reply:
-        speak(reply)
+        speak(reply)  # 异步 TTS, 与动作并发
     elif actions:
         speak("好的")
 
+    should_stop = False
     if hand and actions:
-        hand.execute(actions)
+        should_stop = hand.execute(actions)
     elif actions:
         names = []
         for a in actions:
@@ -330,7 +340,13 @@ def _process_response(response: str, hand: Optional["GestureExecutor"]):
                 names.append(a["sequence"])
             elif t == "stop":
                 names.append("STOP")
+                should_stop = True
         _log(f"模拟执行: {' → '.join(names) if names else str(actions)}")
+
+    if should_stop:
+        _wait_tts()  # 等 TTS 播完再退出 (如 "好的，再见！")
+
+    return should_stop
 
 
 def audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = _OUT_SAMPLE_RATE) -> bytes:
@@ -419,59 +435,80 @@ def _log(msg: str):
             pass
 
 
+# TTS 同步: speak() 启动异步播放, _wait_tts() 等待完成, stop 退出前确保 TTS 播完
+_tts_done = threading.Event()
+_tts_done.set()  # 初始"已完成"
+
 # ============================================================
-# TTS (edge-tts)
+# TTS (MiMo TTS)
 # ============================================================
 
-def _play_mp3(path: str):
-    """Windows MCI 播放 MP3 (静默, 无窗口)."""
+def _play_wav(data: bytes):
+    """Windows MCI 播放 WAV (静默, 无窗口)."""
     import ctypes
+    tmp = os.path.join(_log_dir, f"_tts_{time.time_ns()}.wav")
     try:
+        with open(tmp, "wb") as f:
+            f.write(data)
         ctypes.windll.winmm.mciSendStringW(
-            f'open "{path}" type MPEGVideo alias tts_play', None, 0, None
+            f'open "{tmp}" type waveaudio alias tts_play', None, 0, None
         )
         ctypes.windll.winmm.mciSendStringW(
             "play tts_play wait", None, 0, None
         )
     finally:
         ctypes.windll.winmm.mciSendStringW("close tts_play", None, 0, None)
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
 
 
 def speak(text: str):
-    """edge-tts 合成 MP3 → Windows MCI 播放 (异步)."""
+    """MiMo TTS: 阻塞合成 WAV → 异步播放. 手势在合成后启动, 与播放并发."""
     text = text.strip()
     if not text:
         return
     print(f"  [TTS] {text}")
+    _tts_done.clear()
 
-    def _run():
+    # Phase 1: 阻塞合成 (等 API 返回 WAV, ~0.8s)
+    try:
+        client = OpenAI(api_key=_MIMO_API_KEY_FROM_CFG, base_url=_MIMO_BASE_URL)
+        completion = client.chat.completions.create(
+            model=_TTS_MODEL,
+            messages=[
+                {"role": "user", "content": _TTS_INSTRUCTION},
+                {"role": "assistant", "content": text}
+            ],
+            audio={"format": "wav", "voice": _TTS_VOICE}
+        )
+        audio = completion.choices[0].message.audio
+        if audio is None or not audio.data:
+            print("  [TTS Error] 返回无音频数据")
+            _tts_done.set()
+            return
+        wav_data = base64.b64decode(audio.data)
+    except Exception as e:
+        print(f"  [TTS Error] {e}")
+        _tts_done.set()
+        return
+
+    # Phase 2: 异步播放 (与手势并发)
+    def _play():
         try:
-            mp3_path = os.path.join(_log_dir, f"_tts_{time.time_ns()}.mp3")
-            cmd = [
-                sys.executable, "-m", "edge_tts",
-                "--voice", _TTS_VOICE,
-                "--rate", _TTS_RATE,
-                "--volume", _TTS_VOLUME,
-                "--pitch", _TTS_PITCH,
-                "--text", text,
-                "--write-media", mp3_path,
-            ]
-            r = subprocess.run(cmd, capture_output=True, timeout=30)
-            if r.returncode != 0:
-                print(f"  [TTS Error] edge-tts: {r.stderr.decode()[:100]}")
-                return
-            if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
-                _play_mp3(mp3_path)
+            _play_wav(wav_data)
         except Exception as e:
-            print(f"  [TTS Error] {e}")
+            print(f"  [TTS Error] play: {e}")
         finally:
-            if mp3_path and os.path.exists(mp3_path):
-                try:
-                    os.unlink(mp3_path)
-                except Exception:
-                    pass
+            _tts_done.set()
 
-    threading.Thread(target=_run, daemon=True).start()
+    threading.Thread(target=_play, daemon=True).start()
+
+
+def _wait_tts(timeout: float = 30):
+    """等待当前 TTS 播放完成 (stop 退出前调用)."""
+    _tts_done.wait(timeout=timeout)
 
 
 # ============================================================
@@ -516,17 +553,17 @@ class GestureExecutor:
         self.ctrl.gesture.do_gesture(Gesture.RESET, delay=0.3)
         print("[Hand] 初始化完成 (RESET)")
 
-    def execute(self, actions: list):
+    def execute(self, actions: list) -> bool:
+        """执行 actions 列表. 返回 True 表示遇到 stop (程序需退出)."""
         for a in actions:
             typ = a.get("type")
             if typ == "stop":
-                print("  [执行] 停止 RESET")
-                self.ctrl.gesture.do_gesture(Gesture.RESET, delay=0.3)
-                return
+                print("  [执行] 停止")
+                return True
             elif typ == "gesture":
                 name = a["gesture"]
                 print(f"  [执行] {name} speed={a.get('speed')}")
-                self.ctrl.gesture.do_gesture(Gesture[name], delay=0.3)
+                self.ctrl.gesture.do_gesture(Gesture[name], delay=0.5)
             elif typ == "sequence":
                 seq_name = a["sequence"]
                 if seq_name == "custom":
@@ -543,6 +580,7 @@ class GestureExecutor:
                     print(f"  [执行] 序列: {seq_name}")
                     for g, d in self.SEQUENCE_STEPS[seq_name]:
                         self.ctrl.gesture.do_gesture(g, delay=d)
+        return False
 
     def _do_handshake(self):
         from Omnihand.omnihand_gesture import Gesture as G
@@ -602,7 +640,7 @@ def main():
 
     print("=" * 55)
     print("  语音灵巧手控制 — Voice LLM Control")
-    print(f"  MiMo ({_MIMO_MODEL}) + edge-tts ({_TTS_VOICE})")
+    print(f"  MiMo ({_MIMO_MODEL}) + MiMo TTS ({_TTS_VOICE})")
     print("=" * 55)
 
     if not api_key:
@@ -653,7 +691,9 @@ def main():
                 _log(f"MiMo {elapsed:.1f}s, {len(wav_bytes)}B audio")
                 print(f"\r  [MiMo] {elapsed:.1f}s")
                 print(f"  ── response ──\n{response}\n  ──────────────")
-                _process_response(response, hand)
+                if _process_response(response, hand):
+                    print("\n[stop] 退出")
+                    break
 
         except KeyboardInterrupt:
             print("\n[中断]")

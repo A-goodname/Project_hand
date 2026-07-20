@@ -106,7 +106,7 @@ python Orchestrator/main.py
 **LLM 语义理解** (推荐):
 ```bash
 set MIMO_API_KEY=sk-xxx
-python Omnihand/voice_llm_control.py                       # Auto VAD, MiMo + edge-tts
+python Omnihand/voice_llm_control.py                       # Auto VAD, MiMo + MiMo TTS
 python Omnihand/voice_llm_control.py --mode ptt            # 按键模式
 ```
 

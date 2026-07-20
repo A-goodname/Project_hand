@@ -981,10 +981,10 @@ Mic → Silero VAD (16kHz) → 语音段 → 下采样 8kHz WAV
                           ▼                               ▼
                     JSON actions                    回复文本
                     {"type":"gesture",               │
-                     "gesture":"FIST"}          edge-tts (晓晓)
+                     "gesture":"FIST"}          MiMo TTS (冰糖)
                           │                       │
                           ▼                       ▼
-                    OmniHand 执行            Windows MCI 播放
+                    OmniHand 执行            Windows MCI 播放 (WAV)
 ```
 
 ### B.2 技术选型
@@ -992,7 +992,7 @@ Mic → Silero VAD (16kHz) → 语音段 → 下采样 8kHz WAV
 | 组件 | 选择 | 说明 |
 |------|------|------|
 | LLM | MiMo v2.5 (API) | 多模态, speech+text-in, text-out |
-| TTS | edge-tts (晓晓) | 离线合成, MP3 → Windows MCI 播放 |
+| TTS | MiMo TTS (冰糖) | API 合成 WAV, 0.8s, 与 LLM 同 endpoint |
 | VAD | sherpa-onnx Silero | 16kHz 录音, 推理时暂停 |
 | 音频 | 16kHz→8kHz 下采样 | 减少传输体积 |
 
@@ -1026,7 +1026,7 @@ Mic → Silero VAD (16kHz) → 语音段 → 下采样 8kHz WAV
 {
   "api_key": "",
   "mimo": {"model": "mimo-v2.5", "thinking_disabled": true},
-  "tts": {"voice": "zh-CN-XiaoxiaoNeural", "rate": "+10%"},
+  "tts": {"model": "mimo-v2.5-tts", "voice": "冰糖", "instruction": "用中文自然地说，活泼温暖，语速正常。"},
   "record": {"sample_rate": 16000, "output_sample_rate": 8000}
 }
 
