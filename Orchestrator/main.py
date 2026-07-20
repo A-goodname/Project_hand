@@ -16,11 +16,13 @@ Orchestrator — 系统入口
 退出: 按 'q' 键或 Ctrl+C
 """
 
-# 禁用 MediaPipe clearcut 遥测 — 必须在任何 MediaPipe import 之前
+# 禁 MediaPipe clearcut 遥测 — 必须在任何 MediaPipe import 之前!
+# GLOG_logtostderr=1: 日志直出 stderr, 不写磁盘 → clearcut 无文件可扫描上传
+# GLOG_minloglevel=5: 仅 FATAL → 最小化事件量
 import os as _os
-_os.environ["GLOG_minloglevel"] = "3"
-_os.environ["GLOG_stderrthreshold"] = "4"
-_os.environ["GLOG_logtostderr"] = "0"
+_os.environ["GLOG_logtostderr"] = "1"
+_os.environ["GLOG_minloglevel"] = "5"
+_os.environ["GLOG_stderrthreshold"] = "5"
 _os.environ["GRPC_VERBOSITY"] = "NONE"
 
 import os

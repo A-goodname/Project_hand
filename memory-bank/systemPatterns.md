@@ -83,7 +83,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 - 纯 RGB 判定 (深度辅助已移除)
 - 独立文件 `EyeToHand/hand_in_cup.py`, 可脱离状态机单独测试 (`--calibrate-roi` 标定工具)
 
-### PersonDetector / HandInCup 共用 Camera B Pipeline
+### PersonDetector / HandInCup / RPSGesture 共用 Camera B Pipeline
 
 - `PersonDetector` 打开 UGREEN Camera B (OpenCV VideoCapture)
 - Camera B 生命周期: IDLE 关 → GREETING enter 开 → HANDLE 继续
@@ -91,6 +91,13 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 - 椅子检测: 每帧实时 YOLO, 取画面中心最近 (不锁定)
 - 人就位: 非对称阈值 (进10出5) + `_chair_baseline` 尺寸锚定 (面积差≤30%更新)
 - 纯 RGB 无深度 — HandInCup 判定仅依赖 landmarks-in-bbox 计分 + curled gate
+- RPSGestureDetector: MediaPipe Hands 几何特征 (关节角度+距离比值), 尺度不变, 多人多手
+
+### MediaPipe clearcut 遥测抑制
+
+- 所有 `import mediapipe` 之前的统一配置: `GLOG_logtostderr=1` + `GLOG_minloglevel=5`
+- 日志直出 stderr 不写磁盘 → clearcut 无文件可上传 → 退出不阻塞
+- 3 处统一: `Orchestrator/main.py`, `EyeToHand/hand_in_cup.py`, `EyeToHand/rps_gesture.py`
 
 ### 4 阶段顺序调度 (v12 重构, 替代状态机)
 

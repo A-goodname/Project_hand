@@ -1,5 +1,17 @@
 # Progress — Project_hand
 
+### Camera B 剪刀石头布手势识别 (2026-07-20)
+- [x] 方案调研: YOLOv8n (OpenI/PCL) vs CNN vs MediaPipe几何 → 选定 MediaPipe 几何特征
+- [x] YOLOv8n 预训练模型测试: 实机效果差, 已删除
+- [x] MediaPipe 几何特征实现: PIP 关节 3D 角度 + 距离比值, 尺度不变
+- [x] 核心 bug 修复: 角度阈值反了 (`>=150°` → `<=35°`)
+- [x] 多人多手: num_hands=4, 每手独立 stable 跟踪 (4 帧确认)
+- [x] 'q' 退出卡住: 匹配 hand_in_cup 模式 (独立 camera + waitKey)
+- [x] clearcut 退出阻塞: GLOG_logtostderr=1 + os._exit(0), 全项目 3 处统一
+- [x] 实机测试: 合适角度识别效果良好
+- [ ] 集成到 Orchestrator 4 阶段调度
+- [ ] 加水实测完整流程
+
 ### LLM 语义理解 (2026-07-17)
 - [x] MiMo v2.5: speech+text-in text-out, 语义理解替代关键词匹配
 - [x] MiMo TTS: 冰糖音色, 0.8s API 合成 WAV, 与 LLM 同 endpoint; 合成阻塞手势并发

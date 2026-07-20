@@ -2,9 +2,17 @@
 
 ## 当前焦点
 
-**LLM 语音控制** — MiMo + MiMo TTS 语义理解链路打通, auto VAD 模式为主.
+**Camera B 剪刀石头布手势识别** — MediaPipe 几何特征方案验证完成, 实机识别效果良好.
 
 ## 最近变更
+
+### rps_gesture.py (2026-07-20)
+
+1. **Camera B 剪刀石头布手势识别**: MediaPipe Hands 21 landmarks → 关节角度 + 距离比值 → 分类 石头/布/剪刀
+2. **几何方法**: PIP 关节 3D 向量夹角 (<=35°=伸直) + tip→wrist/pip→wrist 距离比值 (>1.12=伸直), 尺度不变
+3. **多人多手**: num_hands=4, 每只手独立稳定跟踪 (4 帧确认), 切换手不卡
+4. **clearcut 修复**: GLOG_logtostderr=1 + minloglevel=5 → 不写磁盘日志 → clearcut 退出不阻塞. 全项目 3 处统一 (main.py / hand_in_cup.py / rps_gesture.py)
+5. **YOLOv8n 预训练模型测试失败**: OpenI/PCL 模型 (rock-paper-scissors-detection-yolov8n.pt) 实机效果差, 已删除
 
 ### voice_llm_control.py (2026-07-17)
 

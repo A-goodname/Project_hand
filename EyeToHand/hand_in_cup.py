@@ -37,12 +37,12 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# 禁 MediaPipe clearcut 遥测 (必须在 import mediapipe 之前)
-# 注意: 用强制赋值替代 setdefault — 如果其他库先设置了更低的 loglevel,
-# setdefault 不会覆盖, 导致 clearcut ERROR 级日志泄漏.
-os.environ["GLOG_minloglevel"] = "3"
-os.environ["GLOG_stderrthreshold"] = "4"
-os.environ["GLOG_logtostderr"] = "0"
+# 禁 MediaPipe clearcut 遥测 (必须在 import mediapipe 之前!)
+# GLOG_logtostderr=1: 日志直出 stderr, 不写磁盘 → clearcut 无文件可扫描上传
+# GLOG_minloglevel=5: 仅 FATAL → 最小化事件量
+os.environ["GLOG_logtostderr"] = "1"
+os.environ["GLOG_minloglevel"] = "5"
+os.environ["GLOG_stderrthreshold"] = "5"
 os.environ["GRPC_VERBOSITY"] = "NONE"
 
 import yaml
