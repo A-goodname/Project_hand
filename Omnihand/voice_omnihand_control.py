@@ -241,11 +241,18 @@ def match_command(text: str) -> Optional[Tuple[str, Optional[Gesture], Optional[
     text_len = len(text_lower)
 
     # ---- 1. 全局命令 ----
+    # 1字关键词仅精确匹配 (防 "不停" 触发 "停")
     for kw in _COMMANDS_CFG.get("stop_words", []):
-        if kw in text_lower:
+        if len(kw) == 1:
+            if kw == text_lower:
+                return ("stop", None, None)
+        elif kw in text_lower:
             return ("stop", None, None)
     for kw in _COMMANDS_CFG.get("exit_words", []):
-        if kw in text_lower:
+        if len(kw) == 1:
+            if kw == text_lower:
+                return ("exit", None, None)
+        elif kw in text_lower:
             return ("exit", None, None)
 
     # ---- 2. 速度前缀剥离 ----
@@ -403,6 +410,72 @@ def _pinyin_match(
     if best_score >= threshold:
         return best_type, best_seq_name, best_gesture
     return None, None, None
+
+
+def _extract_gestures(text: str, speed_key: Optional[str] = None) -> Optional[List[Gesture]]:
+    """从文本中提取所有手势触发词, 按出现位置排序.
+
+    用于非预定动作序列: 说 "握拳然后张开比心" → [FIST, PAPER, HEART].
+    序列和全局命令已在前序步骤拦截, 此处仅处理剩余文本.
+
+    防误触: 1字触发词仅精确匹配; 关键词占比检查.
+    返回 None 表示 <2 个手势, 走单手势.
+    """
+    clean = text.lower().strip()
+    # 速度前缀剥离
+    for prefixes in SPEED_PREFIXES.values():
+        for prefix in prefixes:
+            if clean.startswith(prefix):
+                clean = clean[len(prefix):]
+                break
+
+    found: List[Tuple[int, Gesture, int]] = []  # (pos, gesture, trigger_len)
+    for gesture, phrases in SINGLE_GESTURES:
+        for phrase in phrases:
+            if len(phrase) == 1:
+                if phrase == clean:
+                    found.append((0, gesture, 1))
+                continue  # 单字都跳过后续多字处理
+
+            # 1. 精确子串匹配
+            pos = clean.find(phrase)
+            if pos >= 0:
+                if not (len(clean) > 8 and len(phrase) / len(clean) < 0.12):
+                    found.append((pos, gesture, len(phrase)))
+                continue
+
+            # 2. 滑动窗口模糊匹配 — 字符 ≥0.55 或拼音 ≥0.75
+            best_pos = -1
+            best_score = 0.0
+            for i in range(len(clean) - len(phrase) + 1):
+                window = clean[i:i + len(phrase)]
+                score = SequenceMatcher(None, window, phrase).ratio()
+                if score < 0.55 and _PINYIN_ENABLED:
+                    try:
+                        wp = "".join(p[0] for p in _pypinyin_fn(window, style=_PinyinStyle.TONE3))
+                        pp = "".join(p[0] for p in _pypinyin_fn(phrase, style=_PinyinStyle.TONE3))
+                        score = max(score, SequenceMatcher(None, wp, pp).ratio())
+                    except Exception:
+                        pass
+                if score > best_score:
+                    best_score = score
+                    best_pos = i
+            if best_score >= 0.55 and best_pos >= 0:
+                found.append((best_pos, gesture, len(phrase)))
+
+    if len(found) < 2:
+        return None
+
+    # 按位置排序, 同位置优先最长触发词; 去重叠
+    found.sort(key=lambda x: (x[0], -x[2]))
+    result: List[Gesture] = []
+    last_end = -1
+    for pos, gesture, tlen in found:
+        if pos >= last_end:  # 不重叠
+            result.append(gesture)
+            last_end = pos + tlen
+
+    return result if len(result) >= 2 else None
 
 
 # ============================================================
@@ -910,7 +983,15 @@ def main():
             return
 
         if cmd_type == "gesture" and gesture:
-            hand.do_gesture(gesture, speed_key=extra)
+            # 检查是否有多个手势 (非预定动作序列)
+            gestures = _extract_gestures(text, speed_key=extra)
+            if gestures and len(gestures) >= 2:
+                names = [GESTURE_NAMES.get(g, g.name) for g in gestures]
+                print(f"  [序列] {' → '.join(names)}")
+                for g in gestures:
+                    hand.do_gesture(g, speed_key=extra)
+            else:
+                hand.do_gesture(gesture, speed_key=extra)
         elif cmd_type == "sequence" and extra:
             hand.do_sequence(extra)
 

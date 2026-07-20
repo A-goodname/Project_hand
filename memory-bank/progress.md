@@ -15,6 +15,9 @@
 - [x] pypinyin 依赖 + requirements.txt
 - [x] 文档同步: `doc/voice_control_design.md` 附录A
 - [x] 29 测试用例全通过 (17 回归 + 3 字符模糊 + 9 拼音匹配)
+- [x] 全局命令防误触: 单字 stop/exit 仅精确匹配 ("不停"不触发"停")
+- [ ] 非预定动作序列: `_extract_gestures()` 精确+滑动窗口+拼音, 边界情况待调
+- [ ] 多手势滑动窗口 refine: 长文本短词匹配 + 拼音误匹配
 
 ### 主流程优化 v15 (2026-07-17)
 - [x] P3/HandInCup 超时双向延长: CRP 15s→20s + Python 10s→25s
