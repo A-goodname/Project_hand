@@ -1,5 +1,16 @@
 # Progress — Project_hand
 
+### LLM 语义理解 (2026-07-17)
+- [x] MiMo v2.5: speech+text-in text-out, 语义理解替代关键词匹配
+- [x] edge-tts: 晓晓音色, Windows MCI 播放
+- [x] System prompt: ~1200 chars, 9 examples, 社交交互自主配合手势
+- [x] 双模式: auto (Silero VAD 默认) + ptt (按键)
+- [x] 推理门: LLM+TTS 期间暂停 VAD 收指令
+- [x] 音频: 16kHz VAD → 8kHz API → VAD 静音裁剪
+- [x] 配置: voice_llm_config.json + .local.json (key gitignored)
+- [x] 日志: logs/voice_llm_*.log
+- [ ] LLM 语音控制实机联调
+
 ### 语音控制先行验证完成 (2026-07-17)
 - [x] 全量模型切换: `model.onnx` (887MB), auto 优先选取
 - [x] Silero VAD: `VoiceActivityDetector` + `silero_vad.onnx` 替换能量阈值

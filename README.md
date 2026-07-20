@@ -101,15 +101,22 @@ python Orchestrator/main.py
 2. CRP 文件: `doc/handlepluscup-orchestrator.crp` (80 widgets, 下载到示教器)
 3. 按 `q` 退出
 
-### 语音控制 (先行验证)
+### 语音控制
 
+**LLM 语义理解** (推荐):
+```bash
+set MIMO_API_KEY=sk-xxx
+python Omnihand/voice_llm_control.py                       # Auto VAD, MiMo + edge-tts
+python Omnihand/voice_llm_control.py --mode ptt            # 按键模式
+```
+
+**关键词匹配** (离线):
 ```bash
 python Omnihand/voice_omnihand_control.py                  # Silero VAD, 全量模型
 python Omnihand/voice_omnihand_control.py --mode ptt       # 按键模式
-python Omnihand/voice_omnihand_control.py --model int8     # int8 量化模型
 ```
 
-触发词配置: `Omnihand/voice_commands.json` (改词无需动代码, 缺失时自动回退)
+触发词配置: `Omnihand/voice_commands.json` | LLM配置: `Omnihand/voice_llm_config.json`
 
 ### 单独测试
 

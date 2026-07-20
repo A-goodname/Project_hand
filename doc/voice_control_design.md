@@ -1,6 +1,6 @@
 # 语音控制拓展 — 设计方案 v1
 
-> 状态: **先行验证完成** | 日期: 2026-07-17 | 手势控制 + Silero VAD + 拼音匹配测试通过 ✅
+> 状态: **先行验证完成 + LLM 语义理解** | 2026-07-17 | 关键词匹配 ✅ | LLM 语义理解 ✅
 
 ---
 
@@ -959,3 +959,88 @@ voice_control:
 - ❌ 决策点 / GOTO
 - ❌ 人声 WAV 录制（提示音代码生成即可）
 - ❌ 唤醒词（直接说指令）
+
+
+## 附录 B: LLM 语音控制 — 语义理解 ✅
+
+用多模态 LLM 替代关键词匹配, 实现自然语言理解和语音交互.
+
+实现文件: `Omnihand/voice_llm_control.py`
+Prompt: `Omnihand/voice_llm_prompt.py`
+配置: `Omnihand/voice_llm_config.json` + `voice_llm_config.local.json` (gitignored)
+
+### B.1 架构
+
+```
+Mic → Silero VAD (16kHz) → 语音段 → 下采样 8kHz WAV
+                                          │
+                                    MiMo v2.5 API
+                                 (speech+text-in, text-out)
+                                          │
+                          ┌───────────────┴───────────────┐
+                          ▼                               ▼
+                    JSON actions                    回复文本
+                    {"type":"gesture",               │
+                     "gesture":"FIST"}          edge-tts (晓晓)
+                          │                       │
+                          ▼                       ▼
+                    OmniHand 执行            Windows MCI 播放
+```
+
+### B.2 技术选型
+
+| 组件 | 选择 | 说明 |
+|------|------|------|
+| LLM | MiMo v2.5 (API) | 多模态, speech+text-in, text-out |
+| TTS | edge-tts (晓晓) | 离线合成, MP3 → Windows MCI 播放 |
+| VAD | sherpa-onnx Silero | 16kHz 录音, 推理时暂停 |
+| 音频 | 16kHz→8kHz 下采样 | 减少传输体积 |
+
+### B.3 System Prompt 设计
+
+- **动作空间**: 22 手势 + 3 预定义序列 + 自定义序列 + 速度 (紧凑格式 ~1200 chars)
+- **语义理解**: LLM 自主判断用户意图, 映射到动作. "给他竖个中指"→MIDDLE; "你好"→打招呼序列
+- **社交交互**: 问候/感谢/告别时自主配合手势
+- **输出格式**: 严格 JSON (6 种 action type), 9 个 few-shot 示例
+- **安全**: 超出手势范围礼貌拒绝, 停止指令优先级最高
+
+### B.4 JSON 协议
+
+```json
+// 单手势
+{"type":"gesture","gesture":"FIST","speed":null}
+// 预定义序列
+{"type":"sequence","sequence":"握手"}
+// 自定义序列
+{"type":"sequence","sequence":"custom","steps":[{"gesture":"FIST","duration":0.5}]}
+// 停止
+{"type":"stop"}
+// 仅回复
+{"type":"reply"}
+```
+
+### B.5 配置
+
+```json
+// voice_llm_config.json (提交, key为空)
+{
+  "api_key": "",
+  "mimo": {"model": "mimo-v2.5", "thinking_disabled": true},
+  "tts": {"voice": "zh-CN-XiaoxiaoNeural", "rate": "+10%"},
+  "record": {"sample_rate": 16000, "output_sample_rate": 8000}
+}
+
+// voice_llm_config.local.json (gitignored, 真key)
+{"api_key": "sk-xxx"}
+```
+
+Key 优先级: `--api-key` CLI arg > `.local.json` > `.json` > `MIMO_API_KEY` 环境变量.
+
+### B.6 运行
+
+```bash
+set MIMO_API_KEY=sk-xxx
+python Omnihand/voice_llm_control.py                  # Auto VAD (默认)
+python Omnihand/voice_llm_control.py --mode ptt       # 按键模式
+python Omnihand/voice_llm_control.py --api-key sk-xxx # 命令行传 key
+```

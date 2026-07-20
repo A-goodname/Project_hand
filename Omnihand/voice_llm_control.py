@@ -26,10 +26,10 @@ import os
 import sys
 import io
 import json
+import queue
 import time
 import wave
 import base64
-import tempfile
 import threading
 import argparse
 import subprocess
@@ -114,9 +114,11 @@ _TTS_RATE = TTS.get("rate", "+10%")
 _TTS_VOLUME = TTS.get("volume", "+0%")
 _TTS_PITCH = TTS.get("pitch", "+0Hz")
 
-_SAMPLE_RATE = REC.get("sample_rate", 16000)
+_SAMPLE_RATE = REC.get("sample_rate", 16000)         # VAD 录音用
+_OUT_SAMPLE_RATE = REC.get("output_sample_rate", 8000)  # MiMo 传输用
 _MAX_RECORD_S = REC.get("max_duration_s", 10.0)
 _MIN_RECORD_S = REC.get("min_duration_s", 0.3)
+_VAD_THRESHOLD = 0.01
 
 _GESTURE_DURATION = GDEF.get("duration", 0.5)
 
@@ -125,10 +127,27 @@ _GESTURE_DURATION = GDEF.get("duration", 0.5)
 # 录音
 # ============================================================
 
+def _wait_key(prompt: str) -> Optional[str]:
+    """显示 prompt, 等按键. 'q' 返回 'quit', Enter 返回 'go'."""
+    print(prompt, end="", flush=True)
+    while True:
+        if msvcrt.kbhit():
+            ch = msvcrt.getch().lower()
+            if ch == b'q':
+                print("q")
+                return "quit"
+            if ch in (b'\r', b'\n', b' '):
+                print()
+                return "go"
+        time.sleep(0.05)
+
+
 def record_audio() -> Optional[np.ndarray]:
-    """PTT 模式: 按回车开始录音, 再按回车结束."""
-    print("\n[录音] 按回车开始 (最长{}s)...".format(_MAX_RECORD_S))
-    input()
+    """PTT 模式: 按回车开始录音, 再按回车结束. 返回 None 或 'quit' 标记."""
+    key = _wait_key("\n[录音] 按回车开始, 'q' 退出...")
+    if key == "quit":
+        return "quit"  # type: ignore[return-value]
+
     print("  ● 录音中... 按回车结束", end="", flush=True)
 
     sr = _SAMPLE_RATE
@@ -162,22 +181,170 @@ def record_audio() -> Optional[np.ndarray]:
 
     audio = np.concatenate(buffer)
     duration = len(audio) / sr
-    print(f"\r  已录音 {duration:.1f}s")
+    _log(f"录音 {duration:.1f}s")
 
-    if duration < _MIN_RECORD_S:
+    # VAD 裁剪首尾静音
+    mask = np.abs(audio) > _VAD_THRESHOLD
+    edges = np.where(mask)[0]
+    if len(edges) > 0:
+        audio = audio[edges[0]:edges[-1] + 1]
+    trimmed = len(audio) / sr
+    print(f"\r  已录音 {duration:.1f}s → 裁剪 {trimmed:.1f}s")
+
+    if trimmed < _MIN_RECORD_S:
         print("  [跳过] 太短")
         return None
     return audio
 
 
-def audio_to_wav_bytes(audio: np.ndarray) -> bytes:
-    """float32 → 16-bit PCM WAV bytes."""
+def auto_vad_loop(api_key: str, hand: Optional["GestureExecutor"]):
+    """Auto VAD 模式: Silero VAD → MiMo → 执行. 推理+TTS 期间暂停收新指令."""
+    import sherpa_onnx
+    silero_path = os.path.join(_project_root, "model", "silero_vad.onnx")
+    if not os.path.exists(silero_path):
+        print(f"[VAD] silero_vad.onnx 未找到: {silero_path}")
+        return
+
+    silero_cfg = sherpa_onnx.SileroVadModelConfig(
+        model=silero_path, threshold=0.5,
+        min_speech_duration=0.25, min_silence_duration=1.0,
+        max_speech_duration=10.0,
+    )
+    vad_cfg = sherpa_onnx.VadModelConfig(
+        silero_vad=silero_cfg, sample_rate=_SAMPLE_RATE, num_threads=2,
+    )
+    detector = sherpa_onnx.VoiceActivityDetector(vad_cfg, buffer_size_in_seconds=60)
+    busy = threading.Event()  # True = 推理/播放中, 不收新指令
+    running = True
+    speech_active = False
+    segment_queue: queue.Queue = queue.Queue()
+    print(f"[VAD] Silero VAD 已启用 (min_silence=1.0s)")
+
+    def _callback(indata, frames, time_info, status):
+        nonlocal speech_active
+        if not running:
+            raise sd.CallbackStop
+        chunk = indata[:, 0].copy()
+        detector.accept_waveform(chunk)
+        if not busy.is_set() and detector.is_speech_detected():
+            if not speech_active:
+                speech_active = True
+                print("\n[VAD]", end="", flush=True)
+        elif busy.is_set():
+            speech_active = False
+        else:
+            speech_active = False
+        if busy.is_set():
+            # 清空 VAD 缓冲 (TTS 播放中误拾的语音)
+            while not detector.empty():
+                detector.pop()
+            return
+        while not detector.empty():
+            seg = detector.front
+            duration = len(seg.samples) / _SAMPLE_RATE
+            if duration >= _MIN_RECORD_S:
+                segment_queue.put(np.array(seg.samples, dtype=np.float32))
+            detector.pop()
+
+    def _worker():
+        while running:
+            try:
+                audio = segment_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if audio is None:
+                break
+            busy.set()  # 推理开始 — 暂停收新指令
+            mask = np.abs(audio) > _VAD_THRESHOLD
+            edges = np.where(mask)[0]
+            if len(edges) > 0:
+                audio = audio[edges[0]:edges[-1] + 1]
+            dur = len(audio) / _SAMPLE_RATE
+            if dur < _MIN_RECORD_S:
+                busy.clear()
+                continue
+
+            print(f"\n  [MiMo] 推理中 ({dur:.1f}s)...", end="", flush=True)
+            t0 = time.time()
+            wav_bytes = audio_to_wav_bytes(audio)
+            response = call_mimo(wav_bytes, api_key)
+            if response is None:
+                print(f"\r  [MiMo] 失败")
+                busy.clear()
+                continue
+            elapsed = time.time() - t0
+            _log(f"MiMo {elapsed:.1f}s, audio={dur:.1f}s, {len(wav_bytes)}B")
+            print(f"\r  [MiMo] {elapsed:.1f}s")
+            print(f"  ── response ──\n{response}\n  ──────────────")
+            _process_response(response, hand)
+            # TTS 播放后才恢复收指令
+            time.sleep(2.0)
+            busy.clear()
+
+    worker_thread = threading.Thread(target=_worker, daemon=True)
+    worker_thread.start()
+
+    print(f"\n[模式] Auto VAD — 直接说话, 'q' 退出\n")
+    try:
+        with sd.InputStream(
+            samplerate=_SAMPLE_RATE, channels=1, dtype="float32",
+            blocksize=512, callback=_callback,
+        ):
+            while running:
+                if msvcrt.kbhit() and msvcrt.getch().lower() == b'q':
+                    print("\n[q] 退出")
+                    running = False
+                    break
+                time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        running = False
+        segment_queue.put(None)
+        worker_thread.join(timeout=2)
+
+
+def _process_response(response: str, hand: Optional["GestureExecutor"]):
+    """解析 MiMo 回复并执行."""
+    data = parse_llm_response(response)
+    actions = validate_actions(data) if data else []
+    reply = extract_reply_text(response)
+
+    _log(f"reply: {reply if reply else '(none)'}")
+    _log(f"actions: {json.dumps(actions, ensure_ascii=False) if actions else '(none)'}")
+
+    if reply:
+        speak(reply)
+    elif actions:
+        speak("好的")
+
+    if hand and actions:
+        hand.execute(actions)
+    elif actions:
+        names = []
+        for a in actions:
+            t = a.get("type")
+            if t == "gesture":
+                names.append(a["gesture"])
+            elif t == "sequence":
+                names.append(a["sequence"])
+            elif t == "stop":
+                names.append("STOP")
+        _log(f"模拟执行: {' → '.join(names) if names else str(actions)}")
+
+
+def audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = _OUT_SAMPLE_RATE) -> bytes:
+    """float32 → 16-bit PCM WAV bytes. 下采样到 target rate."""
+    if sample_rate != _SAMPLE_RATE:
+        # 简单抽取下采样 (16k→8k 取隔1)
+        step = int(_SAMPLE_RATE / sample_rate)
+        audio = audio[::step]
     buf = io.BytesIO()
     data = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
-        wf.setframerate(_SAMPLE_RATE)
+        wf.setframerate(sample_rate)
         wf.writeframes(data.tobytes())
     return buf.getvalue()
 
@@ -228,11 +395,50 @@ def call_mimo(audio_wav: bytes, api_key: str) -> Optional[str]:
 
 
 # ============================================================
+# 日志
+# ============================================================
+
+_log_dir = os.path.join(_project_root, "logs")
+os.makedirs(_log_dir, exist_ok=True)
+_log_path = os.path.join(
+    _log_dir,
+    f"voice_llm_{time.strftime('%Y%m%d_%H%M%S')}.log"
+)
+_log_lock = threading.Lock()
+
+def _log(msg: str):
+    """写日志 (终端 + 文件)."""
+    ts = time.strftime("%H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line)
+    with _log_lock:
+        try:
+            with open(_log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+
+# ============================================================
 # TTS (edge-tts)
 # ============================================================
 
+def _play_mp3(path: str):
+    """Windows MCI 播放 MP3 (静默, 无窗口)."""
+    import ctypes
+    try:
+        ctypes.windll.winmm.mciSendStringW(
+            f'open "{path}" type MPEGVideo alias tts_play', None, 0, None
+        )
+        ctypes.windll.winmm.mciSendStringW(
+            "play tts_play wait", None, 0, None
+        )
+    finally:
+        ctypes.windll.winmm.mciSendStringW("close tts_play", None, 0, None)
+
+
 def speak(text: str):
-    """edge-tts 合成并播放 (异步)."""
+    """edge-tts 合成 MP3 → Windows MCI 播放 (异步)."""
     text = text.strip()
     if not text:
         return
@@ -240,8 +446,7 @@ def speak(text: str):
 
     def _run():
         try:
-            fd, mp3_path = tempfile.mkstemp(suffix=".mp3")
-            os.close(fd)
+            mp3_path = os.path.join(_log_dir, f"_tts_{time.time_ns()}.mp3")
             cmd = [
                 sys.executable, "-m", "edge_tts",
                 "--voice", _TTS_VOICE,
@@ -251,16 +456,20 @@ def speak(text: str):
                 "--text", text,
                 "--write-media", mp3_path,
             ]
-            subprocess.run(cmd, capture_output=True, timeout=30)
+            r = subprocess.run(cmd, capture_output=True, timeout=30)
+            if r.returncode != 0:
+                print(f"  [TTS Error] edge-tts: {r.stderr.decode()[:100]}")
+                return
             if os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 0:
-                import winsound
-                winsound.PlaySound(mp3_path, winsound.SND_FILENAME)
-            try:
-                os.unlink(mp3_path)
-            except Exception:
-                pass
+                _play_mp3(mp3_path)
         except Exception as e:
             print(f"  [TTS Error] {e}")
+        finally:
+            if mp3_path and os.path.exists(mp3_path):
+                try:
+                    os.unlink(mp3_path)
+                except Exception:
+                    pass
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -383,7 +592,9 @@ def main():
     parser = argparse.ArgumentParser(description="LLM 语音灵巧手控制")
     parser.add_argument("--port", default="COM5", help="灵巧手串口号")
     parser.add_argument("--api-key", default=None,
-                        help="MiMo API Key (优先级最高, 覆盖 config 和环境变量)")
+                        help="MiMo API Key (优先级最高)")
+    parser.add_argument("--mode", default="auto", choices=["ptt", "auto"],
+                        help="输入模式: ptt=按键说话, auto=Silero VAD 自动检测")
     args = parser.parse_args()
 
     # API Key 优先级: --api-key > voice_llm_config.local.json > voice_llm_config.json > MIMO_API_KEY
@@ -416,64 +627,41 @@ def main():
         print("[WARN] 模拟模式")
         hand = None
 
-    print(f"\n[模式] 按回车录音 → MiMo 理解 → 执行 + TTS")
+    print(f"\n[模式] {'Auto VAD' if args.mode == 'auto' else 'PTT 按键说话'} → MiMo → 执行 + TTS")
     print("       'q' 退出\n")
 
-    try:
-        while True:
-            if msvcrt.kbhit() and msvcrt.getch().lower() == b'q':
-                print("\n[q] 退出")
-                break
+    if args.mode == "auto":
+        auto_vad_loop(api_key, hand)
+    else:
+        try:
+            while True:
+                audio = record_audio()
+                if audio is None:
+                    continue
+                if isinstance(audio, str) and audio == "quit":
+                    print("\n[q] 退出")
+                    break
 
-            audio = record_audio()
-            if audio is None:
-                continue
+                print("  [MiMo] 推理中...", end="", flush=True)
+                t0 = time.time()
+                wav_bytes = audio_to_wav_bytes(audio)
+                response = call_mimo(wav_bytes, api_key)
+                if response is None:
+                    print(f"\r  [MiMo] 失败")
+                    continue
+                elapsed = time.time() - t0
+                _log(f"MiMo {elapsed:.1f}s, {len(wav_bytes)}B audio")
+                print(f"\r  [MiMo] {elapsed:.1f}s")
+                print(f"  ── response ──\n{response}\n  ──────────────")
+                _process_response(response, hand)
 
-            # MiMo
-            print("  [MiMo] 推理中...", end="", flush=True)
-            t0 = time.time()
-            wav_bytes = audio_to_wav_bytes(audio)
-            response = call_mimo(wav_bytes, api_key)
-            if response is None:
-                print(f"\r  [MiMo] 失败")
-                continue
-            elapsed = time.time() - t0
-            print(f"\r  [MiMo] {elapsed:.1f}s")
-            print(f"  ── response ──\n{response}\n  ──────────────")
+        except KeyboardInterrupt:
+            print("\n[中断]")
 
-            # 解析
-            data = parse_llm_response(response)
-            actions = validate_actions(data) if data else []
-            reply = extract_reply_text(response)
-
-            # TTS (异步)
-            if reply:
-                speak(reply)
-            elif actions:
-                speak("好的")
-
-            # 执行
-            if hand and actions:
-                hand.execute(actions)
-            elif actions:
-                names = []
-                for a in actions:
-                    t = a.get("type")
-                    if t == "gesture":
-                        names.append(a["gesture"])
-                    elif t == "sequence":
-                        names.append(a["sequence"])
-                    elif t == "stop":
-                        names.append("STOP")
-                print(f"  [模拟] {' → '.join(names) if names else str(actions)}")
-
-    except KeyboardInterrupt:
-        print("\n[中断]")
-    finally:
-        print("\n清理...")
-        if hand:
-            hand.close()
-        print("退出.")
+    print("\n清理...")
+    if hand:
+        hand.close()
+    print("退出.")
 
 
 if __name__ == "__main__":

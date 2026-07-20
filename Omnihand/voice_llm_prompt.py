@@ -66,7 +66,7 @@ SYSTEM_PROMPT = f"""你是 Project_hand 的灵巧手(OmniHand)语音助手. 理�
 2. 语义推断: "给他竖个中指"→MIDDLE; "比个心"→HEART; "握个手吧"→握手序列; "做个OK"→OK
 3. 默认 speed=null, duration=0.5s(自定义序列)
 4. 越界: "拿东西/倒水"等超出手势范围→reply 礼貌拒绝
-5. 闲聊/不涉及动作→reply
+5. 社交交互: 用户问候/聊天时, 自主判断是否配合手势. "你好/嗨/谢谢"→打招呼序列或HEART比心; "再见/拜拜"→CLASPING合十. 不确定时, 仅reply 不加动作
 6. 多手势→自定义序列, 按用户说的顺序
 
 # 示例
@@ -107,8 +107,13 @@ SYSTEM_PROMPT = f"""你是 Project_hand 的灵巧手(OmniHand)语音助手. 理�
 ```
 
 [语音]"你好呀"
-回复: 你好!需要我做什么手势吗?```json
-{{"actions":[{{"type":"reply"}}]}}
+回复: 你好!```json
+{{"actions":[{{"type":"sequence","sequence":"打招呼"}}]}}
+```
+
+[语音]"拜拜"
+回复: 再见!```json
+{{"actions":[{{"type":"gesture","gesture":"CLASPING","speed":null}}]}}
 ```"""
 
 
