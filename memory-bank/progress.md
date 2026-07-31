@@ -1,5 +1,24 @@
 # Progress — Project_hand
 
+### VLA 数据采集版 + CRP 完善 (2026-07-31)
+- [x] `Orchestrator/estun_handle_data_sm.py`: Handle+Cup 检测 → P3 倒水点, 无 Cup 阶段
+- [x] `doc/estun_handle_data_sm.crp` (35 widgets): 含 H_P4 回退避碰点 (CposOffset 动态计算), 无 Cup 段
+- [x] `doc/estun_handle_cup_sm.crp` 补 H_P4 (53 widgets): Handle 倒水避碰, Cup 段保留
+- [x] `doc/estun_handle_sm.crp` P3 速度 sudu → V100 (Z-up 抬升无需低速)
+- [x] 窗口标题 em dash → ASCII `|` (双窗口/乱码修复)
+- [x] 生成脚本参数化: `scripts_gen/gen_handle_data_crp.py --keep-cup`
+- [ ] CRP 实机导入 + SM 联调
+
+### 单相机状态机重构 (2026-07-31)
+- [x] `Orchestrator/estun_handle_sm.py`: 仅水壶抓取, HandleCupDetector + 固定ABC + P3=Z-up
+- [x] `Orchestrator/estun_handle_cup_sm.py`: 水壶+水杯, 同架构, Cup P3=Z-up
+- [x] `doc/estun_handle_sm.crp` (23 widgets): 对应仅水壶 CRP
+- [x] `doc/estun_handle_cup_sm.crp` (41 widgets): 对应水壶+水杯 CRP
+- [x] `Orchestrator/config.yaml`: 新增 `handle_lift_z` + `cup_lift_z`
+- [x] `handle_cup_detector.py`: 红色优先检测 (暗光适配)
+- [x] 白色把手两遍检测 (紧→松)
+- [ ] CRP 实机导入 + SM 联调
+
 ### Camera B 剪刀石头布手势识别 (2026-07-20)
 - [x] 方案调研: YOLOv8n (OpenI/PCL) vs CNN vs MediaPipe几何 → 选定 MediaPipe 几何特征
 - [x] YOLOv8n 预训练模型测试: 实机效果差, 已删除
@@ -63,14 +82,16 @@
 
 | 任务 | 说明 |
 |------|------|
+| 🔴 CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` |
+| 🔴 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` |
 | 🔴 语音控制实机联调 | 连 OmniHand 完整链路测试 |
 | 🟡 完整语音控制接入 | voice_control.py + CRP GOTO |
 | 🟡 HandInCup 优化 | 调参 + 遮挡 |
 | 🟡 加水实测 | 完整流程 |
 | 🟡 抓取姿态微调 | 末端 + 手势 |
+| 🟢 RPS 手势集成到 Orchestrator | 4 阶段调度 |
 | 🟢 序列+速度 实机测 | 连灵巧手测试 |
 | 🟢 sudu2 实机验证 | CRP 导入示教器 |
-| 🟢 MediaPipe clearcut | |
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)

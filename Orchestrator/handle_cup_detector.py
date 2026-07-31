@@ -60,52 +60,12 @@ def _clamp_roi(roi, width, height):
     )
 
 
-def find_white_handle_roi(color_image, kettle_bbox, cfg_white):
-    """在 kettle bbox 右侧区域检测白色把手, 返回 ROI 或 None.
-
-    移植自 visionpro.py:VisionServer.find_white_handle_shape_roi().
-    """
-    image_h, image_w = color_image.shape[:2]
-    kx0, ky0, kx1, ky1 = _clamp_roi(kettle_bbox, image_w, image_h)
-    kw = kx1 - kx0
-    kh = ky1 - ky0
-    if kw <= 0 or kh <= 0:
-        return None
-
-    # 搜索区域: kettle bbox 右侧 (把手在水壶右侧)
-    search_left_frac = float(cfg_white.get("search_left_frac", 0.68))
-    sx0 = kx0 + int(kw * search_left_frac)
-    sx0, sy0, sx1, sy1 = _clamp_roi((sx0, ky0, kx1, ky1), image_w, image_h)
-    if sx1 <= sx0 or sy1 <= sy0:
-        return None
-
-    # 裁剪搜索区域
-    crop = color_image[sy0:sy1 + 1, sx0:sx1 + 1]
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    s_ch = hsv[:, :, 1]
-    v_ch = hsv[:, :, 2]
-    b_ch, g_ch, r_ch = cv2.split(crop)
-    rgb_min = np.minimum(np.minimum(r_ch, g_ch), b_ch)
-    rgb_max = np.maximum(np.maximum(r_ch, g_ch), b_ch)
-
-    # 白色判定 (HSV + RGB 辅助)
-    max_sat = int(cfg_white.get("max_saturation", 115))
-    min_val = int(cfg_white.get("min_value", 110))
-    min_rgb = int(cfg_white.get("min_rgb", 120))
-    max_spread = int(cfg_white.get("max_rgb_spread", 150))
-
-    white_mask = (
-        (s_ch < max_sat)
-        & (v_ch > min_val)
-        & (rgb_min > min_rgb)
-        & ((rgb_max - rgb_min) < max_spread)
-    ).astype(np.uint8) * 255
-
+def _mask_to_roi(white_mask, candidate_mask_out, cfg_white):
+    """从白色 mask 提取最佳 ROI 候选. 返回 (x0,y0,x1,y1) 或 None."""
     # 形态学
     white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8), iterations=1)
 
-    # 轮廓过滤
     contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     min_area = float(cfg_white.get("min_component_area", 80.0))
     max_area = float(cfg_white.get("max_component_area", 18000.0))
@@ -114,18 +74,18 @@ def find_white_handle_roi(color_image, kettle_bbox, cfg_white):
     max_w = int(cfg_white.get("max_width", 180))
     max_h = int(cfg_white.get("max_height", 210))
 
+    h, w = white_mask.shape[:2]
     candidate_mask = np.zeros_like(white_mask)
     for cnt in contours:
         area = cv2.contourArea(cnt)
         if area < min_area or area > max_area:
             continue
-        x, y, w, h = cv2.boundingRect(cnt)
-        if w < min_w or h < min_h:
+        bx, by, bw, bh = cv2.boundingRect(cnt)
+        if bw < min_w or bh < min_h:
             continue
-        if w > max_w or h > max_h:
+        if bw > max_w or bh > max_h:
             continue
-        # 排除贴边大块
-        if w > (sx1 - sx0) * 0.95 and h > (sy1 - sy0) * 0.85:
+        if bw > w * 0.95 and bh > h * 0.85:
             continue
         cv2.drawContours(candidate_mask, [cnt], -1, 255, thickness=-1)
 
@@ -140,35 +100,93 @@ def find_white_handle_roi(color_image, kettle_bbox, cfg_white):
     min_px = int(cfg_white.get("min_pixels", 220))
     candidates = []
     for grp in groups:
-        x, y, w, h = cv2.boundingRect(grp)
-        if w < min_w or h < min_h:
+        gx, gy, gw, gh = cv2.boundingRect(grp)
+        if gw < min_w or gh < min_h:
             continue
-        if w > max_w or h > max_h:
+        if gw > max_w or gh > max_h:
             continue
-        white_count = cv2.countNonZero(candidate_mask[y:y + h, x:x + w])
+        white_count = cv2.countNonZero(candidate_mask[gy:gy + gh, gx:gx + gw])
         if white_count < min_px:
             continue
-
-        full_x0 = sx0 + x
-        full_y0 = sy0 + y
-        full_x1 = full_x0 + w
-        full_y1 = full_y0 + h
-        right_score = (full_x1 - kx0) / float(max(kw, 1))
-        height_score = min(h / float(max(kh * 0.55, 1.0)), 1.0)
-        score = white_count + 900.0 * right_score + 500.0 * height_score
-        candidates.append((score, (full_x0, full_y0, full_x1, full_y1)))
+        # right_score 和 height_score 需要外部传入的 kettle bbox 信息,
+        # 这里简化: 按 white_count 排序, 调用方再微调
+        candidates.append((white_count, gx, gy, gw, gh))
 
     if not candidates:
         return None
 
     candidates.sort(key=lambda item: item[0], reverse=True)
-    x0, y0, x1, y1 = candidates[0][1]
-    margin_x = int(cfg_white.get("roi_margin_x", 14))
-    margin_y = int(cfg_white.get("roi_margin_y", 10))
-    return _clamp_roi(
-        (x0 - margin_x, y0 - margin_y, x1 + margin_x, y1 + margin_y),
-        image_w, image_h,
-    )
+    x, y, rw, rh = candidates[0][1:]
+    if candidate_mask_out is not None:
+        candidate_mask_out[:] = candidate_mask
+    return (x, y, x + rw, y + rh)
+
+
+def find_white_handle_roi(color_image, kettle_bbox, cfg_white):
+    """在 kettle bbox 右侧区域检测白色把手, 返回 ROI 或 None.
+
+    两遍检测:
+      Pass 1: 严格阈值 (正常光照)
+      Pass 2: 宽松阈值 (暗光/关灯), 仅在第一遍无结果时触发.
+
+    移植自 visionpro.py:VisionServer.find_white_handle_shape_roi().
+    """
+    image_h, image_w = color_image.shape[:2]
+    kx0, ky0, kx1, ky1 = _clamp_roi(kettle_bbox, image_w, image_h)
+    kw = kx1 - kx0
+    kh = ky1 - ky0
+    if kw <= 0 or kh <= 0:
+        return None
+
+    # 搜索区域: kettle bbox 右侧
+    search_left_frac = float(cfg_white.get("search_left_frac", 0.68))
+    sx0 = kx0 + int(kw * search_left_frac)
+    sx0, sy0, sx1, sy1 = _clamp_roi((sx0, ky0, kx1, ky1), image_w, image_h)
+    if sx1 <= sx0 or sy1 <= sy0:
+        return None
+
+    crop = color_image[sy0:sy1 + 1, sx0:sx1 + 1]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    s_ch = hsv[:, :, 1]
+    v_ch = hsv[:, :, 2]
+    b_ch, g_ch, r_ch = cv2.split(crop)
+    rgb_min = np.minimum(np.minimum(r_ch, g_ch), b_ch)
+    rgb_max = np.maximum(np.maximum(r_ch, g_ch), b_ch)
+
+    max_sat = int(cfg_white.get("max_saturation", 115))
+    max_spread = int(cfg_white.get("max_rgb_spread", 150))
+
+    # 候选 mask (被 _mask_to_roi 填充)
+    candidate_mask = None
+
+    # ---- Two-pass: strict → relaxed ----
+    for pass_idx, (min_val, min_rgb_val) in enumerate([
+        (int(cfg_white.get("min_value", 110)), int(cfg_white.get("min_rgb", 120))),   # Pass 1: strict
+        (45, 50),                                                                       # Pass 2: relaxed (暗光)
+    ]):
+        white_mask = (
+            (s_ch < max_sat)
+            & (v_ch > min_val)
+            & (rgb_min > min_rgb_val)
+            & ((rgb_max - rgb_min) < max_spread)
+        ).astype(np.uint8) * 255
+
+        roi_raw = _mask_to_roi(white_mask, candidate_mask, cfg_white)
+        if roi_raw is not None:
+            if pass_idx == 1:
+                print(f"[WhiteHandle] Pass 2 (暗光) 命中: min_val={min_val} min_rgb={min_rgb_val}")
+            x0, y0, x1, y1 = roi_raw
+            full_x0, full_y0 = sx0 + x0, sy0 + y0
+            full_x1, full_y1 = sx0 + x1, sy0 + y1
+            margin_x = int(cfg_white.get("roi_margin_x", 14))
+            margin_y = int(cfg_white.get("roi_margin_y", 10))
+            return _clamp_roi(
+                (full_x0 - margin_x, full_y0 - margin_y,
+                 full_x1 + margin_x, full_y1 + margin_y),
+                image_w, image_h,
+            )
+
+    return None
 
 
 # ============================================================
@@ -606,18 +624,46 @@ class HandleCupDetector:
         handle_result["kettle_bbox"] = kettle_bbox
 
         if kettle_bbox is not None:
-            # 白色把手 ROI
-            white_roi = find_white_handle_roi(color_image, kettle_bbox, self._cfg_white)
-            handle_result["white_roi"] = white_roi
-            self._last_white_roi = white_roi
-
-            # 红色胶带 (仅在白色把手定位成功后才搜)
-            if white_roi is None:
-                red_contour = None
-            else:
+            # ---- 新策略: 先在 kettle 右侧直接搜红色胶带 ----
+            # 红色在 HSV 空间比白色稳定 (光照只影响 V, 不影响 Hue),
+            # 无需白色把手前置步骤.
+            kx0, ky0, kx1, ky1 = _clamp_roi(kettle_bbox, w, h)
+            search_left_frac = float(self._cfg_white.get("search_left_frac", 0.68))
+            red_sx0 = kx0 + int((kx1 - kx0) * search_left_frac)
+            red_roi = _clamp_roi((red_sx0, ky0, kx1, ky1), w, h)
+            if red_roi[2] > red_roi[0] and red_roi[3] > red_roi[1]:
                 red_contour, _red_mask = find_handle_red_tag(
-                    color_image, self._cfg_red, roi=white_roi,
+                    color_image, self._cfg_red, roi=red_roi,
                 )
+            else:
+                red_contour = None
+
+            if red_contour is not None:
+                # 红色找到 → 直接用它做 3D, 不再依赖白色检测
+                x, y, rw, rh = cv2.boundingRect(red_contour)
+                self._last_red_bbox = (x, y, rw, rh)
+                handle_result["red_center"] = (x + rw // 2, y + rh // 2)
+                handle_result["red_contour"] = red_contour
+                self._last_red_contour = red_contour
+                # 用红胶带 + margin 构造 white_roi (给可视化, 也兼容后续引用)
+                white_roi = _clamp_roi(
+                    (x - 20, y - 15, x + rw + 20, y + rh + 15), w, h,
+                )
+                handle_result["white_roi"] = white_roi
+                self._last_white_roi = white_roi
+            else:
+                # 红色未找到 → 回退: 白色把手检测 (原两遍流程)
+                white_roi = find_white_handle_roi(color_image, kettle_bbox, self._cfg_white)
+                handle_result["white_roi"] = white_roi
+                self._last_white_roi = white_roi
+
+                if white_roi is not None:
+                    red_contour, _red_mask = find_handle_red_tag(
+                        color_image, self._cfg_red, roi=white_roi,
+                    )
+                else:
+                    red_contour = None
+
             handle_result["red_contour"] = red_contour
             self._last_red_contour = red_contour
 

@@ -117,14 +117,58 @@ greeting ──(Phase 0 done)──→ handle_detect ──(targets_sent)──�
 - `hand_on_cup is None` → Phase C 松把手; `is not None` → Phase D 判定
 - `_camera_a_to_close`: Phase B 后 daemon 线程保存引用, main 线程安全关闭 pipeline
 
-## 模块关系
+### 单相机状态机模式 (2026-07-31)
+
+从双相机 Orchestrator 拆分: **检测器/位姿** 移植自 state_machine, **运动流程** 移植自 estun_*.
+
+```text
+HandleSM / HandleCupSM / HandleDataSM
+  ├── _load_configs()     → Orchestrator/config.yaml (固定ABC) + Estun/estun_config.yaml (偏移)
+  ├── _init_detector()    → HandleCupDetector (YOLO+HSV, 单一检测器)
+  ├── _detect()           → 移植自 state_machine._detect()
+  ├── _handle_session()   → daemon 线程
+  │   ├── _phase_a()      → 接收机器人初始位姿
+  │   ├── _phase_b()      → 等待稳定 → 固定ABC计算 P1/P2/P3 → send Handle
+  │   └── _phase_c()      → 指令循环 (PREGRIP/GRIPDONE/RESET[/CUP/RELEASE/GRIP])
+  └── stop()              → 清理
+```
+
+与 estun_* 旧版差异: RealSense_R→HandleCupDetector, 动态旋转→固定ABC, 全局变量→类封装, Cup P3 复杂target_offset→P1+Z-up.
+
+三个变体 (2026-07-31):
+
+| 状态机 | P3 语义 | Phase C 指令 | CRP |
+|--------|---------|--------------|-----|
+| HandleSM (estun_handle_sm.py) | Z-up 抬升 (lift_z) | PREGRIP/GRIPDONE/RESET | estun_handle_sm.crp (23w, 全 V100) |
+| HandleCupSM (estun_handle_cup_sm.py) | 倒水点 (杯位+示教偏移) | + CUP/RELEASE/GRIP | estun_handle_cup_sm.crp (53w, 含 H_P4) |
+| HandleDataSM (estun_handle_data_sm.py) | 倒水点 (同 HandleCupSM) | 同 HandleSM | estun_handle_data_sm.crp (35w, 含 H_P4) |
+
+### CRP H_P4 回退避碰模式
+
+倒水段 (P1→P3) 必须经 H_P4 过渡避免碰撞, H_P4 由 CRP 内 CposOffset 动态计算 (Python 只发 3 位姿):
+
+```text
+DCp1.dx = H_P3.x − H_P1.x
+DCp1.dy = H_P3.y − H_P1.y − Retreat1.dy    ← 回退量按倒水角 B 动态:
+DCp1.dz = H_P3.z − H_P1.z                    B<25° → 150mm; B<17.5° → 175mm; B<12.5° → 200mm
+H_P4 = CposOffset(H_P1, DCp1)             ← H_P4 ≈ P3 位置但 Y 方向回退
+```
+
+运动序列: P1(抓) → **H_P4(V100)** → P3(倒水,sudu) → **H_P4(sudu)** → P1 → RESET
+
+仅 HandleSM 无 H_P4 (P3 = Z+5cm 直接抬升, 无碰撞风险). 移植自 `handlepluscup-orchestrator.crp`, 生成脚本 `scripts_gen/gen_handle_data_crp.py` (支持 --keep-cup).
+
+### 模块关系
 
 ```text
 Orchestrator/                        ← 系统入口
   ├── main.py                        ← 4-phase 主循环 + 可视化
   ├── state_machine.py               ← SharedContext + GreetingHandler + HandleHandler
+  ├── estun_handle_sm.py             ← [新] 单相机仅水壶状态机 (Phase A-C, P3=Z-up)
+  ├── estun_handle_cup_sm.py         ← [新] 单相机水壶+水杯状态机 (Phase A-C)
+  ├── estun_handle_data_sm.py        ← [新] VLA 数据采集状态机 (无 Cup 阶段)
   ├── handle_cup_detector.py         ← Camera A 轻量检测器
-  ├── config.yaml                    ← 检测参数
+  ├── config.yaml                    ← 检测参数 + 固定ABC + lift_z
   └── logger.py                      ← 终端+文件双输出
 
 Estun/                               ← 顶层入口 (单相机)

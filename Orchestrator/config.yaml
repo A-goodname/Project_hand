@@ -25,6 +25,7 @@ cup_conf: 0.5                                     # 水杯检测置信度
 cup_handle_side: left                             # 杯把手方向: back | left | right
 cup_rim_radius: 0.035                             # 杯口半径 (m), 用于 left/right bbox 裁剪
 cup_height: 0.100                                 # 杯高先验 (m)
+cup_lift_z: 0.05                                  # Cup P3 Z轴抬起高度 (m, 基系)
 
 # ---- 深度参数 ----
 depth_min: 0.15       # 最小有效深度 (m)
@@ -33,16 +34,17 @@ depth_z_threshold: 0.05  # 深度离群过滤 (m)
 
 # ---- 固定 ABC (deg) ----
 handle_euler: [-90, 89, -90]
+handle_lift_z: 0.05                                # Handle P3 Z轴抬起高度 (m, 基系)
 cup_euler_back: [-90, 89, -110]
 cup_euler_left: [-90, 89, -90]
 
 # ---- 白色把手检测 ----
 # 参数来源: reference/机械臂_同事运行包_20260713/visionpro.py
 white_handle:
-  search_left_frac: 0.85        # 把手在水壶右侧, 从 kettle bbox 80% 处开始搜索
-  max_saturation: 115           # HSV 饱和度上限
-  min_value: 110                # HSV 明度下限 (降, 容纳阴影中的把手)
-  min_rgb: 120                  # RGB 三通道最小值下限 (降, 同)
+  search_left_frac: 0.80        # 把手在水壶右侧, 从 kettle bbox 80% 处开始搜索
+  max_saturation: 115           # HSV 饱和度上限 (白色=低饱和, 不变)
+  min_value: 110                # HSV 明度下限 (回退用, 红色优先)
+  min_rgb: 120                  # RGB 三通道最小值下限 (回退用, 红色优先)
   max_rgb_spread: 150           # RGB 三通道最大差值 (排除彩色)
   min_component_area: 80.0      # 白色轮廓最小面积 (px)
   max_component_area: 18000.0   # 白色轮廓最大面积
