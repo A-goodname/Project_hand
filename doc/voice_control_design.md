@@ -1129,11 +1129,35 @@ Key 优先级: `--api-key` > `.local.json`(doubao.api_key) > base json > `DOUBAO
 FC 采用**入队立即回传**模式 (不等待机械执行, 避免握手 30s 压力检测冻住对话);
 客户端硬校验参数, 非法即拒 (不碰串口).
 
-### C.6 离线测试 (2026-08-13)
+**tools 声明必须用扁平格式** (`type=function` 与 `name/description/parameters` 同级):
+OpenAI 式 `{"type":"function","function":{...}}` 包装服务端不识别, FC 永不触发
+(真实 API 探测验证: 扁平触发 ✅ / 包装不触发 ❌).
+
+### C.6 真实 API 探测结论 (2026-08-13)
+
+用临时探测脚本 (免麦克风: zh.wav + MiMo TTS 合成语音, 验证后已删除) 实测:
+
+| 项 | 结果 |
+|------|------|
+| WS 连接 + X-Api-Key 鉴权 | ✅ ~0.3s |
+| 服务端 VAD + 流式 ASR | ✅ 逐字增量转写 |
+| LLM 对话回复 | ✅ 口语化中文 |
+| TTS 音频流 (pcm_s16le 24k) | ✅ 文本/音频增量交替下发 |
+| Function Calling | ✅ 扁平 tools 触发, call_id 返回 (arguments 为 JSON 字符串) |
+| session.close 优雅关闭 | ✅ session.closed |
+
+**两个关键排坑**:
+1. **全双工必须持续推流** — commit 后停止发包会触发
+   `52000033 AudioServerNoAudioInputTooLongError`. 主程序 auto 模式麦克风常开持续推流
+   天然规避; 探测脚本需持续发静音包模拟.
+2. **audio.delta 包大小不固定** (实测远大于 20ms 块) — 播放器须处理跨块余量,
+   不能按"一包一块"直接丢弃尾部.
+
+### C.7 离线测试 (2026-08-13)
 
 18 用例全通过: validate/parse 纯函数 (3), 配置与 key 优先级 (2), session.create 结构 (1),
 事件分发 (7: 音频入队/FC 执行回传/FC 非法拒绝/barge-in/非播报不打断/鉴权退出/5xx 重连),
 E2E mock (5: normal 全流程+call_id 配对/bargein/非法 FC/断线重连/ptt commit).
 
-实机测试阶段 (待 API key):
+实机测试阶段 (API key 已就绪):
 1. 无手纯对话 (首包延迟) → 2. 空载手势/速度三档/序列 → 3. 握手压力/急停/抢话/断网 → 4. MiMo vs 豆包延迟对比.

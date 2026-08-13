@@ -222,88 +222,85 @@ DOUBAO_INSTRUCTIONS = f"""你是 Project_hand 的灵巧手(OmniHand)语音助手
 # ============================================================
 # 豆包 Function Calling 工具定义 (JSON Schema)
 # ============================================================
+# 注意: 必须用扁平格式 (type=function + name/description/parameters 同级).
+# OpenAI 式包装 (嵌套 "function" 键) 服务端不识别, FC 永不触发 —
+# 已用真实 API 探测验证 (probe: 扁平触发, 包装不触发).
 
 _DOUBAO_GESTURE_ENUM = sorted(VALID_GESTURES)
 
 _DOUBAO_TOOL_GESTURE = {
     "type": "function",
-    "function": {
-        "name": "do_gesture",
-        "description": (
-            "控制灵巧手执行单个手势. 用户要求任何手势动作时调用. "
-            "调用后仍需用口语自然回应用户, 不要读出工具名或JSON."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "gesture": {
-                    "type": "string",
-                    "enum": _DOUBAO_GESTURE_ENUM,
-                },
-                "speed": {
-                    "type": "string",
-                    "enum": ["null", "fast", "medium", "slow"],
-                    "description": (
-                        "null=直接到位(最快); fast=0.75秒平滑; "
-                        "medium=1.0秒平滑; slow=3.0秒极慢平滑"
-                    ),
-                },
+    "name": "do_gesture",
+    "description": (
+        "控制灵巧手执行单个手势. 用户要求任何手势动作时调用. "
+        "调用后仍需用口语自然回应用户, 不要读出工具名或JSON."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "gesture": {
+                "type": "string",
+                "enum": _DOUBAO_GESTURE_ENUM,
             },
-            "required": ["gesture"],
+            "speed": {
+                "type": "string",
+                "enum": ["null", "fast", "medium", "slow"],
+                "description": (
+                    "null=直接到位(最快); fast=0.75秒平滑; "
+                    "medium=1.0秒平滑; slow=3.0秒极慢平滑"
+                ),
+            },
         },
+        "required": ["gesture"],
     },
 }
 
 _DOUBAO_TOOL_SEQUENCE = {
     "type": "function",
-    "function": {
-        "name": "do_sequence",
-        "description": (
-            "执行预定义手势序列或自定义多手势组合. "
-            "打招呼/握手(含压力等待)/数字手势/用户一次说多个手势时使用."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sequence": {
-                    "type": "string",
-                    "enum": ["打招呼", "握手", "数字手势", "custom"],
-                },
-                "steps": {
-                    "type": "array",
-                    "description": "仅 sequence=custom 时必填, 按用户说的顺序排列",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "gesture": {
-                                "type": "string",
-                                "enum": _DOUBAO_GESTURE_ENUM,
-                            },
-                            "duration": {
-                                "type": "number",
-                                "minimum": 0.2,
-                                "maximum": 3.0,
-                            },
+    "name": "do_sequence",
+    "description": (
+        "执行预定义手势序列或自定义多手势组合. "
+        "打招呼/握手(含压力等待)/数字手势/用户一次说多个手势时使用."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "sequence": {
+                "type": "string",
+                "enum": ["打招呼", "握手", "数字手势", "custom"],
+            },
+            "steps": {
+                "type": "array",
+                "description": "仅 sequence=custom 时必填, 按用户说的顺序排列",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "gesture": {
+                            "type": "string",
+                            "enum": _DOUBAO_GESTURE_ENUM,
                         },
-                        "required": ["gesture"],
+                        "duration": {
+                            "type": "number",
+                            "minimum": 0.2,
+                            "maximum": 3.0,
+                        },
                     },
+                    "required": ["gesture"],
                 },
             },
-            "required": ["sequence"],
         },
+        "required": ["sequence"],
     },
 }
 
 _DOUBAO_TOOL_STOP = {
     "type": "function",
-    "function": {
-        "name": "stop_hand",
-        "description": (
-            "紧急停止. 用户说'停止/急停/停下/快停'时调用: "
-            "灵巧手复位并结束程序."
-        ),
-        "parameters": {"type": "object", "properties": {}},
-    },
+    "name": "stop_hand",
+    "description": (
+        "紧急停止. 用户说'停止/急停/停下/快停'时调用: "
+        "灵巧手复位并结束程序."
+    ),
+    "parameters": {"type": "object", "properties": {}},
 }
 
 DOUBAO_TOOLS = [

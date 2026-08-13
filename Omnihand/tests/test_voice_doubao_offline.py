@@ -23,6 +23,8 @@ import json
 import time
 import queue
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -123,20 +125,21 @@ def t_config_doubao_section():
 
 
 def t_resolve_api_key():
-    old = os.environ.get("DOUBAO_API_KEY")
-    try:
-        os.environ.pop("DOUBAO_API_KEY", None)
-        _assert(resolve_api_key("cli-key") == "cli-key", "cli 优先")
-        if "DOUBAO_API_KEY" in os.environ:
-            del os.environ["DOUBAO_API_KEY"]
-        os.environ["DOUBAO_API_KEY"] = "env-key"
-        _assert(resolve_api_key(None) == "env-key", "env 兜底")
-        _assert(resolve_api_key("cli-key") == "cli-key", "cli 覆盖 env")
-    finally:
-        if old is not None:
-            os.environ["DOUBAO_API_KEY"] = old
-        else:
-            os.environ.pop("DOUBAO_API_KEY", None)
+    db_key = vdc.DB.get("api_key", "")
+    _assert(resolve_api_key("cli-key") == "cli-key", "cli 优先")
+    _assert(resolve_api_key(None) == db_key, "无 cli 时取配置 (.local.json)")
+    # env 兜底仅在配置无 key 时生效
+    if not db_key:
+        old = os.environ.get("DOUBAO_API_KEY")
+        try:
+            os.environ["DOUBAO_API_KEY"] = "env-key"
+            _assert(resolve_api_key(None) == "env-key", "env 兜底")
+            _assert(resolve_api_key("cli-key") == "cli-key", "cli 覆盖 env")
+        finally:
+            if old is not None:
+                os.environ["DOUBAO_API_KEY"] = old
+            else:
+                os.environ.pop("DOUBAO_API_KEY", None)
 
 
 # ============================================================
@@ -249,6 +252,22 @@ def t_event_bargein_only_when_responding():
         "type": "conversation.item.input_audio_transcription.started"})
     _assert(sess.player.epoch == old_epoch, "非播报中不应触发打断")
     _assert(sess._send_q.empty(), "不应排队 cancel")
+
+
+def t_player_leftover():
+    """服务端 delta 包可能远大于 20ms 块 — 播放器跨块余量不应丢数据."""
+    p = vdc.StreamingPlayer(prebuffer=1)
+    pcm = (np.arange(12000, dtype=np.int16) % 1000).tobytes()   # 0.5s @24k
+    p.enqueue(pcm)
+    collected = bytearray()
+    for _ in range(30):
+        outdata = np.zeros((480, 1), dtype=np.int16)
+        p._cb(outdata, 480, None, None)
+        collected.extend(outdata[:, 0].tobytes())
+    total = np.frombuffer(bytes(collected), dtype=np.int16)
+    _assert(np.array_equal(total[:12000], np.frombuffer(pcm, dtype=np.int16)),
+            "跨块播放不应丢数据")
+    _assert(bool(np.all(total[12000:] == 0)), "播完应为静音")
 
 
 def t_event_error_fatal():
@@ -420,6 +439,7 @@ def main():
     _run("事件: FC 非法参数拒绝", t_event_fc_invalid)
     _run("事件: barge-in 打断", t_event_bargein)
     _run("事件: 非播报中不打断", t_event_bargein_only_when_responding)
+    _run("播放器: 跨块余量不丢数据", t_player_leftover)
     _run("事件: 鉴权错误退出", t_event_error_fatal)
     _run("事件: 5xx 触发重连", t_event_error_reconnect)
     _run("E2E: normal 全流程+call_id", t_e2e_normal)

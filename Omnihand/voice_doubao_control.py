@@ -128,6 +128,7 @@ class StreamingPlayer:
         self.epoch = 0                     # barge-in 世代号
         self._q = queue.Queue(maxsize=max_chunks)
         self._pending = collections.deque()  # 预缓冲 (未达阈值不播)
+        self._leftover = None              # (epoch, pcm_bytes) 跨块余量
         self._stream = None
         self._lock = threading.Lock()
 
@@ -159,6 +160,7 @@ class StreamingPlayer:
             except queue.Empty:
                 break
         self._pending.clear()
+        self._leftover = None
 
     def enqueue(self, pcm: bytes):
         """pcm: int16 LE bytes. 前 prebuffer 块预缓冲后一次性放行."""
@@ -184,18 +186,30 @@ class StreamingPlayer:
         self.flush()
 
     def _cb(self, outdata, frames, time_info, status):
-        try:
-            ep, pcm = self._q.get_nowait()
-        except queue.Empty:
-            outdata.fill(0)
-            return
-        if ep != self.epoch:
-            outdata.fill(0)
-            return
-        arr = np.frombuffer(pcm, dtype=np.int16)
-        n = min(len(arr), frames)
+        """服务端 audio.delta 包大小不固定, 须处理跨块余量 (不能丢尾部)."""
         outdata.fill(0)
-        outdata[:n, 0] = arr[:n]
+        pos = 0
+        while pos < frames:
+            # 1. 先消费上块余量
+            if self._leftover is not None:
+                ep, buf = self._leftover
+                if ep != self.epoch:
+                    self._leftover = None
+                    continue
+                n = min(frames - pos, len(buf) // 2)
+                outdata[pos:pos + n, 0] = np.frombuffer(
+                    buf[:n * 2], dtype=np.int16)
+                pos += n
+                self._leftover = (ep, buf[n * 2:]) if buf[n * 2:] else None
+                continue
+            # 2. 取队列下一块
+            try:
+                ep, pcm = self._q.get_nowait()
+            except queue.Empty:
+                return               # 剩余输出静音
+            if ep != self.epoch:
+                continue             # 旧世代丢弃
+            self._leftover = (ep, pcm)
 
 
 # ============================================================
