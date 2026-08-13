@@ -372,7 +372,7 @@ class DoubaoVoiceSession:
         ]
         for t in self._threads:
             t.start()
-        self._send_q.put(("reconnect", "初始连接"))
+        self._send_q.put(("connect", "初始连接"))
 
     def stop(self):
         """优雅关闭: session.close → 等 session.closed → 关 socket → 停音频流."""
@@ -428,7 +428,7 @@ class DoubaoVoiceSession:
         return {"type": "session.create", "event_id": self._new_event_id(),
                 "session": session}
 
-    def _do_reconnect(self, reason: str):
+    def _do_reconnect(self, reason: str, initial: bool = False):
         """连接 + session.create. 初始连接失败 → 报错退出; 运行中断线 → 指数退避重试."""
         attempt = 0
         backoff = _BACKOFF_BASE
@@ -457,7 +457,7 @@ class DoubaoVoiceSession:
                 # recv 无限阻塞 (帧中途超时会损坏数据流, 死链靠 ping + 服务端关闭检测)
                 ws.settimeout(None)
             except Exception as e:
-                if attempt == 1:
+                if initial:
                     _log(f"[ERROR] 初始连接失败: {e}")
                     self.stop_event.set()
                     return
@@ -502,9 +502,17 @@ class DoubaoVoiceSession:
 
     def _ws_send_loop(self):
         self._last_ping = time.time()
+        self._mic_abs_sum = 0
+        self._mic_samples = 0
+        self._mic_blocks = 0
+        self._mic_report_t = time.time()
         while True:
+            ws = self._get_ws()
+            if ws is not None:
+                self._drain_mic(ws)       # 持续推流 (全双工必须, 停止发包=52000033)
+
             try:
-                kind, payload = self._send_q.get(timeout=0.5)
+                kind, payload = self._send_q.get(timeout=0.1)
             except queue.Empty:
                 if self.stop_event.is_set():
                     return
@@ -522,6 +530,10 @@ class DoubaoVoiceSession:
 
             if kind == "reconnect":
                 self._do_reconnect(payload)
+                continue
+
+            if kind == "connect":
+                self._do_reconnect(payload, initial=True)
                 continue
 
             ws = self._get_ws()
@@ -543,6 +555,41 @@ class DoubaoVoiceSession:
                 except Exception as e:
                     _log(f"[WS] 事件发送失败 ({payload.get('type')}): {e}")
                     self._send_q.put(("reconnect", f"发送失败: {e}"))
+
+    def _drain_mic(self, ws):
+        """把麦克风队列中的音频块全部上送 (auto 常推 / ptt 仅录音中).
+
+        同时统计麦克风电平, 每 5s 输出一次 (诊断"无回应"问题).
+        """
+        while True:
+            try:
+                pcm = self._mic_q.get_nowait()
+            except queue.Empty:
+                break
+            evt = {"type": "input_audio_buffer.append",
+                   "event_id": self._new_event_id(),
+                   "audio": base64.b64encode(pcm).decode("ascii")}
+            try:
+                ws.send(json.dumps(evt))
+            except Exception as e:
+                _log(f"[WS] 音频发送失败: {e}")
+                self._send_q.put(("reconnect", f"发送失败: {e}"))
+                break
+            # 电平/块数统计 (5s 累计)
+            self._mic_blocks += 1
+            arr = np.frombuffer(pcm, dtype=np.int16)
+            self._mic_abs_sum += int(np.abs(arr).sum())
+            self._mic_samples += len(arr)
+
+        now = time.time()
+        if now - self._mic_report_t >= 5.0 and self._mic_samples:
+            avg = self._mic_abs_sum / self._mic_samples
+            _log(f"[Mic] 5s 上送 {self._mic_blocks} 块 (预期~250), "
+                 f"平均电平 {avg:.0f} (1000+ 有语音, <50 疑静音/设备不对)")
+            self._mic_abs_sum = 0
+            self._mic_samples = 0
+            self._mic_blocks = 0
+            self._mic_report_t = now
 
     def _ping(self):
         ws = self._get_ws()
