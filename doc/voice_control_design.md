@@ -1044,3 +1044,96 @@ python Omnihand/voice_llm_control.py                  # Auto VAD (默认)
 python Omnihand/voice_llm_control.py --mode ptt       # 按键模式
 python Omnihand/voice_llm_control.py --api-key sk-xxx # 命令行传 key
 ```
+
+---
+
+## 附录 C: 豆包端到端实时语音大模型 — 语音到语音 ✅
+
+用豆包端到端实时语音大模型-全双工版本 (Seeduplex) 替代 MiMo 三段式链路,
+**单 WebSocket 完成 ASR + LLM + TTS**, 服务端 VAD, 流式语音输出, 内置 Function Calling.
+
+实现文件: `Omnihand/voice_doubao_control.py` (单文件)
+Prompt/Tools: `Omnihand/voice_llm_prompt.py` → DOUBAO_INSTRUCTIONS / DOUBAO_TOOLS
+配置: `Omnihand/voice_llm_config.json` → `doubao` 段 (真 key 写 .local.json)
+离线测试: `Omnihand/tests/mock_doubao_server.py` + `test_voice_doubao_offline.py`
+依赖新增: `websocket-client==1.8.0` (运行时), `websockets` (仅 mock 测试服务器)
+
+### C.1 架构
+
+```
+Mic (16k int16, 20ms/包) ──WebSocket──▶ input_audio_buffer.append
+                                             │  服务端 VAD 判停 (无需本地 Silero)
+    ◀── transcription.started/delta/completed (ASR)
+    ◀── response.output_text.delta           (文本, 终端显示)
+    ◀── response.output_audio.delta          (TTS 音频, 24k PCM Base64)
+    ◀── response.function_call_arguments.done (FC, 带 call_id)
+                                             │
+                        StreamingPlayer (sounddevice 24k 流式播放)
+                        GestureQueueExecutor (串口唯一持有者, 队列执行)
+                        tool 回传: conversation.item.create (role=tool, call_id 配对)
+```
+
+线程模型 (4 线程): Main('q'/ptt 按键) + PortAudio 回调(写 mic_q)
++ WS send 线程(唯一发送者, 含重连) + WS recv 线程(事件分发) + 手势执行线程(串口独占).
+
+### C.2 协议要点
+
+| 项 | 值 |
+|------|------|
+| 端点 | `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue` |
+| 鉴权 | 请求头 `X-Api-Key` |
+| 帧格式 | 纯 JSON 文本帧, 一帧一事件, type 路由 |
+| session.model | 固定 `1.2.6.1` |
+| 输入 | pcm 16kHz 单声道 int16, Base64 入 `audio` 字段, 20ms/包 |
+| 输出 | pcm_s16le 24kHz (可配 ogg_opus), Base64 入 `delta` 字段 |
+| 判停 | 服务端 VAD (transcription.completed); 可选 `input_audio_buffer.commit` 强制 |
+| 打断 | `response.cancel` (barge-in: 播放中用户开口即发) |
+| FC 回传 | `conversation.item.create` (role=tool, 带原 call_id) |
+| 优雅关闭 | `session.close` → 收到 `session.closed` 再断连 (防 55000001) |
+| 限流 | QPM 默认 60/min (StartSession), 断线重连指数退避 |
+| 上下文 | 服务端保留最近 20 轮 QA; instructions 12K |
+
+### C.3 与附录 B (MiMo) 对比
+
+| 维度 | MiMo 链路 (附录 B) | 豆包全双工 (本附录) |
+|------|--------------------|---------------------|
+| 连接 | 2×HTTP (LLM + TTS) | 1×WebSocket |
+| VAD | 本地 Silero (min_silence 2s) | 服务端 VAD |
+| 动作传递 | 文本 JSON 代码块解析 | Function Calling + call_id 配对 |
+| speed | 未生效 (只打印) | 真正落地: null/fast(0.75s)/medium(1.0s)/slow(3.0s) |
+| 播放 | MCI 完整 WAV 文件 | sounddevice 24k 流式 (预缓冲 3 块) |
+| 打断 | 无 | barge-in (response.cancel + epoch 丢弃) |
+| 端到端典型延迟 | 5~10s | 预期 0.5~1.5s |
+| 失败处理 | — | 一律显式报错退出, 无降级/回退 |
+
+### C.4 运行
+
+```bash
+python Omnihand/voice_doubao_control.py                  # auto (服务端 VAD)
+python Omnihand/voice_doubao_control.py --mode ptt       # 按键说话 (回车开始/结束)
+python Omnihand/voice_doubao_control.py --no-hand        # 不接灵巧手 (模拟执行)
+python Omnihand/voice_doubao_control.py --mock           # 离线联调 (自动起本地 mock)
+python Omnihand/voice_doubao_control.py --api-key sk-xxx # 命令行传 key
+```
+
+Key 优先级: `--api-key` > `.local.json`(doubao.api_key) > base json > `DOUBAO_API_KEY`.
+
+### C.5 工具定义 (Function Calling)
+
+| 工具 | 参数 | 说明 |
+|------|------|------|
+| `do_gesture` | gesture(22 枚举) + speed(null/fast/medium/slow) | 单手势 |
+| `do_sequence` | sequence(打招呼/握手/数字手势/custom) + steps[] | 序列/多手势 |
+| `stop_hand` | 无 | 急停 (复位 + 退出程序) |
+
+FC 采用**入队立即回传**模式 (不等待机械执行, 避免握手 30s 压力检测冻住对话);
+客户端硬校验参数, 非法即拒 (不碰串口).
+
+### C.6 离线测试 (2026-08-13)
+
+18 用例全通过: validate/parse 纯函数 (3), 配置与 key 优先级 (2), session.create 结构 (1),
+事件分发 (7: 音频入队/FC 执行回传/FC 非法拒绝/barge-in/非播报不打断/鉴权退出/5xx 重连),
+E2E mock (5: normal 全流程+call_id 配对/bargein/非法 FC/断线重连/ptt commit).
+
+实机测试阶段 (待 API key):
+1. 无手纯对话 (首包延迟) → 2. 空载手势/速度三档/序列 → 3. 握手压力/急停/抢话/断网 → 4. MiMo vs 豆包延迟对比.

@@ -2,53 +2,41 @@
 
 ## 当前焦点
 
-**单相机状态机重构 + CRP 生成** — 从 Orchestrator/state_machine.py 移植检测+位姿计算, 仅保留 estun_* 的运动流程.
+**豆包端到端实时语音大模型(全双工)替换 MiMo 语音链路** — 单 WebSocket 完成 ASR+LLM+TTS,预期端到端延迟从 5~10s 降到 0.5~1.5s。
 
 ## 最近变更
 
-### VLA 数据采集版状态机 (2026-07-31)
+### 豆包语音控制 (2026-08-13)
 
-1. **`Orchestrator/estun_handle_data_sm.py`** — 新建, 数据采集版 (VLA 训练). 检测器含 Cup 检测 → 用杯位算 Handle P3 倒水点; Phase A→B→C; Phase C 仅 PREGRIP/GRIPDONE/RESET (无 CUP/RELEASE/GRIP).
-2. **`doc/estun_handle_data_sm.crp`** — 35 widgets, 8 points. 从 estun_handle_cup_sm.crp 克隆: 删 Cup 段, 移植旧 orchestrator CRP 的 **H_P4 回退避碰点** (CposOffset: H_P4 = H_P1 + DCp1, DCp1 = H_P3−H_P1 − Retreat, Retreat 按倒水角 B 动态: <25°→150mm, <17.5°→175mm, <12.5°→200mm).
-   - 运动序列: Home → P2 → P1(抓) → H_P4(V100) → H_P3(倒水,sudu) → H_P4(sudu) → P1 → RESET → P2 → Home
-   - Python 只发 3 位姿 (pack_three), H_P4 由 CRP 内 CposOffset 动态计算
-3. **窗口标题修复** — `estun_handle_sm.py`/`estun_handle_cup_sm.py` 中 em dash `—` → ASCII `|` (Windows GBK 下 namedWindow/imshow 编码不一致导致双窗口+乱码).
-4. **生成脚本** — `scripts_gen/gen_handle_data_crp.py` (skill 规范: 备份 .bak + estun_crp_helpers.new_id/write_json; 支持 `--keep-cup` 参数).
-5. **`doc/estun_handle_cup_sm.crp` 补 H_P4** — 53 widgets/11 points. Handle 倒水段加入 H_P4 避碰 (与 data 版相同 DCp1 计算), Cup 段完整保留.
-6. **`doc/estun_handle_sm.crp` P3 速度** — H_P3 MovL `sudu` → `V100` (P3 仅 Z+5cm 抬升, 无需倒水低速).
+1. **`Omnihand/voice_doubao_control.py`** — 新建(单文件实现)。豆包 Seeduplex 全双工 S2S:
+   - WS `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue`,X-Api-Key,纯 JSON 文本帧,model 固定 `1.2.6.1`
+   - 输入 pcm 16k int16 20ms/包 Base64;输出 pcm_s16le 24k 流式;服务端 VAD(无需本地 Silero)
+   - 手势动作走 **Function Calling**(3 工具: do_gesture/do_sequence/stop_hand),入队立即回传,客户端硬校验
+   - 4 线程: Main + PortAudio 回调 + WS send(唯一发送者/重连)+ WS recv(事件分发)+ 手势执行线程(串口独占)
+   - StreamingPlayer(sounddevice 24k,预缓冲 3 块)替代 Windows MCI;barge-in(response.cancel + epoch 丢弃)
+   - speed 三档真正落地: null 直接 / fast 0.75s 插值 / medium 1.0s / slow 3.0s
+   - **无降级**: 无 key/连接失败/播放失败/灵巧手失败一律显式报错退出;鉴权 4xx 不重试;5xx 指数退避重连(上限 5 次)
+2. **`Omnihand/voice_llm_prompt.py`** — 追加 DOUBAO_INSTRUCTIONS + DOUBAO_TOOLS + validate_tool_call + parse_fc_items(现有 MiMo 部分一字未动,两条链路共存)
+3. **`Omnihand/voice_llm_config.json`** — 追加 `doubao` 段(api_key 空占位;真 key 由用户写入 .local.json)
+4. **`Omnihand/tests/mock_doubao_server.py` + `test_voice_doubao_offline.py`** — mock WS 服务器(websockets)+ 18 用例离线测试全通过
+5. **`requirements.txt`** — +websocket-client==1.8.0(运行时);websockets 仅 mock 测试用
+6. **`doc/voice_control_design.md`** — 追加附录 C(协议要点、与 MiMo 对比、工具定义、测试结果)
 
-CRP 现状 (2026-07-31):
-| 文件 | widgets | H_P4 | 说明 |
-|------|---------|------|------|
-| estun_handle_sm.crp | 23 | 无 | 仅水壶, P3=Z-up, 全 V100 |
-| estun_handle_cup_sm.crp | 53 | 有 | Handle 倒水避碰 + Cup 段 |
-| estun_handle_data_sm.crp | 35 | 有 | 数据采集, 无 Cup 段 |
+### 关键协议细节(排坑记录)
 
-### 单相机状态机 + CRP (2026-07-31)
-
-1. **`Orchestrator/estun_handle_sm.py`** — 新建, 仅水壶抓取. 检测器=HandleCupDetector(轻量), 位姿=固定ABC, P3=Z-up.
-2. **`Orchestrator/estun_handle_cup_sm.py`** — 新建, 水壶+水杯. 同上架构, Cup P3=Z-up(cup_lift_z).
-3. **`doc/estun_handle_sm.crp`** — 23 widgets, 对应仅水壶流程.
-4. **`doc/estun_handle_cup_sm.crp`** — 41 widgets, 对应水壶+水杯流程.
-5. **`Orchestrator/config.yaml`** — 新增 `handle_lift_z: 0.05` + `cup_lift_z: 0.05`.
-6. **`Orchestrator/handle_cup_detector.py`** — `detect()` 改为红色优先 (先在 kettle 右侧搜红色胶带, 未找到才回退白色).
-7. **白色把手检测两遍法**: Pass1 严格(原阈值) → Pass2 宽松(暗光), 已合并到 `find_white_handle_roi`.
-
-### 架构差异
-
-| 维度 | 旧 estun_handle_cup_run.py | 新 estun_handle_cup_sm.py |
-|------|--------------------------|--------------------------|
-| 检测器 | RealSenseHandle6D + RealSenseCup6D (SAM/PointNet++) | HandleCupDetector (YOLO+HSV 轻量) |
-| 位姿 | 动态计算 (compute_grasp_rotation + post_correct) | 全部固定 ABC (Orchestrator/config.yaml) |
-| 状态管理 | 模块级全局变量 ×15 | 类封装 (HandleCupSM) |
-| Phase | A→B→C (单体 _handle_client_impl) | A→B→C (3 个独立方法) |
-| Cup P3 | 复杂 target_offset (EE 系旋转+平移) | P1 + Z-up (基系直加) |
+- websocket-client 帧传输中途 recv 超时会损坏数据流 → 连接后 `settimeout(None)` 无限阻塞,死链靠 ping + 服务端关闭检测
+- 下行事件名带前缀: `response.function_call_arguments.done`(不是 function_call_arguments.done)
+- 优雅关闭: session.close → 等 session.closed → 再断连(防 55000001)
+- mock 服务器 shutdown 需 asyncio.Event 通知 serve 退出,不能用 loop.stop() 硬停(pending task 告警)
 
 ## 下一步
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` 导入示教器 |
-| 🔴 | 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` 连机械臂 |
-| 🟡 | LLM 语音控制实机联调 | 连 OmniHand |
-| 🟡 | 加水实测 | 完整流程 |
+| 🔴 | 豆包 API Key 申请 | 火山引擎控制台 → API Key 管理,写入 .local.json 的 doubao.api_key |
+| 🔴 | 实机阶段 1 | 无手纯对话: ASR 正确性 + TTS 流式出声 + 首包延迟记录 |
+| 🔴 | 实机阶段 2 | 空载: 单手势/速度三档/序列/自定义多手势/越界拒绝 |
+| 🟡 | 实机阶段 3 | 握手压力检测、stop 急停、抢话打断、断网重连、音色选择(4 选 1) |
+| 🟡 | 延迟对比 | 同句指令 MiMo vs 豆包各 5 次,结果写回附录 C |
+| 🟡 | CRP 实机导入测试 | estun_handle_sm.crp + estun_handle_cup_sm.crp(此前遗留) |
+| 🟡 | 单相机 SM 实机联调 | estun_handle_sm.py + estun_handle_cup_sm.py(此前遗留) |

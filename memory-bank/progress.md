@@ -1,5 +1,19 @@
 # Progress — Project_hand
 
+### 豆包端到端语音大模型 (全双工) 语音控制 (2026-08-13)
+- [x] `Omnihand/voice_doubao_control.py`: 单文件 S2S 实现 (WS 会话 + 流式音频 + FC + 重连 + barge-in)
+- [x] `voice_llm_prompt.py` 追加 DOUBAO_INSTRUCTIONS/DOUBAO_TOOLS/validate_tool_call/parse_fc_items (MiMo 部分未动)
+- [x] `voice_llm_config.json` 追加 doubao 段 (api_key 空占位)
+- [x] `requirements.txt` +websocket-client==1.8.0
+- [x] mock 服务器 + 18 用例离线测试全通过 (FC 配对/barge-in/重连/优雅关闭)
+- [x] 回归验证: MiMo 链路导入无异常, 两链路共存
+- [x] `doc/voice_control_design.md` 附录 C
+- [ ] 豆包 API Key 申请 (控制台) + 写入 .local.json
+- [ ] 实机阶段 1: 无手纯对话 (首包延迟)
+- [ ] 实机阶段 2: 空载手势/速度三档/序列
+- [ ] 实机阶段 3: 握手/急停/抢话/断网/音色
+- [ ] MiMo vs 豆包延迟对比 (各 5 次)
+
 ### VLA 数据采集版 + CRP 完善 (2026-07-31)
 - [x] `Orchestrator/estun_handle_data_sm.py`: Handle+Cup 检测 → P3 倒水点, 无 Cup 阶段
 - [x] `doc/estun_handle_data_sm.crp` (35 widgets): 含 H_P4 回退避碰点 (CposOffset 动态计算), 无 Cup 段
@@ -82,9 +96,12 @@
 
 | 任务 | 说明 |
 |------|------|
+| 🔴 豆包 API Key 申请 | 火山引擎控制台 → 写入 .local.json doubao.api_key |
+| 🔴 豆包实机联调 (1/2/3) | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色 |
+| 🟡 MiMo vs 豆包延迟对比 | 各 5 次, 写回附录 C |
 | 🔴 CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` |
 | 🔴 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` |
-| 🔴 语音控制实机联调 | 连 OmniHand 完整链路测试 |
+| 🔴 语音控制实机联调 (MiMo) | 连 OmniHand 完整链路测试 (豆包上线后可跳过) |
 | 🟡 完整语音控制接入 | voice_control.py + CRP GOTO |
 | 🟡 HandInCup 优化 | 调参 + 遮挡 |
 | 🟡 加水实测 | 完整流程 |
