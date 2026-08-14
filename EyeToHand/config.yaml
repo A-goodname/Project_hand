@@ -4,8 +4,9 @@ model:
   target_class_id: 0
   device: gpu
 ugreen:
-  camera_id: -1                           # -1=启用 camera_name 自动搜索
-  camera_name: "UGREEN Camera 1080P"      # 按名称匹配 DSHOW 设备
+  camera_id: -1                           # -1=启用自动搜索 (camera_path 优先, 再 camera_name)
+  camera_path: "usb-0:4.2"                # USB 物理口 (同名相机唯一区分; 本机 Camera B 在 4.2 口)
+  camera_name: "UGREEN Camera 1080P"      # 按名称匹配 (回退)
   width: 1280
   height: 720
   fps: 30

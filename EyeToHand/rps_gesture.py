@@ -232,14 +232,15 @@ class RPSGestureDetector:
         ug_cfg = self._cfg.get("ugreen", {})
         cam_id = ug_cfg.get("camera_id", -1)
         cam_name = ug_cfg.get("camera_name", "UGREEN Camera 1080P")
+        cam_path = ug_cfg.get("camera_path", "")
         width = ug_cfg.get("width", 1280)
         height = ug_cfg.get("height", 720)
         fps = ug_cfg.get("fps", 30)
 
         if cam_id == -1:
-            cam_id = find_camera_id([cam_name])
+            cam_id = find_camera_id([cam_name], path_keyword=cam_path or None)
             if cam_id is None:
-                raise RuntimeError(f"未找到摄像头: {cam_name}")
+                raise RuntimeError(f"未找到摄像头: {cam_name} (path={cam_path})")
 
         self._camera = UGreenCamera(
             camera_id=cam_id, width=width, height=height, fps=fps)

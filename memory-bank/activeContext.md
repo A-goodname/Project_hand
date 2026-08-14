@@ -27,6 +27,8 @@
 - `multi_camera_preview.py`: 名称枚举版三相机预览 (UGREEN 自动探测 + D435i color/depth), q/ESC 退出清理正常
 - **花屏根因 (已解决)**: video0 的 "Corrupt JPEG" 是 D435i 与 UGREEN 同 hub 时的等时带宽饱和 (isoc 丢包, 内核日志无报错, 单独跑或降带宽即消失)。**修复: D435i 挪到独立 USB 控制器** (现 2e:00.3), UGREEN x2 在 2a:00.1 — 三相机 720p30 全速 0 丢包
 - 现场结论: D435i (无压缩 color+depth, ~46MB/s) 必须与 UGREEN 分开 hub/控制器; 两台 UGREEN 同 hub 720p30 无问题
+- **Camera B 固定**: 两台 UGREEN 名称/序列号完全相同 (假序列号 SN0001), 唯一区分手段是 USB 物理口 → `camera_path: "usb-0:4.2"` 写入 `EyeToHand/config.yaml`, `camera.py` 支持 ID_PATH 匹配 (优先级高于名称), person_detector/rps_gesture/hand_in_cup 已接入
+- **cv2 Qt 后端中文窗口标题 → 全黑窗口**: Qt5 highgui 字体配置缺失时, 中文标题窗口内容渲染全黑 (白图正常、帧采集正常); 窗口标题必须用 ASCII (如 "UGREEN 4.1" 而非 "UGREEN 口4.1")
 
 ### 豆包语音控制 (2026-08-13)
 

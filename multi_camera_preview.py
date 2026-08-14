@@ -34,7 +34,7 @@ from EyeToHand.camera import UGreenCamera, _list_v4l2_devices
 def find_ugreen_nodes():
     """从 sysfs 找出所有可用的 UGREEN capture 节点 (跳过 metadata)."""
     nodes = []
-    for idx, name in _list_v4l2_devices():
+    for idx, name, _id_path in _list_v4l2_devices():
         if "ugreen" in name.lower():
             nodes.append(idx)
     return nodes

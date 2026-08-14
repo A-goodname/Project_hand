@@ -9,7 +9,7 @@
 | 计算机视觉 | OpenCV, NumPy, MediaPipe Hands |
 | 3D 处理 | pyrealsense2 (仅 Camera A), 深度反投影 |
 | 通信 | TCP socket, USB 串口 (PySerial), OpenCV VideoCapture (Camera B UGREEN: Linux V4L2 / Windows DSHOW) |
-| 设备探测 | Linux: `/sys/class/video4linux` 名称匹配; Windows: pygrabber (DSHOW) |
+| 设备探测 | Linux: `/sys/class/video4linux` 名称匹配 + ID_PATH 物理口 (同名相机区分); Windows: pygrabber (DSHOW) |
 | 配置 | PyYAML |
 
 ## 开发环境

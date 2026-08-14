@@ -99,6 +99,7 @@ class PersonDetector:
         _ugreen_cfg = config_dict.get("ugreen", {})
         self._camera_id = _ugreen_cfg.get("camera_id", camera_id)
         self._camera_name = _ugreen_cfg.get("camera_name", "")
+        self._camera_path = _ugreen_cfg.get("camera_path", "")
 
         self._camera_cfg = {
             "width": _ugreen_cfg.get("width", 1280),
@@ -132,6 +133,7 @@ class PersonDetector:
         self._camera = UGreenCamera(
             camera_id=self._camera_id,
             camera_name=self._camera_name,
+            camera_path=self._camera_path,
             width=self._camera_cfg["width"],
             height=self._camera_cfg["height"],
             fps=self._camera_cfg["fps"],
