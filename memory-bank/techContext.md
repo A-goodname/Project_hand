@@ -59,3 +59,4 @@
 - 手眼标定结果存储在 YAML 文件, 各模块独立读取
 - HandInCup: YOLOv8n (杯检测, class=41) + MediaPipe Hands (手部 21 landmarks, hand_landmarker.task)
 - HandInCup 模型路径可配置: `EyeToHand/config.yaml` → `hand_in_cup` 段
+- **/dev/videoN 编号不稳定** (插拔/驱动重绑会重排): 严禁硬编码索引, Camera B 必须按名称枚举 (EyeToHand/camera.py 的 sysfs 探测)

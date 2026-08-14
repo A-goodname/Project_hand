@@ -20,6 +20,13 @@
 4. **git 换行归一化**: 仓库 blob 为 LF、Windows 工作树为 CRLF (83 文件) → 设置 `core.autocrlf input` 后 86 个假变更归零; `core.ignorecase=true` (Windows 克隆遗留) 掩盖过 doc/ 两个文件大小写改名 → 本次提交暴露为 rename
 5. **`.gitattributes`** — 新增 `* text=auto` + 二进制类型标记, 换行策略固化进仓库
 
+### 三相机联调验证 (2026-08-14)
+
+- 三相机同时采集: UGREEN x2 (1280x720 MJPG, 27/28fps) + D435i (640x480 color+depth, 28fps) 全速无冲突
+- **排坑: /dev/videoN 编号不稳定** — 插拔 USB 和 pyrealsense2 驱动 unbind/rebind 都会重排 video 节点; 硬编码索引 (如 video6) 会开到错误的设备, 表现是 "Device or resource busy" 或 "can't open camera" (曾误判为 USB 控制器等时带宽争抢)。**结论: 一律用 `/sys/class/video4linux/videoN/name` 按名称枚举 (EyeToHand/camera.py 已实现), 禁止硬编码索引**
+- `multi_camera_preview.py`: 名称枚举版三相机预览 (UGREEN 自动探测 + D435i color/depth), q/ESC 退出清理正常
+- 已知问题: video0 UGREEN 的 MJPG 流持续 "Corrupt JPEG data" 警告 (疑似 USB 链路), video8 正常, 待现场排查
+
 ### 豆包语音控制 (2026-08-13)
 
 1. **`Omnihand/voice_doubao_control.py`** — 新建(单文件实现)。豆包 Seeduplex 全双工 S2S:

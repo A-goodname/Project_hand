@@ -5,8 +5,13 @@
 - [x] Proj 环境依赖安装 (opencv/pyyaml/pyserial/pyrealsense2/ultralytics/mediapipe), 排坑: pyrealsense2 版本后缀 + opencv-contrib 版本冲突
 - [x] 清理 __pycache__/.pyc + Windows 专属二进制 (win .pyd, RealSense SDK 安装器)
 - [x] git 换行归一化: core.autocrlf input (86 假变更→3 真实) + .gitattributes (text=auto)
-- [ ] Linux 实机验证: UGREEN V4L2 720P MJPG 打开 + PersonDetector 跑通
-- [ ] Linux 实机验证: RealSense D435i + ESTUN 配置适配 (estun_config.yaml IP/串口)
+- [x] 灵巧手串口: by-id 稳定路径 + dialout 授权 + 只读身份 + RESET 自检 (O10, B655****0014)
+- [x] ESTUN 握手: 4 步 CRP (连接/推流/'OK' 接收/关闭) 全通过, 机械臂 192.168.101.100
+- [x] 三相机同时采集: UGREEN x2 (27/28fps) + D435i (28fps) 全速无冲突
+- [x] 排坑: /dev/videoN 编号随插拔/驱动重绑漂移 → 必须按 sysfs 名称枚举, 禁止硬编码索引
+- [x] `multi_camera_preview.py` 新建 (名称枚举版三相机预览)
+- [ ] video0 UGREEN 的 MJPG 流有 JPEG 解码损坏 (花屏待排查, 疑似 USB 链路/hub 共享)
+- [ ] 重登会话后验证 dialout 直连 (当前用 sg dialout 绕过)
 
 ### 豆包端到端语音大模型 (全双工) 语音控制 (2026-08-13)
 - [x] `Omnihand/voice_doubao_control.py`: 单文件 S2S 实现 (WS 会话 + 流式音频 + FC + 重连 + barge-in)
