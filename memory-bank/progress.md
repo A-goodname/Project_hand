@@ -2,9 +2,10 @@
 
 ### P2/P1 双确认协议适配 (2026-08-14, 进行中)
 - [x] 交接文档: `doc/p2p1-dual-confirm-handoff-2026-08-14.md` + memory-bank 同步
-- [ ] 回传: `git diff 132051c..HEAD` (源码/requirements/配置)
-- [ ] 回传: CRP 文本版源码 (示教器导出, Phase A-C)
-- [ ] 回传: 运行入口文件名 + 所用 CRP 文件名/版本 + SHA-256
+- [x] 回传: `git diff 132051c..HEAD` (源码/requirements/配置) — 已发送对方 inbox 校验通过 (sha256 `30d64559...`)
+- [x] 回传: CRP 文本版源码 — 离线解析版已发送对方 inbox 校验通过 (sha256 `45e8f571...`); 示教器官方导出版如需则待现场操作
+- [x] 已发送: estun-omnihand-robotics skill 包 (tar.gz+sha256) → 对方 inbox 校验通过 (2026-08-14)
+- [x] 回传: 运行入口清单 — `~/p2p1-handoff-staging/run-entry-inventory-2026-08-14.md` 已发送对方校验通过 (main.py/state_machine.py/estun_config.yaml/crp SHA-256 + 基准 commit 132051c→HEAD 2dd6fc9, 工作树 clean; 注: CRP 不受 git 管理, 版本以 SHA+mtime 为准)
 - [ ] D0: 统一标定共享加载器, 失败阻止启动 (清 15 处 np.eye(4) 回退)
 - [ ] D0: PREGRIP 与位姿确认分离
 - [ ] P2/P1 双确认: CRP Phase A-C 消息序列改造 (P2_ARRIVED/GRASP_AUTH/P1_ARRIVED/GRIP_AUTH/GRIPDONE)

@@ -6,6 +6,22 @@
 
 ## 最近变更
 
+### 回传材料准备 + skill 包发送 (2026-08-14)
+
+1. `~/p2p1-handoff-staging/` 建立: `git-diff-132051c..HEAD.patch` (13 文件/529 行, 排除 memory-bank 内部记录与对方已有的交接文档) + `handlepluscup-orchestrator.crp.txt` (离线解析版, 143 节点/22 points/嵌套块展开)
+2. 基线核对: 对方锁定的 SHA-256 (crp `342cb0e9...` / state_machine `f3cd72b1...`) 与本机当前文件完全一致 — 回传 diff 基线正确
+3. 已发送 (对方 inbox/from-real-host/ 全部校验通过): estun skill 包 (sha256 `262cf8db...`) + git diff (sha256 `30d64559...`) + CRP 文本版 (sha256 `45e8f571...`)
+4. 已发送 (对方 inbox/from-real-host/ 全部校验通过): estun skill 包 (sha256 `262cf8db...`) + git diff (sha256 `30d64559...`) + CRP 文本版 (sha256 `45e8f571...`) + 运行入口清单 `run-entry-inventory-2026-08-14.md` (main.py `ab13f8...`/state_machine `f3cd72...`/estun_config `d69127...`/crp `342cb0e9...`; 基准 132051c→HEAD 2dd6fc9; CRP 不受 git 管理, 版本=SHA+mtime)
+5. 已回复: `~/VLA-BD/docs/project-hand-reply-d0-p2p1-materials-2026-08-14.md` 发送对方校验通过 — 含材料 SHA-256 全表 + D0 执行计划 + P2/P1 序列理解确认 + Linux 适配只读证据 (串口 by-id 唯一/VID 0483/PID 5740/当前用户 dialout 组✅; 相机 video0-3 UGREEN ×2 + video4-9 D435i serial 342222071364 USB3.2; 待办: 重登会话 dialout 直连验证)
+6. 已发送: 接口协议文档 `project-hand-interface-protocol-2026-08-14.md` (拓扑/Phase0-4步/PhaseA-D序列/位姿格式/超时表/串口帧/安全来源/契约差距) + **CRP 原件** `handlepluscup-orchestrator.crp` (sha256 与对方锁定 `342cb0e9...` 一致)
+7. **理解修正**: ".crp 文件本身就是示教器官方工程格式 (单行 JSON)" — 不存在额外"示教器官方导出版", 无需现场导出; 对方 zip 中已有该 crp
+8. **新工单 (桌面传入)**: `project-hand-detailed-crp-ticket-template-request-2026-08-14.md` — 要求离线创建动态 ticket CRP 模板 (`p2p1-ticket-string-template-2026-08-14.crp`, 证明 A 字符串拼接/B 精确比较/C 允许拒绝分支/D Socket 超时拒绝 4 能力), 拒收手工拼装 JSON, 不修改生产 CRP。已核验: 本机无 Codroid 编辑器 (Linux), 现有 11 CRP 无字符串拼接/比较 block 实例 → 模板须在 Windows 开发机/示教器编辑器上创建
+9. 已回复: `~/VLA-BD/docs/project-hand-reply-crp-ticket-template-2026-08-14.md` 发送对方校验通过 — 确认工单+禁止事项, 澄清请求 3 项 (编辑器位置/版本读取/回传方式), 附执行计划; 等对方答复
+10. **session-barrier 工单已完成回传** (2026-08-14): 对方以《project-hand-estun-session-bound-barrier-work-order-2026-08-14.md》取代动态 ticket 模板工单 (原工单+环境决定作废, 仅"匹配版本 Windows 编辑器/不操作实机"限制保留)。采用现有 block 能力 (CPOS 字符串化/SocketReadStr/TranStrToCpos/数值 flag/If/SocketClose/Return) 实现 P2/P1 双屏障: 生成 `doc/handlepluscup-orchestrator-session-barrier-2026-08-14.crp` (207262B, SHA `3d16aa59...`, 生成脚本 `scripts_gen/gen_session_barrier_crp.py`, 全部 block 从源工程克隆, 零新增 MovL, DummyGraspAck/DummyGripAck 零运动引用), 编辑器 v1.6.3b 打开验证通过, manifest 已生成, 三件套已发对方校验通过
+11. **session-barrier v1 被审计退回 + v2 返工已回传** (2026-08-14): 退回原因 6 处字段不一致 — 4×`lengthunit=mm`→`m` (CPosToStr/TranStrToCpos 克隆自 Phase 0 模板)、2 组 send/read `Socket1`→`Socket0`。已修生成脚本 (显式 patch lengthunit=m + mscname=Socket0) 生成 v2 (`doc/handlepluscup-orchestrator-session-barrier-v2-2026-08-14.crp`, 207258B, SHA `1e109d57...`), 全验证通过, 编辑器 v1.6.3b 打开验证通过, manifest v2 已生成, 三件套已发对方校验通过 (不放桌面, 按要求只放 VLA-BD/docs + inbox)
+12. **Python host session gate 已实现并回传** (2026-08-14): 对方 v2 验收通过后指令. 新增 `Orchestrator/session_barrier.py` (SessionBarrier 状态机 WAIT_P2_ARRIVED→WAIT_P1_ARRIVED→WAIT_GRIPDONE→PASSED + pregrasp/grasp 一次性 ticket + 严格 CPOS 解析 + 容差/时效/标定摘要/新鲜观测校验 + BarrierReject 原因码), `state_machine.py` 改造 (load_cam2ee 严格化抛 CalibrationError 禁 np.eye(4) + 标定加载移至 TCP server 前 + 保留 D435i 至 P2 复核 + _refresh_handle_observation/_release_camera_a_late + GRIPDONE 一次性 `_grip_done_once`), `handle_cup_detector.py` +last_known_pose_ts, 单测 22 例全过 + py_compile OK. 文件已回传 `~/VLA-BD/docs/python-session-gate-2026-08-14/` + 对方 inbox 校验通过 (SHA 见 changelog)
+13. 待办: 等对方 source pin + 静态状态顺序/标定回退/相机生命周期/hand-close 调用链审计 → 通过后请求故障注入回放/D1; 本地未提交改动 (state_machine/handle_cup_detector/session_barrier/tests) 待对方审计通过后一并提交
+
 ### 训练侧 D0 门禁 + P2/P1 双确认请求 (2026-08-14)
 
 - 对方回传两份请求（`~/VLA-BD/docs/`）：D0 执行门禁 + 控制器 P2/P1 双确认协议适配
