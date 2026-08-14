@@ -25,7 +25,8 @@
 - 三相机同时采集: UGREEN x2 (1280x720 MJPG, 27/28fps) + D435i (640x480 color+depth, 28fps) 全速无冲突
 - **排坑: /dev/videoN 编号不稳定** — 插拔 USB 和 pyrealsense2 驱动 unbind/rebind 都会重排 video 节点; 硬编码索引 (如 video6) 会开到错误的设备, 表现是 "Device or resource busy" 或 "can't open camera" (曾误判为 USB 控制器等时带宽争抢)。**结论: 一律用 `/sys/class/video4linux/videoN/name` 按名称枚举 (EyeToHand/camera.py 已实现), 禁止硬编码索引**
 - `multi_camera_preview.py`: 名称枚举版三相机预览 (UGREEN 自动探测 + D435i color/depth), q/ESC 退出清理正常
-- 已知问题: video0 UGREEN 的 MJPG 流持续 "Corrupt JPEG data" 警告 (疑似 USB 链路), video8 正常, 待现场排查
+- **花屏根因 (已解决)**: video0 的 "Corrupt JPEG" 是 D435i 与 UGREEN 同 hub 时的等时带宽饱和 (isoc 丢包, 内核日志无报错, 单独跑或降带宽即消失)。**修复: D435i 挪到独立 USB 控制器** (现 2e:00.3), UGREEN x2 在 2a:00.1 — 三相机 720p30 全速 0 丢包
+- 现场结论: D435i (无压缩 color+depth, ~46MB/s) 必须与 UGREEN 分开 hub/控制器; 两台 UGREEN 同 hub 720p30 无问题
 
 ### 豆包语音控制 (2026-08-13)
 

@@ -10,7 +10,7 @@
 - [x] 三相机同时采集: UGREEN x2 (27/28fps) + D435i (28fps) 全速无冲突
 - [x] 排坑: /dev/videoN 编号随插拔/驱动重绑漂移 → 必须按 sysfs 名称枚举, 禁止硬编码索引
 - [x] `multi_camera_preview.py` 新建 (名称枚举版三相机预览)
-- [ ] video0 UGREEN 的 MJPG 流有 JPEG 解码损坏 (花屏待排查, 疑似 USB 链路/hub 共享)
+- [x] 花屏排坑: D435i 与 UGREEN 同 hub 时等时带宽饱和 (video0 720p30 丢包花屏, 内核无报错); 把 D435i 挪到独立控制器后三相机 720p30 全速 0 丢包
 - [ ] 重登会话后验证 dialout 直连 (当前用 sg dialout 绕过)
 
 ### 豆包端到端语音大模型 (全双工) 语音控制 (2026-08-13)
