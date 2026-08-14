@@ -2,9 +2,17 @@
 
 ## 当前焦点
 
-**Windows → Linux 环境迁移适配** — 项目从 Windows 迁移到 Linux 工作机 (conda `Proj` 环境 Python 3.11),UGREEN Camera B 已跨平台化,待实机验证。
+**P2/P1 双确认协议适配（对方 D0 门禁）** — 训练侧审计 132051c 后要求：标定失败阻止启动（禁 np.eye(4)）、PREGRIP≠位姿确认、P2 后腕部重观测 + GRASP_AUTH/GRIP_AUTH 一次性双确认。交接文档见 `doc/p2p1-dual-confirm-handoff-2026-08-14.md`，CRP 修改用 `.claude/skills/estun-omnihand-robotics/`。
 
 ## 最近变更
+
+### 训练侧 D0 门禁 + P2/P1 双确认请求 (2026-08-14)
+
+- 对方回传两份请求（`~/VLA-BD/docs/`）：D0 执行门禁 + 控制器 P2/P1 双确认协议适配
+- 已审计：标定文件合格（Daniilidis/26 样本/0.228px）；15 个 py 文件含 np.eye(4) 回退待清理；现 CRP `H_P2→H_P1→GRIPDONE` 不满足腕部重观测约束
+- 要求：标定失败阻止启动、PREGRIP 仅手势、双一次性确认点（ticket 绑定、超时/断连安全停止）
+- 待回传：CRP 文本版、`git diff 132051c..HEAD`、运行入口+CRP 版本、SHA-256
+- 交接文档：`doc/p2p1-dual-confirm-handoff-2026-08-14.md`；CRP skill：`.claude/skills/estun-omnihand-robotics/`
 
 ### Linux 环境迁移适配 (2026-08-14)
 

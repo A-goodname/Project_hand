@@ -1,5 +1,15 @@
 # Progress — Project_hand
 
+### P2/P1 双确认协议适配 (2026-08-14, 进行中)
+- [x] 交接文档: `doc/p2p1-dual-confirm-handoff-2026-08-14.md` + memory-bank 同步
+- [ ] 回传: `git diff 132051c..HEAD` (源码/requirements/配置)
+- [ ] 回传: CRP 文本版源码 (示教器导出, Phase A-C)
+- [ ] 回传: 运行入口文件名 + 所用 CRP 文件名/版本 + SHA-256
+- [ ] D0: 统一标定共享加载器, 失败阻止启动 (清 15 处 np.eye(4) 回退)
+- [ ] D0: PREGRIP 与位姿确认分离
+- [ ] P2/P1 双确认: CRP Phase A-C 消息序列改造 (P2_ARRIVED/GRASP_AUTH/P1_ARRIVED/GRIP_AUTH/GRIPDONE)
+- [ ] 等对方基于实际 CRP 出精确补丁 → 故障注入回放 → D1 实机
+
 ### Linux 环境迁移适配 (2026-08-14)
 - [x] `EyeToHand/camera.py` 跨平台: Linux V4L2 + MJPG + sysfs 设备名探测, Windows DSHOW 保留
 - [x] Proj 环境依赖安装 (opencv/pyyaml/pyserial/pyrealsense2/ultralytics/mediapipe), 排坑: pyrealsense2 版本后缀 + opencv-contrib 版本冲突
