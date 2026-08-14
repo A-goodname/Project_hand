@@ -36,7 +36,13 @@ if _project_root not in sys.path:
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 from Orchestrator.handle_cup_detector import HandleCupDetector
 from Orchestrator.logger import session_log
-from Orchestrator.session_barrier import SessionBarrier, BarrierReject, calib_fingerprint
+from Orchestrator.session_barrier import (
+    BarrierReject,
+    SessionBarrier,
+    SessionState,
+    WristObservation,
+    calib_fingerprint,
+)
 from EyeToHand.person_detector import PersonDetector
 
 from EyeToHand.hand_in_cup import HandInCupDetector
@@ -95,11 +101,14 @@ def load_cam2ee(yaml_path):
 
     # 质量门槛 (样本数 / 重投影误差)
     num_samples = calib.get("num_samples")
-    if num_samples is not None and int(num_samples) < _CALIB_MIN_SAMPLES:
-        raise CalibrationError(f"标定样本数不足: {num_samples} < {_CALIB_MIN_SAMPLES}")
     reproj = calib.get("reprojection_error_px")
-    if reproj is not None and float(reproj) > _CALIB_MAX_REPROJ_PX:
-        raise CalibrationError(f"标定重投影误差超标: {reproj} > {_CALIB_MAX_REPROJ_PX}px")
+    try:
+        if num_samples is not None and int(num_samples) < _CALIB_MIN_SAMPLES:
+            raise CalibrationError(f"标定样本数不足: {num_samples} < {_CALIB_MIN_SAMPLES}")
+        if reproj is not None and float(reproj) > _CALIB_MAX_REPROJ_PX:
+            raise CalibrationError(f"标定重投影误差超标: {reproj} > {_CALIB_MAX_REPROJ_PX}px")
+    except (TypeError, ValueError) as exc:
+        raise CalibrationError(f"标定质量字段非法: {exc}") from exc
 
     hand_eye = calib.get("handeye")
     if not isinstance(hand_eye, dict) or not hand_eye:
@@ -130,6 +139,8 @@ def load_cam2ee(yaml_path):
     RRT = R @ R.T
     if np.max(np.abs(RRT - np.eye(3))) > 1e-3:
         raise CalibrationError("旋转矩阵非正交 (非刚体)")
+    if np.max(np.abs(T[3, :] - np.array([0.0, 0.0, 0.0, 1.0]))) > 1e-6:
+        raise CalibrationError("齐次变换最后一行异常")
     # 单位变换拒绝: 平移近零 + 旋转近单位
     if (np.max(np.abs(T[:3, 3])) < 1e-6 and
             np.max(np.abs(R - np.eye(3))) < 1e-6):
@@ -138,12 +149,6 @@ def load_cam2ee(yaml_path):
     t = T[:3, 3]
     print(f"[INFO] 已加载标定矩阵: {use_method}.T_cam_to_gripper, 平移: {t} m")
     return T
-
-
-def calib_fingerprint(T):
-    """标定摘要: 会话内复核标定未变. (方法名+平移量, 变化即拒绝)"""
-    t = T[:3, 3]
-    return f"{t[0]:.6f},{t[1]:.6f},{t[2]:.6f}"
 
 
 # ============================================================
@@ -699,9 +704,10 @@ class HandleGraspAndPourHandler:
         self._handle_stabilizer: Optional[PoseStabilizer] = None
         self._cup_stabilizer: Optional[PoseStabilizer] = None
 
-        # ---- D0 会话屏障 ----
-        self._barrier: Optional[SessionBarrier] = None
-        self._grip_done_once = False          # GRIPDONE 一次性闭合防护
+        # ---- D0 会话屏障：只持有接入互斥，状态留在连接线程局部 ----
+        self._session_lock = threading.Lock()
+        self._session_active = False
+        self._lease_epoch = 0
 
         # ---- 偏移参数 (start 时从 config 加载) ----
         self._skip_frames = 90
@@ -982,7 +988,7 @@ class HandleGraspAndPourHandler:
         self._last_depth_colormap = depth_colormap
         return color, depth, depth_colormap, depth_frame
 
-    def _detect(self, ctx: SharedContext):
+    def _detect(self, ctx: SharedContext, *, force: bool = False):
         """跳帧检测 Handle+Cup (使用轻量 HandleCupDetector)."""
         if self._last_color is None or self._last_depth_frame is None:
             return
@@ -995,7 +1001,7 @@ class HandleGraspAndPourHandler:
             return  # 稳定器尚未就绪, 等待
 
         self._frame_counter += 1
-        if self._frame_counter % self._skip_frames != 1:
+        if not force and self._frame_counter % self._skip_frames != 1:
             return
 
         result = det.detect(self._last_color, self._last_depth_frame)
@@ -1016,7 +1022,9 @@ class HandleGraspAndPourHandler:
                         pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
                         # 基系 ABC 来自 config, 不经过 T_cam2ee 旋转
                         det.last_known_pose = (pos_ee, tuple(self._handle_fixed_abc))
-                        det.last_known_pose_ts = time.time()   # P2 复核新鲜度基准
+                        det.last_known_pose_ts = time.time()
+                        det.last_known_pose_observation_id += 1
+                        det.last_known_pose_at_monotonic_ns = time.monotonic_ns()
                         print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})")
         # (else: 不稳定时保持上次稳定值, 不停清零)
 
@@ -1043,27 +1051,34 @@ class HandleGraspAndPourHandler:
     # D0 屏障辅助: P2 复核新观测 / 延迟释放 Camera A
     # ================================================================
 
-    def _refresh_handle_observation(self, ctx: SharedContext, timeout: float = 6.0):
+    def _refresh_handle_observation(self, ctx: SharedContext, *, after_ns: int, timeout: float = 6.0):
         """P2 复核: 清除旧稳定器缓存, 主动取新帧并检测, 等新稳定把手观测.
 
-        返回观测时间戳 (严格晚于 P2 回执) 或 None (失败 -> 会话终止).
+        返回 ``(observation_id, monotonic_ns)``；旧规划观察绝不复用。
         """
         det = ctx.handle_cup_detector
         if det is None or self._handle_stabilizer is None:
             return None
-        # 旧缓存作废: 新代际 + 清空缓冲
+        old_observation_id = det.last_known_pose_observation_id
+        det.last_known_pose = None
+        det.last_known_pose_ts = 0.0
+        det.last_known_pose_at_monotonic_ns = 0
         self._handle_stabilizer.reset()
         self._handle_stabilizer.capture_generation()
-        deadline = time.time() + timeout
-        while time.time() < deadline and not ctx.stop_event.is_set():
+        self._frame_counter = 0
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not ctx.stop_event.is_set():
             color, depth, _cmap, depth_frame = self._get_frames(ctx)
             if color is not None and depth_frame is not None:
-                self._frame_counter = 1          # 强制本轮检测 (跳帧节流)
-                self._detect(ctx)
-                if det.last_known_pose is not None and det.last_known_pose_ts > 0:
-                    ts = det.last_known_pose_ts
-                    print(f"[BARRIER] P2 复核新观测 @ts={ts:.3f}")
-                    return ts
+                self._detect(ctx, force=True)
+                observed_ns = det.last_known_pose_at_monotonic_ns
+                if (
+                    det.last_known_pose is not None
+                    and det.last_known_pose_observation_id > old_observation_id
+                    and observed_ns > after_ns
+                ):
+                    print(f"[BARRIER] P2 后新观测 id={det.last_known_pose_observation_id}")
+                    return det.last_known_pose_observation_id, observed_ns
             time.sleep(0.05)
         print("[BARRIER] P2 复核超时: 未获得新稳定观测")
         return None
@@ -1086,22 +1101,34 @@ class HandleGraspAndPourHandler:
             return
         try:
             conn, addr = self._server.accept()
+            with self._session_lock:
+                if self._session_active:
+                    print(f"[BARRIER] 拒绝并发 TCP 会话: {addr}")
+                    conn.close()
+                    return
+                self._session_active = True
+                self._lease_epoch += 1
+                lease_epoch = self._lease_epoch
             print(f"[INFO] 机器人已连接: {addr}")
             session_log(f"TCP 8080 机器人已连接: {addr}")
             t = threading.Thread(
                 target=self._handle_client_impl,
-                args=(conn, addr, ctx),
+                args=(conn, addr, ctx, lease_epoch),
                 daemon=True,
             )
             t.start()
         except BlockingIOError:
             pass
 
+    def _release_session(self):
+        with self._session_lock:
+            self._session_active = False
+
     # ================================================================
     # TCP 客户端处理 (单 Session 完整协议)
     # ================================================================
 
-    def _handle_client_impl(self, conn: socket.socket, addr, ctx: SharedContext):
+    def _handle_client_impl(self, conn: socket.socket, addr, ctx: SharedContext, lease_epoch: int):
         """单 TCP Session 全流程: 移植自 estun_handle_cup_run._handle_client_impl.
 
         关键差异:
@@ -1121,6 +1148,7 @@ class HandleGraspAndPourHandler:
             except Exception:
                 pass
             PoseStabilizer.on_disconnect()
+            self._release_session()
             print(f"[INFO] 客户端已断开: {addr}")
 
         # ---- 预计算工具偏移 ----
@@ -1145,6 +1173,10 @@ class HandleGraspAndPourHandler:
             if len(parts) == 6:
                 robot_xyz = (float(parts[0]), float(parts[1]), float(parts[2]))
                 robot_ABC = (float(parts[3]), float(parts[4]), float(parts[5]))
+                if not all(np.isfinite(value) for value in (*robot_xyz, *robot_ABC)):
+                    print("[WARN] 初始位姿含非有限值")
+                    _cleanup()
+                    return
                 session_log(f"Phase A 初始位姿: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) "
                             f"ABC=({robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f})")
                 print(f"[INFO] 机器人当前末端: xyz=({robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f}) "
@@ -1164,16 +1196,15 @@ class HandleGraspAndPourHandler:
 
         # ---- D0 会话屏障: 本 TCP 会话即一个 run ----
         # P0 必须为本会话 Phase A 实际位姿, 米/度, 非全零 (全零原点不可作为有效回执)
-        if (abs(robot_xyz[0]) < 1e-9 and abs(robot_xyz[1]) < 1e-9 and abs(robot_xyz[2]) < 1e-9):
+        if all(abs(value) < 1e-9 for value in (*robot_xyz, *robot_ABC)):
             print("[WARN] Phase A 初始位姿为全零, 拒绝会话")
             _cleanup()
             return
-        _run_id = f"{time.strftime('%Y%m%d%H%M%S')}-{addr[1]}"
-        self._barrier = SessionBarrier(
-            run_id=_run_id,
-            calib_fingerprint=calib_fingerprint(ctx.T_cam2ee),
+        barrier = SessionBarrier(
+            run_id=f"{time.monotonic_ns()}-{lease_epoch}",
+            lease_epoch=lease_epoch,
         )
-        print(f"[BARRIER] run={_run_id} 标定摘要={self._barrier.calib_fingerprint}")
+        grip_done_once = False
 
         R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
         t_ee_base = np.array(robot_xyz, dtype=float)
@@ -1347,12 +1378,20 @@ class HandleGraspAndPourHandler:
                     # D0 屏障: 记录下发目标 (基系 m/deg), 签发 pregrasp ticket
                     p2_target = (tuple(pos_base_2), (A2, B2, C2))
                     p1_target = (tuple(pos_base_1), (A1, B1, C1))
-                    pg_ticket = self._barrier.issue_pregrasp()
+                    planning_observation_id = det.last_known_pose_observation_id
                     conn.sendall(msg.encode("utf-8"))
+                    barrier.arm(
+                        p0_pose=(robot_xyz, robot_ABC),
+                        p2_target=p2_target,
+                        p1_target=p1_target,
+                        planning_observation_id=planning_observation_id,
+                        calibration_fingerprint=calib_fingerprint(ctx.T_cam2ee),
+                        now_ns=time.monotonic_ns(),
+                    )
                     session_log(f"Phase B SEND Handle: {msg}")
-                    session_log(f"[BARRIER] pregrasp ticket 签发: {pg_ticket}")
+                    session_log(f"[BARRIER] pregrasp ticket 签发: lease={lease_epoch}")
                     target_sent = True
-                except (BrokenPipeError, ConnectionResetError) as e:
+                except (BrokenPipeError, ConnectionResetError, BarrierReject, ValueError) as e:
                     print(f"[WARN] 发送 Handle 失败: {e}")
                     _cleanup()
                     return
@@ -1382,6 +1421,12 @@ class HandleGraspAndPourHandler:
                 try:
                     data = conn.recv(1024)
                 except socket.timeout:
+                    try:
+                        barrier.check_timeout(now_ns=time.monotonic_ns())
+                    except BarrierReject as e:
+                        print(f"[BARRIER] 超时拒绝 ({e.code}): {e.reason}")
+                        _cleanup()
+                        return
                     # 每 10s 心跳, 确认在等机器人指令
                     if time.time() - _last_heartbeat > 10:
                         print(f"[WAIT] 等待机器人指令... ({time.strftime('%H:%M:%S')})")
@@ -1398,51 +1443,57 @@ class HandleGraspAndPourHandler:
                 # ============================================================
                 # D0 会话屏障 (P2/P1 双屏障): 屏障通过前所有指令走 barrier
                 # ============================================================
-                if self._barrier.state not in ("PASSED", "REJECTED"):
-                    fresh_obs_ts = None
-                    if self._barrier.state == "WAIT_P2_ARRIVED" and cmd.startswith("P2_ARRIVED|"):
-                        # P2 复核: 清稳定器缓存 + 主动取新帧 + 等新稳定观测
-                        fresh_obs_ts = self._refresh_handle_observation(ctx)
-                        if fresh_obs_ts is None:
-                            print("[BARRIER] P2 复核失败: 未获得新鲜 D435i 观测")
-                            _cleanup()
-                            return
+                if barrier.state is not SessionState.COMPLETE:
+                    if cmd == "PREGRIP":
+                        if self._hand_available:
+                            hand_pre_grip()
+                        session_log("PREGRIP — 仅手势，不推进会话")
+                        continue
                     try:
-                        action, payload = self._barrier.step(
-                            cmd,
-                            p2_target=p2_target,
-                            p1_target=p1_target,
-                            p0_pose=(robot_xyz, robot_ABC),
-                            fresh_obs_ts=fresh_obs_ts,
-                        )
+                        current_calibration = calib_fingerprint(ctx.T_cam2ee)
+                        if barrier.state is SessionState.WAIT_P2_ARRIVED:
+                            barrier.receive_p2(
+                                cmd,
+                                calibration_fingerprint=current_calibration,
+                                now_ns=time.monotonic_ns(),
+                            )
+                            observation = self._refresh_handle_observation(
+                                ctx, after_ns=barrier.p2_arrived_at_ns,
+                            )
+                            if observation is None:
+                                raise BarrierReject("P2 后未获得新稳定 D435i 观测", "STALE_OBS")
+                            observation_id, observed_at_ns = observation
+                            payload = barrier.authorize_grasp(
+                                WristObservation(observation_id, observed_at_ns),
+                                calibration_fingerprint=calib_fingerprint(ctx.T_cam2ee),
+                                now_ns=time.monotonic_ns(),
+                            )
+                            conn.sendall(payload.encode("utf-8"))
+                            session_log(f"[BARRIER] SEND {payload}")
+                            continue
+                        if barrier.state is SessionState.WAIT_P1_ARRIVED:
+                            payload = barrier.receive_p1(
+                                cmd,
+                                calibration_fingerprint=current_calibration,
+                                now_ns=time.monotonic_ns(),
+                            )
+                            conn.sendall(payload.encode("utf-8"))
+                            session_log(f"[BARRIER] SEND {payload}")
+                            continue
+                        if barrier.state is SessionState.WAIT_GRIPDONE:
+                            barrier.receive_gripdone(cmd, now_ns=time.monotonic_ns())
+                            if self._hand_available:
+                                hand_grip_done()
+                            grip_done_once = True
+                            self._release_camera_a_late(ctx)
+                            session_log("[BARRIER] GRIPDONE 通过，灵巧手闭合一次")
+                            continue
+                        raise BarrierReject(f"非法 barrier 状态: {barrier.state}", "STATE")
                     except BarrierReject as e:
                         print(f"[BARRIER] 拒绝 ({e.code}): {e.reason}")
                         session_log(f"[BARRIER] 拒绝 {e.code}: {e.reason}")
                         _cleanup()
                         return
-                    if action == "ACK":
-                        conn.sendall(payload.encode("utf-8"))
-                        session_log(f"[BARRIER] SEND {payload}")
-                        print(f"[BARRIER] SEND {payload}")
-                        continue
-                    if action == "GRIPDONE":
-                        # 仅在此刻允许闭合一次
-                        if self._hand_available:
-                            hand_grip_done()
-                        self._grip_done_once = True
-                        print("[BARRIER] GRIPDONE 通过, 灵巧手闭合")
-                        session_log("[BARRIER] GRIPDONE 通过, 灵巧手闭合")
-                        self._release_camera_a_late(ctx)   # P2 复核结束, 释放 D435i
-                        continue
-                    if action == "PREGRIP":
-                        if self._hand_available:
-                            hand_pre_grip()
-                            session_log("PREGRIP — 灵巧手半闭合 (仅手势)")
-                        else:
-                            session_log("PREGRIP — 灵巧手不可用, 跳过")
-                        continue
-                    # action == "PASS": 屏障已通过, 走旧流程
-                    print("[BARRIER] 屏障已通过, 恢复旧指令流程")
 
                 if cmd == "PREGRIP":
                     if self._hand_available:
@@ -1453,7 +1504,7 @@ class HandleGraspAndPourHandler:
 
                 elif cmd == "GRIPDONE":
                     # D0: 屏障通过后不得重复闭合
-                    if not self._grip_done_once:
+                    if not grip_done_once:
                         if self._hand_available:
                             hand_grip_done()
                     else:
@@ -1585,4 +1636,5 @@ class HandleGraspAndPourHandler:
         PoseStabilizer.on_disconnect()
         ctx.hand_judged.set()  # 通知 main loop 退出
         ctx.stop_event.set()
+        self._release_session()
         print("[INFO] 全流程完成, 退出程序")

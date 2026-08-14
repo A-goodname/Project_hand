@@ -370,6 +370,8 @@ class HandleCupDetector:
         # ---- 供 state_machine 写入 (类型声明防 Pylance 报错) ----
         self.last_known_pose: Optional[tuple] = None      # (pos_ee, euler_ee) or None
         self.last_known_pose_ts: float = 0.0             # last_known_pose 更新时间戳 (P2 复核新鲜度)
+        self.last_known_pose_observation_id: int = 0
+        self.last_known_pose_at_monotonic_ns: int = 0
         self.last_known_cup_pose: Optional[tuple] = None  # (pos_cam, euler_cam) or None
 
     # ------------------------------------------------------------

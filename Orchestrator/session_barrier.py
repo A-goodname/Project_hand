@@ -1,249 +1,328 @@
 # -*- coding: utf-8 -*-
+"""Pure, fail-closed PC-side gate for the ESTUN P2/P1 CRP barriers.
+
+No ticket is put on the ESTUN wire.  This module binds local tickets to one
+TCP run, its plan, full hand-eye calibration digest and a post-P2 wrist
+observation.  It intentionally has no socket, camera or robot imports.
 """
-Session Barrier — PC 本地 P2/P1 双屏障门禁 (D0 适配)
-====================================================
-对应 CRP: handlepluscup-orchestrator-session-barrier-v2-2026-08-14.crp
+from __future__ import annotations
 
-职责:
-  - 本地一次性 ticket (pregrasp / grasp) 签发与消费, 仅存 PC 内存
-  - P2_ARRIVED|... / P1_ARRIVED|... 严格解析与校验 (米/度 CPOS, 容差, 时效, 标定摘要, 新鲜观测)
-  - 状态机: WAIT_P2_ARRIVED -> WAIT_P1_ARRIVED -> WAIT_GRIPDONE -> PASSED
-  - 任何失败 (格式/容差/越序/超时/断链/标定变化) -> BarrierReject, 调用方必须终止会话
-
-与对方约定 (session-barrier-v2 工单):
-  - 动态 wire-ticket 为 ESTUN 能力边界, 由 PC 本地维护 ticket/租约/时效/状态
-  - <P0> / [P0] 回执 = 本会话 Phase A 已验证的实际 P0 位姿 (米/度, 非全零)
-"""
-
+from dataclasses import dataclass
+from enum import StrEnum
+import hashlib
 import math
+import secrets
+import struct
 import time
 
 
-# ============================================================
-# 异常
-# ============================================================
-
 class BarrierReject(Exception):
-    """屏障拒绝 — 携带机器可读原因码. 调用方必须终止会话."""
+    """Terminal protocol error.  The caller must close the TCP session."""
 
-    def __init__(self, reason: str, code: str = "REJECT"):
+    def __init__(self, reason: str, code: str = "REJECT") -> None:
         super().__init__(reason)
         self.reason = reason
         self.code = code
 
 
-# ============================================================
-# 纯函数: 严格解析与校验 (可独立单测)
-# ============================================================
+class SessionState(StrEnum):
+    WAIT_P2_ARRIVED = "WAIT_P2_ARRIVED"
+    WAIT_FRESH_WRIST_CONFIRMATION = "WAIT_FRESH_WRIST_CONFIRMATION"
+    WAIT_P1_ARRIVED = "WAIT_P1_ARRIVED"
+    WAIT_GRIPDONE = "WAIT_GRIPDONE"
+    COMPLETE = "COMPLETE"
+    REJECTED = "REJECTED"
 
-_ASCII_ALLOWED = frozenset(
-    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,.-+|[]<>: "
-)
+
+@dataclass(frozen=True)
+class WristObservation:
+    """A stable, locally generated wrist observation; never controller input."""
+
+    observation_id: int
+    observed_at_ns: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.observation_id, bool) or not isinstance(self.observation_id, int):
+            raise ValueError("observation_id must be an integer")
+        _require_ns(self.observed_at_ns)
 
 
-def parse_arrived(msg: str, prefix: str):
-    """严格解析 "PREFIX|x,y,z,a,b,c" -> ((x,y,z), (a,b,c)) 或抛 BarrierReject.
+def _require_ns(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("monotonic timestamp must be a non-negative integer")
 
-    拒绝: 空 / 非 ASCII / 含空白 / 前缀不符 / 非 6 个有限数.
-    """
-    if not msg:
-        raise BarrierReject("空消息", "EMPTY")
+
+def _fault(reason: str, code: str) -> None:
+    raise BarrierReject(reason, code)
+
+
+def parse_arrived(msg: object, prefix: str):
+    """Parse exactly ``PREFIX|x,y,z,a,b,c`` in metres/degrees."""
     if not isinstance(msg, str):
-        raise BarrierReject("非字符串", "NOT_STR")
-    try:
-        msg.encode("ascii")
-    except UnicodeEncodeError:
-        raise BarrierReject("非 ASCII 字符", "NON_ASCII")
-    if any(ch.isspace() for ch in msg):
-        raise BarrierReject("消息含空白", "WHITESPACE")
+        _fault("message is not a string", "NOT_STR")
+    if not msg:
+        _fault("empty message", "EMPTY")
+    if not msg.isascii():
+        _fault("message contains non-ASCII characters", "NON_ASCII")
+    if any(char.isspace() for char in msg):
+        _fault("message contains whitespace", "WHITESPACE")
     if not msg.startswith(prefix):
-        raise BarrierReject(f"前缀不符 (期望 {prefix!r})", "BAD_PREFIX")
+        _fault(f"expected prefix {prefix!r}", "BAD_PREFIX")
     body = msg[len(prefix):]
-    if not body or "," not in body:
-        raise BarrierReject("缺少 CPOS 体", "BAD_FORMAT")
     parts = body.split(",")
-    if len(parts) != 6:
-        raise BarrierReject(f"CPOS 需 6 个数, 实际 {len(parts)}", "BAD_COUNT")
+    if len(parts) != 6 or any(not part for part in parts):
+        _fault("CPOS must have six non-empty fields", "BAD_COUNT")
     try:
-        vals = [float(p) for p in parts]
+        values = tuple(float(part) for part in parts)
     except ValueError:
-        raise BarrierReject("CPOS 含非数字", "BAD_NUMBER")
-    if not all(math.isfinite(v) for v in vals):
-        raise BarrierReject("CPOS 含非有限数", "NOT_FINITE")
-    return (tuple(vals[0:3]), tuple(vals[3:6]))
+        _fault("CPOS contains a non-numeric field", "BAD_NUMBER")
+    if not all(math.isfinite(value) for value in values):
+        _fault("CPOS contains a non-finite field", "NOT_FINITE")
+    return values[:3], values[3:]
 
 
-def pose_within_tolerance(actual_xyz, actual_abc, target_xyz, target_abc,
-                          pos_tol=0.02, ang_tol=5.0):
-    """位置欧氏距离 <= pos_tol (m); 每轴角度差 <= ang_tol (deg)."""
-    d_pos = math.sqrt(sum((a - b) ** 2 for a, b in zip(actual_xyz, target_xyz)))
-    if d_pos > pos_tol:
-        return False, f"位置偏差 {d_pos:.4f}m 超容差 {pos_tol}m"
-    for a, b in zip(actual_abc, target_abc):
-        if abs(a - b) > ang_tol:
-            return False, f"角度偏差 {abs(a - b):.2f}deg 超容差 {ang_tol}deg"
-    return True, ""
+def _angular_distance_deg(left: float, right: float) -> float:
+    raw = abs(left - right) % 360.0
+    return min(raw, 360.0 - raw)
 
 
-# ============================================================
-# 会话屏障状态机
-# ============================================================
+def _pose_matches(actual, expected, *, position_tolerance_m: float, angle_tolerance_deg: float) -> bool:
+    position_error = math.sqrt(sum((actual - target) ** 2 for actual, target in zip(actual[0], expected[0])))
+    return position_error <= position_tolerance_m and all(
+        _angular_distance_deg(actual_angle, target_angle) <= angle_tolerance_deg
+        for actual_angle, target_angle in zip(actual[1], expected[1])
+    )
 
-WAIT_P2_ARRIVED = "WAIT_P2_ARRIVED"
-WAIT_P1_ARRIVED = "WAIT_P1_ARRIVED"
-WAIT_GRIPDONE = "WAIT_GRIPDONE"
-PASSED = "PASSED"
-REJECTED = "REJECTED"
+
+def _normalise_pose(pose, *, label: str):
+    try:
+        xyz, abc = pose
+        values = tuple(float(value) for value in (*xyz, *abc))
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} must contain xyz and abc triplets") from None
+    if len(values) != 6 or not all(math.isfinite(value) for value in values):
+        raise ValueError(f"{label} must contain six finite values")
+    return values[:3], values[3:]
+
+
+def calib_fingerprint(matrix) -> str:
+    """Digest every finite entry in a 4×4 transform, including rotation."""
+    try:
+        rows = tuple(tuple(float(value) for value in row) for row in matrix)
+    except (TypeError, ValueError):
+        raise ValueError("calibration matrix must be a numeric 4x4 matrix") from None
+    if len(rows) != 4 or any(len(row) != 4 for row in rows):
+        raise ValueError("calibration matrix must be 4x4")
+    values = tuple(value for row in rows for value in row)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("calibration matrix contains a non-finite value")
+    digest = hashlib.sha256()
+    for value in values:
+        digest.update(struct.pack("!d", value))
+    return digest.hexdigest()
 
 
 class SessionBarrier:
-    """单 TCP 会话的 P2/P1 双屏障.
+    """One TCP run.  Instantiate once, call only from that run's handler."""
 
-    每个新 TCP 会话创建一个新实例 (run_id 唯一); 所有状态仅存 PC 内存.
-    """
-
-    def __init__(self, run_id: str, calib_fingerprint: str,
-                 pos_tol: float = 0.02, ang_tol: float = 5.0,
-                 ticket_ttl: float = 30.0):
+    def __init__(
+        self,
+        run_id: str,
+        *,
+        lease_epoch: int,
+        ticket_ttl_s: float = 30.0,
+        gripdone_timeout_s: float = 10.0,
+        position_tolerance_m: float = 0.02,
+        angle_tolerance_deg: float = 5.0,
+    ) -> None:
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("run_id must be non-empty text")
+        if isinstance(lease_epoch, bool) or not isinstance(lease_epoch, int) or lease_epoch < 1:
+            raise ValueError("lease_epoch must be a positive integer")
+        for name, value in (
+            ("ticket_ttl_s", ticket_ttl_s),
+            ("gripdone_timeout_s", gripdone_timeout_s),
+            ("position_tolerance_m", position_tolerance_m),
+            ("angle_tolerance_deg", angle_tolerance_deg),
+        ):
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
         self.run_id = run_id
-        self.calib_fingerprint = calib_fingerprint
-        self.pos_tol = pos_tol
-        self.ang_tol = ang_tol
-        self.ticket_ttl = ticket_ttl
+        self.lease_epoch = lease_epoch
+        self._ticket_ttl_ns = int(ticket_ttl_s * 1_000_000_000)
+        self._gripdone_timeout_ns = int(gripdone_timeout_s * 1_000_000_000)
+        self._position_tolerance_m = float(position_tolerance_m)
+        self._angle_tolerance_deg = float(angle_tolerance_deg)
+        self.state = SessionState.WAIT_P2_ARRIVED
+        self._p0_pose = None
+        self._p2_target = None
+        self._p1_target = None
+        self._planning_observation_id = None
+        self._calibration_fingerprint = None
+        self._plan_digest = None
+        self._pregrasp_ticket = None
+        self._grasp_ticket = None
+        self._p2_arrived_at_ns = None
+        self._gripdone_deadline_ns = None
 
-        self.state = WAIT_P2_ARRIVED
-        self._ticket_seq = 0
-        self._pregrasp_ticket = None      # dict: value/issued_at/plan_digest/consumed
-        self._grasp_ticket = None         # dict: value/issued_at/consumed
-        self._p2_arrived_ts = None
-        self._p1_arrived_ts = None
+    @property
+    def p2_arrived_at_ns(self) -> int:
+        if self._p2_arrived_at_ns is None:
+            raise RuntimeError("P2 has not been received")
+        return self._p2_arrived_at_ns
 
-    # ---------------- ticket 管理 ----------------
+    def arm(
+        self,
+        *,
+        p0_pose,
+        p2_target,
+        p1_target,
+        planning_observation_id: int,
+        calibration_fingerprint: str,
+        now_ns: int | None = None,
+    ) -> None:
+        now_ns = self._now(now_ns)
+        if self._pregrasp_ticket is not None or self.state is not SessionState.WAIT_P2_ARRIVED:
+            self._reject("session already armed", "STATE")
+        self._p0_pose = _normalise_pose(p0_pose, label="P0 pose")
+        if all(value == 0.0 for value in (*self._p0_pose[0], *self._p0_pose[1])):
+            self._reject("P0 pose must not be all zero", "BAD_P0")
+        self._p2_target = _normalise_pose(p2_target, label="P2 target")
+        self._p1_target = _normalise_pose(p1_target, label="P1 target")
+        if isinstance(planning_observation_id, bool) or not isinstance(planning_observation_id, int):
+            self._reject("planning observation ID is invalid", "OBS_ID")
+        if not isinstance(calibration_fingerprint, str) or len(calibration_fingerprint) != 64:
+            self._reject("calibration fingerprint is invalid", "CALIB")
+        self._planning_observation_id = planning_observation_id
+        self._calibration_fingerprint = calibration_fingerprint
+        self._plan_digest = self._digest_plan()
+        self._pregrasp_ticket = self._new_ticket("pregrasp", now_ns)
 
-    def _new_ticket(self, kind: str):
-        self._ticket_seq += 1
-        return {"value": f"{kind}-{self.run_id}-{self._ticket_seq}",
-                "issued_at": time.time(), "consumed": False}
+    def receive_p2(self, raw: object, *, calibration_fingerprint: str, now_ns: int | None = None) -> None:
+        now_ns = self._now(now_ns)
+        self._require_state(SessionState.WAIT_P2_ARRIVED)
+        actual = self._parse_or_reject(raw, "P2_ARRIVED|")
+        self._require_calibration(calibration_fingerprint)
+        self._require_ticket(self._pregrasp_ticket, now_ns)
+        if not _pose_matches(
+            actual,
+            self._p2_target,
+            position_tolerance_m=self._position_tolerance_m,
+            angle_tolerance_deg=self._angle_tolerance_deg,
+        ):
+            self._reject("P2 feedback exceeds tolerance", "P2_TOL")
+        self._p2_arrived_at_ns = now_ns
+        self.state = SessionState.WAIT_FRESH_WRIST_CONFIRMATION
 
-    def issue_pregrasp(self, plan_digest: str = ""):
-        """初始计划发送时签发 pregrasp ticket."""
-        if self.state != WAIT_P2_ARRIVED:
-            raise BarrierReject("状态不允许签发 pregrasp ticket", "STATE")
-        self._pregrasp_ticket = self._new_ticket("pg")
-        self._pregrasp_ticket["plan_digest"] = plan_digest
-        return self._pregrasp_ticket["value"]
+    def authorize_grasp(
+        self,
+        observation: WristObservation,
+        *,
+        calibration_fingerprint: str,
+        now_ns: int | None = None,
+    ) -> str:
+        now_ns = self._now(now_ns)
+        self._require_state(SessionState.WAIT_FRESH_WRIST_CONFIRMATION)
+        self._require_calibration(calibration_fingerprint)
+        if not isinstance(observation, WristObservation):
+            self._reject("fresh wrist observation is invalid", "OBS")
+        if observation.observed_at_ns > now_ns:
+            self._reject("fresh wrist observation is in the future", "OBS_FUTURE")
+        if self._p2_arrived_at_ns is None or observation.observed_at_ns <= self._p2_arrived_at_ns:
+            self._reject("fresh wrist observation must be after P2", "STALE_OBS")
+        if observation.observation_id == self._planning_observation_id:
+            self._reject("fresh wrist observation reused the planning observation", "STALE_OBS")
+        self._grasp_ticket = self._new_ticket("grasp", now_ns)
+        self.state = SessionState.WAIT_P1_ARRIVED
+        return self._ack("<", ">")
 
-    def _check_ticket_fresh(self, ticket):
-        if ticket is None:
-            raise BarrierReject("ticket 不存在", "NO_TICKET")
-        if ticket.get("consumed"):
-            raise BarrierReject("ticket 已消费 (重放)", "REPLAY")
-        if time.time() - ticket["issued_at"] > self.ticket_ttl:
-            raise BarrierReject("ticket 已过期", "TICKET_EXPIRED")
+    def receive_p1(self, raw: object, *, calibration_fingerprint: str, now_ns: int | None = None) -> str:
+        now_ns = self._now(now_ns)
+        self._require_state(SessionState.WAIT_P1_ARRIVED)
+        actual = self._parse_or_reject(raw, "P1_ARRIVED|")
+        self._require_calibration(calibration_fingerprint)
+        self._require_ticket(self._grasp_ticket, now_ns)
+        if not _pose_matches(
+            actual,
+            self._p1_target,
+            position_tolerance_m=self._position_tolerance_m,
+            angle_tolerance_deg=self._angle_tolerance_deg,
+        ):
+            self._reject("P1 feedback exceeds tolerance", "P1_TOL")
+        self._grasp_ticket["consumed"] = True
+        self._gripdone_deadline_ns = now_ns + self._gripdone_timeout_ns
+        self.state = SessionState.WAIT_GRIPDONE
+        return self._ack("[", "]")
 
-    def _reject(self, reason: str, code: str = "REJECT"):
-        self.state = REJECTED
+    def receive_gripdone(self, raw: object, *, now_ns: int | None = None) -> None:
+        now_ns = self._now(now_ns)
+        self._require_state(SessionState.WAIT_GRIPDONE)
+        self._require_gripdone_deadline(now_ns)
+        if raw != "GRIPDONE":
+            self._reject("expected exact GRIPDONE", "SEQ")
+        self.state = SessionState.COMPLETE
+
+    def check_timeout(self, *, now_ns: int | None = None) -> None:
+        now_ns = self._now(now_ns)
+        if self.state is SessionState.WAIT_GRIPDONE:
+            self._require_gripdone_deadline(now_ns)
+
+    def _now(self, now_ns: int | None) -> int:
+        value = time.monotonic_ns() if now_ns is None else now_ns
+        _require_ns(value)
+        return value
+
+    def _parse_or_reject(self, raw: object, prefix: str):
+        try:
+            return parse_arrived(raw, prefix)
+        except BarrierReject as exc:
+            self._reject(exc.reason, exc.code)
+
+    def _require_state(self, expected: SessionState) -> None:
+        if self.state is SessionState.REJECTED:
+            raise BarrierReject("session is already rejected", "STATE")
+        if self.state is not expected:
+            self._reject(f"unexpected state {self.state}", "SEQ")
+
+    def _require_calibration(self, current: str) -> None:
+        if not isinstance(current, str) or current != self._calibration_fingerprint:
+            self._reject("calibration fingerprint changed", "CALIB")
+
+    def _require_ticket(self, ticket, now_ns: int) -> None:
+        if ticket is None or ticket.get("consumed"):
+            self._reject("ticket is absent or consumed", "REPLAY")
+        if ticket.get("scope") != self._plan_digest:
+            self._reject("ticket scope mismatch", "SCOPE")
+        if now_ns > ticket["expires_at_ns"]:
+            self._reject("ticket timeout", "TICKET_TIMEOUT")
+
+    def _require_gripdone_deadline(self, now_ns: int) -> None:
+        if self._gripdone_deadline_ns is None or now_ns > self._gripdone_deadline_ns:
+            self._reject("GRIPDONE timeout", "GRIPDONE_TIMEOUT")
+
+    def _new_ticket(self, kind: str, now_ns: int):
+        return {
+            "id": f"{kind}-{self.run_id}-{secrets.token_hex(12)}",
+            "scope": self._plan_digest,
+            "expires_at_ns": now_ns + self._ticket_ttl_ns,
+            "consumed": False,
+        }
+
+    def _digest_plan(self) -> str:
+        assert self._p2_target is not None and self._p1_target is not None
+        assert self._calibration_fingerprint is not None
+        text = repr((self.run_id, self.lease_epoch, self._calibration_fingerprint, self._p2_target, self._p1_target))
+        return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+    def _ack(self, left: str, right: str) -> str:
+        assert self._p0_pose is not None
+        xyz, abc = self._p0_pose
+        return f"{left}{xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f},{abc[0]:.2f},{abc[1]:.2f},{abc[2]:.2f}{right}"
+
+    def _reject(self, reason: str, code: str) -> None:
+        self.state = SessionState.REJECTED
+        if self._pregrasp_ticket is not None:
+            self._pregrasp_ticket["consumed"] = True
         if self._grasp_ticket is not None:
-            self._grasp_ticket["consumed"] = True   # 撤销, 防重放
-        raise BarrierReject(reason, code)
-
-    # ---------------- 主入口 ----------------
-
-    def step(self, cmd: str, *, p2_target, p1_target, p0_pose,
-             fresh_obs_ts=None):
-        """按当前状态处理一条 CRP 消息.
-
-        Args:
-            cmd: 收到的原始字符串 (已 strip 前后空白)
-            p2_target: (xyz, abc) 本会话下发的 P2 目标 (基系, m/deg)
-            p1_target: (xyz, abc) 本会话下发的 P1 目标
-            p0_pose:  (xyz, abc) Phase A 收到的实际初始位姿 (用于 <P0>/[P0] 回执)
-            fresh_obs_ts: P2 复核新观测的时间戳 (必须 > P2 回执时间)
-
-        Returns:
-            (action, payload):
-              action "ACK"       -> payload 为要发送的回执字符串 (如 "<0.1,0.2,0.3,-90,89,-90>")
-              action "GRIPDONE"  -> 屏障通过, 允许调用 hand_grip_done 一次
-              action "PREGRIP"   -> 仅手势, 状态不变
-              action "PASS"      -> 屏障已通过, 走旧流程
-        """
-        if self.state == REJECTED:
-            raise BarrierReject("会话已被拒绝", "STATE")
-
-        # ---- P2 屏障 ----
-        if self.state == WAIT_P2_ARRIVED:
-            if cmd == "PREGRIP":
-                return ("PREGRIP", None)          # 仅手势
-            if not cmd.startswith("P2_ARRIVED|"):
-                self._reject(f"WAIT_P2 越序消息: {cmd[:40]!r}", "SEQ")
-            try:
-                xyz, abc = parse_arrived(cmd, "P2_ARRIVED|")
-            except BarrierReject as e:
-                self._reject(f"P2 回执解析失败: {e.reason}", "BAD_P2")
-            self._p2_arrived_ts = time.time()
-            ok, why = pose_within_tolerance(xyz, abc, p2_target[0], p2_target[1],
-                                            self.pos_tol, self.ang_tol)
-            if not ok:
-                self._reject(f"P2 回执超容差: {why}", "P2_TOL")
-            try:
-                self._check_ticket_fresh(self._pregrasp_ticket)
-            except BarrierReject as e:
-                self._reject(f"pregrasp: {e.reason}", "PG_" + e.code)
-            if fresh_obs_ts is None or fresh_obs_ts <= self._p2_arrived_ts:
-                self._reject("P2 复核缺少新鲜 D435i 观测 (须晚于 P2 回执)", "STALE_OBS")
-            # 签发 grasp ticket, 进入 P1 屏障
-            self._grasp_ticket = self._new_ticket("grasp")
-            self.state = WAIT_P1_ARRIVED
-            ack = self._fmt_ack(p0_pose, "<", ">")
-            return ("ACK", ack)
-
-        # ---- P1 屏障 ----
-        if self.state == WAIT_P1_ARRIVED:
-            if cmd == "PREGRIP":
-                return ("PREGRIP", None)          # 仅手势
-            if not cmd.startswith("P1_ARRIVED|"):
-                self._reject(f"WAIT_P1 越序消息: {cmd[:40]!r}", "SEQ")
-            try:
-                xyz, abc = parse_arrived(cmd, "P1_ARRIVED|")
-            except BarrierReject as e:
-                self._reject(f"P1 回执解析失败: {e.reason}", "BAD_P1")
-            self._p1_arrived_ts = time.time()
-            ok, why = pose_within_tolerance(xyz, abc, p1_target[0], p1_target[1],
-                                            self.pos_tol, self.ang_tol)
-            if not ok:
-                self._reject(f"P1 回执超容差: {why}", "P1_TOL")
-            try:
-                self._check_ticket_fresh(self._grasp_ticket)
-            except BarrierReject as e:
-                self._reject(f"grasp: {e.reason}", "GRASP_" + e.code)
-            # 一次性消费 grasp ticket
             self._grasp_ticket["consumed"] = True
-            self.state = WAIT_GRIPDONE
-            ack = self._fmt_ack(p0_pose, "[", "]")
-            return ("ACK", ack)
-
-        # ---- GRIPDONE 门 ----
-        if self.state == WAIT_GRIPDONE:
-            if cmd == "GRIPDONE":
-                self.state = PASSED
-                return ("GRIPDONE", None)
-            if cmd == "PREGRIP":
-                return ("PREGRIP", None)          # 仅手势
-            if cmd.startswith("P1_ARRIVED|"):
-                self._reject("grasp ticket 已消费, 重复 P1 回执", "GRASP_REPLAY")
-            self._reject(f"WAIT_GRIPDONE 越序消息: {cmd[:40]!r}", "SEQ")
-
-        # 屏障已通过: 旧流程继续 (GRIPDONE 不得重复闭合)
-        if cmd == "GRIPDONE":
-            raise BarrierReject("GRIPDONE 重复/越序", "REPLAY")
-        return ("PASS", None)
-
-    # ---------------- 内部 ----------------
-
-    @staticmethod
-    def _fmt_ack(p0_pose, lt, gt):
-        """构造 <x,y,z,A,B,C> / [x,y,z,A,B,C] 回执 (m/deg, 3/2 位小数)."""
-        xyz, abc = p0_pose
-        body = (f"{xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f},"
-                f"{abc[0]:.2f},{abc[1]:.2f},{abc[2]:.2f}")
-        return f"{lt}{body}{gt}"
+        raise BarrierReject(reason, code)
