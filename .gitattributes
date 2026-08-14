@@ -1,0 +1,14 @@
+# 换行策略: 仓库统一存储 LF, 检出按平台自动处理
+# (配合 Linux core.autocrlf input / Windows autocrlf=true)
+* text=auto
+
+# 二进制文件: 不做换行转换
+*.pt binary
+*.onnx binary
+*.crp binary
+*.zip binary
+*.pdf binary
+*.wav binary
+*.jpg binary
+*.jpeg binary
+*.png binary

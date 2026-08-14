@@ -1,5 +1,13 @@
 # Progress — Project_hand
 
+### Linux 环境迁移适配 (2026-08-14)
+- [x] `EyeToHand/camera.py` 跨平台: Linux V4L2 + MJPG + sysfs 设备名探测, Windows DSHOW 保留
+- [x] Proj 环境依赖安装 (opencv/pyyaml/pyserial/pyrealsense2/ultralytics/mediapipe), 排坑: pyrealsense2 版本后缀 + opencv-contrib 版本冲突
+- [x] 清理 __pycache__/.pyc + Windows 专属二进制 (win .pyd, RealSense SDK 安装器)
+- [x] git 换行归一化: core.autocrlf input (86 假变更→3 真实) + .gitattributes (text=auto)
+- [ ] Linux 实机验证: UGREEN V4L2 720P MJPG 打开 + PersonDetector 跑通
+- [ ] Linux 实机验证: RealSense D435i + ESTUN 配置适配 (estun_config.yaml IP/串口)
+
 ### 豆包端到端语音大模型 (全双工) 语音控制 (2026-08-13)
 - [x] `Omnihand/voice_doubao_control.py`: 单文件 S2S 实现 (WS 会话 + 流式音频 + FC + 重连 + barge-in)
 - [x] `voice_llm_prompt.py` 追加 DOUBAO_INSTRUCTIONS/DOUBAO_TOOLS/validate_tool_call/parse_fc_items (MiMo 部分未动)
@@ -102,6 +110,8 @@
 
 | 任务 | 说明 |
 |------|------|
+| 🔴 Linux 实机验证: UGREEN | V4L2 720P MJPG + PersonDetector 全链路 |
+| 🔴 Linux 实机验证: 机械臂链路 | estun_config.yaml IP/串口 (COM5 → /dev/ttyUSB*) |
 | 🔴 豆包 API Key 申请 | 火山引擎控制台 → 写入 .local.json doubao.api_key |
 | 🔴 豆包实机联调 (1/2/3) | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色 |
 | 🟡 MiMo vs 豆包延迟对比 | 各 5 次, 写回附录 C |

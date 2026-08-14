@@ -8,17 +8,26 @@
 | 深度学习 | PyTorch 2.x (CUDA 12.6), Ultralytics YOLOv8 / YOLOv8-Pose |
 | 计算机视觉 | OpenCV, NumPy, MediaPipe Hands |
 | 3D 处理 | pyrealsense2 (仅 Camera A), 深度反投影 |
-| 通信 | TCP socket, USB 串口 (PySerial), OpenCV VideoCapture (Camera B UGREEN DSHOW) |
-| 设备探测 | pygrabber (Camera B 名称→DSHOW index 自动匹配) |
+| 通信 | TCP socket, USB 串口 (PySerial), OpenCV VideoCapture (Camera B UGREEN: Linux V4L2 / Windows DSHOW) |
+| 设备探测 | Linux: `/sys/class/video4linux` 名称匹配; Windows: pygrabber (DSHOW) |
 | 配置 | PyYAML |
 
 ## 开发环境
 
-- **OS**: Windows 10
+- **OS**: Windows 10 (原开发机)
 - **IDE**: VS Code
 - **Conda 环境**: `D:\Environment\miniconda\envs\Proj\python.exe`
 - **GPU**: MX450 (可选)
 - **Python 版本**: 3.11+
+
+### Linux 工作机 (2026-08-14 起, 主用)
+
+- **OS**: Ubuntu (Linux 7.0.0-28-generic)
+- **Conda 环境**: `/home/user/miniconda3/envs/Proj` (Python 3.11.15)
+- **GPU**: 可用 (torch 2.13.0+cu126, CUDA 可用)
+- **已装依赖**: numpy 2.4.4, opencv-python / opencv-contrib-python 4.13.0.92, PyYAML 6.0.3, pyserial 3.5, pyrealsense2 2.56.5.9235, ultralytics 8.4.48, mediapipe 0.10.35
+- **未装 (按需)**: EpicEye SDK, pyorbbecsdk2, pygrabber/comtypes (Windows 专属), 语音控制包 (sherpa-onnx / sounddevice / pypinyin / openai / websocket-client)
+- **git 配置**: `core.autocrlf input` + `.gitattributes` (`* text=auto`), 与 Windows 端 `autocrlf=true` 兼容
 
 ## 项目目录结构
 
@@ -40,6 +49,7 @@
 1. `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`
 2. EpicEye SDK (手动打包 whl)
 3. `pip install -r requirements.txt`
+4. 注意: pyrealsense2 需带构建后缀版本 (`==2.56.5.9235`),`==2.56.5` 匹配不到; mediapipe 会拉 opencv-contrib-python,需与 opencv-python 版本对齐 (当前均 4.13.0.92)
 
 ## 关键约束
 

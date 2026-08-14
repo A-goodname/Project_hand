@@ -2,9 +2,23 @@
 
 ## 当前焦点
 
-**豆包端到端实时语音大模型(全双工)替换 MiMo 语音链路** — 单 WebSocket 完成 ASR+LLM+TTS,预期端到端延迟从 5~10s 降到 0.5~1.5s。
+**Windows → Linux 环境迁移适配** — 项目从 Windows 迁移到 Linux 工作机 (conda `Proj` 环境 Python 3.11),UGREEN Camera B 已跨平台化,待实机验证。
 
 ## 最近变更
+
+### Linux 环境迁移适配 (2026-08-14)
+
+1. **`EyeToHand/camera.py`** — 跨平台化:
+   - Linux: `CAP_V4L2` + 先设 MJPG 再设分辨率 (720P/1080P 必需,参考 `Project/camera_view.py`),无需 pygrabber
+   - Linux 设备名探测: 遍历 `/sys/class/video4linux/videoN/name` 匹配 "UGREEN Camera 1080P" (替代 pygrabber DSHOW)
+   - Windows 原 DSHOW + pygrabber 逻辑保留, `_IS_LINUX` 分支切换
+2. **依赖安装 (Proj 环境, Linux)**: opencv-python 4.13.0.92 / PyYAML 6.0.3 / pyserial 3.5 / pyrealsense2 2.56.5.9235 / ultralytics 8.4.48 / mediapipe 0.10.35;torch 2.13.0+cu126 已有
+   - 排坑: PyPI 上 pyrealsense2 版本带构建后缀 (`2.56.5.9235`),requirements 的 `==2.56.5` 匹配不到
+   - 排坑: mediapipe 拉入 opencv-contrib-python 5.0.0.93 覆盖锁定版本 → 降回 4.13.0.92 (cv2 与 requirements 一致)
+   - 按需求排除: EpicEye SDK / Orbbec / pygrabber / comtypes / 语音控制包
+3. **清理**: `__pycache__` 与 `.pyc` 全清; `reference/机械臂_同事运行包_20260713/` 下 Windows 专属二进制删除 (pyrealsense2 win .pyd + RealSense SDK 安装器 x3);logs/runs/calib_data/model 保留
+4. **git 换行归一化**: 仓库 blob 为 LF、Windows 工作树为 CRLF (83 文件) → 设置 `core.autocrlf input` 后 86 个假变更归零; `core.ignorecase=true` (Windows 克隆遗留) 掩盖过 doc/ 两个文件大小写改名 → 本次提交暴露为 rename
+5. **`.gitattributes`** — 新增 `* text=auto` + 二进制类型标记, 换行策略固化进仓库
 
 ### 豆包语音控制 (2026-08-13)
 
@@ -49,6 +63,8 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
+| 🔴 | Linux 实机验证: UGREEN | V4L2 720P MJPG 打开 + PersonDetector 全链路跑通 |
+| 🔴 | Linux 实机验证: 机械臂链路 | estun_config.yaml 按 Linux 调整 (IP/串口 COM5 → /dev/ttyUSB*) |
 | 🔴 | 豆包 API Key 申请 | 火山引擎控制台 → API Key 管理,写入 .local.json 的 doubao.api_key |
 | 🔴 | 实机阶段 1 | 无手纯对话: ASR 正确性 + TTS 流式出声 + 首包延迟记录 |
 | 🔴 | 实机阶段 2 | 空载: 单手势/速度三档/序列/自定义多手势/越界拒绝 |
