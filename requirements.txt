@@ -14,15 +14,18 @@
 
 numpy==2.4.4
 opencv-python==4.13.0.92
+# mediapipe 依赖 opencv-contrib-python, 必须与 opencv-python 同版本, 避免互相覆盖 cv2 目录
+opencv-contrib-python==4.13.0.92
 PyYAML==6.0.3
 pyserial==3.5
-pyrealsense2==2.56.5
+# PyPI 版本带构建后缀 (2.56.5.9235), 裸版本号匹配不到
+pyrealsense2==2.56.5.9235
 pyorbbecsdk2==2.0.18
 ultralytics==8.4.48
 mediapipe==0.10.35
-# Camera B 自动探测 (DSHOW 设备名→索引)
-pygrabber==0.2
-comtypes==1.4.16
+# Camera B 自动探测 (仅 Windows DSHOW; Linux 走 /sys/class/video4linux)
+pygrabber==0.2; sys_platform == 'win32'
+comtypes==1.4.16; sys_platform == 'win32'
 # 语音控制 (ASR + 麦克风)
 sherpa-onnx==1.13.4
 sounddevice==0.5.5

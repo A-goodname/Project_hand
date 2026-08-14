@@ -17,7 +17,7 @@ estun_test.py — TCP 服务器,持续发送机械臂位姿 (xyzabc) 给 ESTUN �
   接收: 纯字符串 GRIP / RELEASE (无分隔符)
 
 机器人端调用示例:
-  SocketCreate(sock, "192.168.101.99", 8080, ret)
+  SocketCreate(sock, "192.168.101.96", 8080, ret)
   SocketReadStr(sock, str, 1000, ret, "[", "]")    ← 持续读位姿
   (到达抓取位后)
   SocketSendStr(sock, "GRIP", ret, "", "")
@@ -34,7 +34,7 @@ import socket
 import time
 
 # ===== 服务器配置 =====
-HOST = "192.168.101.99"  # 服务器 IP 地址,不可更改
+HOST = "192.168.101.96"  # 服务器 IP 地址(本机当前 IP)
 PORT = 8080
 SEND_INTERVAL = 0.1  # 发送间隔 (秒),≈ 10Hz
 
@@ -153,7 +153,7 @@ def start_server():
     print(f"[INFO] TCP 服务器已启动: {HOST}:{PORT}")
     print(f"[INFO] 等待机器人连接...")
     print(f"[INFO] 机器人端请调用:")
-    print(f"      SocketCreate(sock, \"192.168.101.99\", 8080, ret)")
+    print(f"      SocketCreate(sock, \"192.168.101.96\", 8080, ret)")
     print(f"[INFO] 按 Ctrl+C 退出服务器\n")
 
     try:

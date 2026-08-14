@@ -4,11 +4,11 @@
 
 estun:
   tcp_server:
-    host: "192.168.101.2"       # 服务器 IP 地址(本机IP地址)
+    host: "192.168.101.96"      # 服务器 IP 地址(本机IP地址, DHCP 动态分配; 机器人端需连此 IP)
     port: 8080                   # 服务器端口
     phase_b_timeout: 60.0        # Phase B 等待稳定位姿超时 (秒)
   hand:
-    port: "COM5"                 # 灵巧手串口号
+    port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"  # 灵巧手串口 (Linux 稳定路径)
   calibration:
     result_path: "calib_data/calibration_result.yaml"  # 手眼标定结果(相对项目根目录)
   stabilization:

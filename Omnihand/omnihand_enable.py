@@ -13,7 +13,7 @@ if _project_root not in sys.path:
 from Omnihand.omnihand_usb_serial import OmniHandSerial
 import time
 
-PORT = "COM5"           # 串口号 (Windows: COMx, Linux: /dev/ttyUSB0)
+PORT = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"  # 串口 (本机 Linux 稳定路径, 其他机器按实机枚举修改)
 BAUDRATE = 460800       # 波特率
 NODE_ID = 0x01          # 节点ID (默认 0x01)
 VERBOSE = True          # 是否打印详细日志
