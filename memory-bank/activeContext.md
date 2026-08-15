@@ -6,6 +6,20 @@
 
 ## 最近变更
 
+### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
+
+1. **背景**: 水壶把手红胶带物理移除 → 旧"红胶带优先+白回退"检测链失效; 回退到 RealSense_R 已验证的 yolo+sam (test_handle_6D/test_SAM_handle)
+2. **`Orchestrator/handle_cup_detector.py` 重构** (1316 行, 唯一主改造文件; cup 检测与 state_machine/estun SM 未动):
+   - 新链: YOLO kettle → SAM bbox 提示 (`model/sam2_b.pt`, 无降级) → mask 后处理 → 扫描线分离 v2 → PCA 6D → 旋转角 θ → 完整动态 euler_cam
+   - **mask 后处理** `_postprocess_full_mask`: OPEN 3x3(无损去噪) → ERODE 3x3(消渗漏) → CLOSE 5x5(填洞) → 连通域过滤 (最大域+把手侧孤岛保留, 防 SAM 切孤岛丢把手)
+   - **scanline v2** `_scanline_find_handle_v2`: 搜索范围=mask 外接矩形∪bbox (修复 bbox 截断把手外弧); X 中心剔除保守化 (trim_top 默认关保弧, 连续2行超差才剔, 只删对应行)
+   - **完整动态姿态** (非固定角度): dx 特征 (把手/壶身 x 中心偏移) + dx_ref 参考 (运行期自标定 max > 几何兜底 body_w×0.45 > config dx_px) → θ=arccos(|dx|/dx_ref) (夹取 50°, EMA 0.4); R_final = Rot(壶身轴 body PCA, θ) @ R_ref (正对参考缓存, PCA 主轴 Y 对齐防 180° 跳变); euler_cam=相机系 ZYX 动态值, 失败帧回落 config 固定值 (契约: 永不为 None)
+   - 返回 dict 保留 red_center/white_roi/red_contour 兼容键恒 None
+   - config.yaml: 新增 sam_model/sam_conf/sam_roi_expand_ratio/mask_postprocess/scanline/handle_ref/pca_step_handle/pca_step_body; 删除 white_handle/red_handle 段
+3. **离线验证**: py_compile OK; 单测 11 例全绿 (7 session_barrier + 4 gate_source, 源码字符串断言通过); 合成 mask 测试: v2 覆盖完整外弧 (xmax 445 vs 旧版分离失败)、后处理噪点清除/洞填上/把手孤岛保留 (ERODE 仅损 5%)、θ→euler 数学单调性验证
+4. **性能预算**: 反投影 Python 循环是主要开销 → pca_step_handle=2/pca_step_body=4 (body 仅 R_ref 建立后计算); 单帧预计 ~130-150ms, 实机按终端 ms 调参
+5. **待办**: 实机验证 (只读相机): mask+6D 坐标轴 → 后处理效果 → ±30/60° 把手覆盖 → θ 跟随 + 动态 euler (先定 sign 方向); state_machine/estun SM 消费动态 euler 属后续步骤
+
 ### 回传材料准备 + skill 包发送 (2026-08-14)
 
 1. `~/p2p1-handoff-staging/` 建立: `git-diff-132051c..HEAD.patch` (13 文件/529 行, 排除 memory-bank 内部记录与对方已有的交接文档) + `handlepluscup-orchestrator.crp.txt` (离线解析版, 143 节点/22 points/嵌套块展开)

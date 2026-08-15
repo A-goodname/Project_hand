@@ -5,7 +5,7 @@
 orientation_mode: fixed
 
 # 把手方向
-handle_side: right            # 水壶把手方向: right | left
+handle_side: right             # 水壶把手方向: right | left (实机: 把手在左)
 grasp_direction: right        # 抓取方向: right | left
 
 # 检测间隔 (YOLO kettle + cup 每 N 帧运行一次, 30fps 下 N=5≈6Hz)
@@ -27,40 +27,50 @@ cup_rim_radius: 0.035                             # 杯口半径 (m), 用于 lef
 cup_height: 0.100                                 # 杯高先验 (m)
 cup_lift_z: 0.05                                  # Cup P3 Z轴抬起高度 (m, 基系)
 
+# ---- YOLO+SAM 把手检测 (红/白胶带辅助已移除) ----
+sam_model: model/sam2_b.pt                        # SAM 权重 (相对项目根)
+sam_conf: 0.3                                     # SAM 置信度阈值
+sam_roi_expand_ratio: 0.3                         # SAM bbox 提示左右扩展比例
+
+# ---- SAM mask 后处理 (质量提升) ----
+mask_postprocess:
+  erode_kernel: 3           # ERODE 核 (消边界渗漏/噪点; 把手环臂薄, 不宜>5)
+  open_kernel: 3            # OPEN 核 (去孤立 speckle)
+  close_kernel: 5           # CLOSE 核 (填洞, 与 scanline 内部 close 对齐)
+  min_area: 500             # 最大连通域最小面积 (px)
+  largest_cc_only: true     # 只保留最大连通域
+  retry_raw: true           # 后处理失败 → 原始 mask 重试一次 (防 SAM 孤岛)
+
+# ---- 水平扫描线分离 (把手/壶身) ----
+scanline:
+  min_ratio: 0.05           # 把手面积/壶身面积 最小比例
+  max_ratio: 0.55           # 最大比例
+  center_deviation_ratio: 0.5   # X 中心偏差容差 (相对把手宽度; 保守值防切弧)
+  trim_top: false           # 顶部 X 中心一致性剔除 (关=保把手弧)
+  trim_bottom: true         # 底部 X 中心一致性剔除
+  use_mask_extent: true     # 搜索范围扩展到 mask 外接矩形 (防 bbox 截断把手)
+
+# ---- 正对参考旋转角 θ (动态姿态校正) ----
+handle_ref:
+  enabled: true             # false = θ≡0, 输出纯 PCA euler
+  dx_frac_body: 0.45        # 几何兜底: dx_ref = 壶身宽度 × 系数 (距离自适应)
+  dx_px: null               # 配置初值兜底 (px), null=未提供
+  theta_max_deg: 50         # θ 上限 (deg), 超出夹取
+  sign: 1                   # dx→θ 方向符号 (±1, 实机一次标定)
+  ema_alpha: 0.4            # θ EMA 平滑系数
+  auto_calib: true          # 运行期 max|dx| 自标定 (正对时 dx 最大, 只向正对收敛)
+
+# ---- 点云采样步长 (性能预算: 反投影为 Python 循环, step↑ 耗时↓) ----
+pca_step_handle: 2    # 把手点云采样步长
+pca_step_body: 4      # 壶身点云采样步长 (仅 R_ref 建立后计算)
+
 # ---- 深度参数 ----
 depth_min: 0.15       # 最小有效深度 (m)
 depth_max: 1.5        # 最大有效深度 (m)
 depth_z_threshold: 0.05  # 深度离群过滤 (m)
 
-# ---- 固定 ABC (deg) ----
+# ---- 固定 ABC (deg, 检测失败时的回落值) ----
 handle_euler: [-90, 89, -90]
 handle_lift_z: 0.05                                # Handle P3 Z轴抬起高度 (m, 基系)
 cup_euler_back: [-90, 89, -110]
 cup_euler_left: [-90, 89, -90]
-
-# ---- 白色把手检测 ----
-# 参数来源: reference/机械臂_同事运行包_20260713/visionpro.py
-white_handle:
-  search_left_frac: 0.80        # 把手在水壶右侧, 从 kettle bbox 80% 处开始搜索
-  max_saturation: 115           # HSV 饱和度上限 (白色=低饱和, 不变)
-  min_value: 110                # HSV 明度下限 (回退用, 红色优先)
-  min_rgb: 120                  # RGB 三通道最小值下限 (回退用, 红色优先)
-  max_rgb_spread: 150           # RGB 三通道最大差值 (排除彩色)
-  min_component_area: 80.0      # 白色轮廓最小面积 (px)
-  max_component_area: 18000.0   # 白色轮廓最大面积
-  join_px: 25                   # dilate 合并近邻碎片核大小
-  min_pixels: 220               # 合并后白色区域最少像素
-  min_width: 18                 # 最小宽度
-  min_height: 35                # 最小高度
-  max_width: 180                # 最大宽度
-  max_height: 210               # 最大高度
-  roi_margin_x: 14              # ROI 外扩 (x)
-  roi_margin_y: 10              # ROI 外扩 (y)
-
-# ---- 红色胶带检测 (基于 RealSense_R/detect_red_tape 简化) ----
-red_handle:
-  low_hue_max: 10               # 红色低 hue 上限 (0~10)
-  high_hue_min: 170             # 红色高 hue 下限 (170~180)
-  min_saturation: 50            # HSV 饱和度下限
-  min_value: 50                 # HSV 明度下限
-  min_area: 20.0                # 红色最小有效面积(像素)

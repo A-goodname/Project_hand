@@ -1,5 +1,15 @@
 # Progress — Project_hand
 
+### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
+- [x] `handle_cup_detector.py` 重构: YOLO kettle → SAM → 后处理 → scanline v2 → PCA 6D → 完整动态 euler_cam
+- [x] mask 后处理: OPEN→ERODE→CLOSE→连通域过滤 (含把手侧孤岛保留)
+- [x] scanline v2: mask 外接矩形搜索范围 + 保守剔除 (修复 bbox 截断/弧形把手被切)
+- [x] 旋转角 θ: dx 特征 + dx_ref 自标定 + R_ref 正对参考缓存 + 壶身轴合成
+- [x] config.yaml: sam/mask_postprocess/scanline/handle_ref/pca_step 新键, 删 white/red 段
+- [x] 离线验证: py_compile + 单测 11 例全绿 + 合成 mask/数学测试
+- [ ] 实机验证: mask+6D 坐标轴 / 后处理效果 / ±30~60° 把手覆盖 / θ 跟随 + 动态 euler (先定 sign)
+- [ ] 后续: state_machine/estun SM 消费动态 euler (本次范围外)
+
 ### P2/P1 双确认协议适配 (2026-08-14, 进行中)
 - [x] 交接文档: `doc/p2p1-dual-confirm-handoff-2026-08-14.md` + memory-bank 同步
 - [x] 回传: `git diff 132051c..HEAD` (源码/requirements/配置) — 已发送对方 inbox 校验通过 (sha256 `30d64559...`)
