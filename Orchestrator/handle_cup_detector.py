@@ -314,17 +314,19 @@ def _extend_handle_mask(handle_mask, full_mask, kettle_bbox, extend_px, handle_s
         return handle_mask
     y_top, y_bot = int(ys.min()), int(ys.max())
 
-    bx1, _by1, bx2, _by2 = [int(v) for v in kettle_bbox]
+    # 把手侧判定基准: 核心段把手条的 x 范围 (保持长方形/平行四边形形状,
+    # 不依赖 bbox — bbox 含把手时 bx2 偏大, 且扩展行把手条与壶身相连时
+    # 用 bbox 只取到右侧段会破坏形状)
+    core_xs = xs
+    x_lo = float(np.percentile(core_xs, 5))
+    x_hi = float(np.percentile(core_xs, 95))
 
     def _row_handle_side(y):
-        """该行中位于把手侧 (远离壶身) 的 full_mask 像素."""
+        """该行 full_mask 中落在核心段把手条 x 范围内的像素 (整条加入, 形状保持)."""
         idx = np.where(full_mask[y, :])[0]
         if len(idx) == 0:
             return None
-        if handle_side == "right":
-            ext_idx = idx[idx >= bx2 - 10]  # 壶身右侧 (把手侧, 放宽防漏)
-        else:
-            ext_idx = idx[idx <= bx1 + 10]  # 壶身左侧
+        ext_idx = idx[(idx >= x_lo) & (idx <= x_hi)]
         return ext_idx
 
     ext = handle_mask.copy()
@@ -378,14 +380,15 @@ def _compute_pca_axis(mask, depth_frame, anchor_depth,
       4. 点不足时放宽 Z 过滤重试 (z_threshold × 2)
       5. PCA → 最大主成分方向 (归一化) + 点云重心
 
-    ⚠️ 只返回主成分方向 (y_axis), 不构造完整旋转矩阵 —
+    ⚠️ 只返回主成分方向, 不构造完整旋转矩阵 —
     最终姿态坐标系由 _compute_handle_pose_geometry 构建
-    (X=壶身轴, Y=把手轴, Z=X×Y).
+    (X=壶身轴, Y=壶身轴×环法线, Z=X×Y).
 
     返回:
-        (position, y_axis, point_cloud) 或 (None, None, None)
+        (position, axis_max, axis_min, point_cloud) 或 (None, None, None, None)
           position : (x, y, z) 点云重心 (m) — 彩色坐标系
-          y_axis   : 3D 主成分方向 (单位向量, 符号不定)
+          axis_max : 最大主成分方向 (长轴, 单位向量, 符号不定)
+          axis_min : 最小方差方向 (环法线/厚度方向, 单位向量, 符号不定)
           point_cloud: Nx3 点云
     """
     ys, xs = np.where(mask)
@@ -443,7 +446,15 @@ def _compute_pca_axis(mask, depth_frame, anchor_depth,
         return None, None, None
     y_axis = y_axis / norm_y
 
-    return center, y_axis, point_cloud
+    # 最小方差方向 (环法线/厚度方向): 物理固定, 比最大主轴稳定得多 —
+    # 几何法 Y 轴用"壶身轴 × 环法线"替代 PCA 主轴 (弧面主轴对点云变化敏感)
+    min_axis = np.real(eig_vec[:, 2])
+    norm_m = np.linalg.norm(min_axis)
+    if norm_m < 1e-10:
+        return None, None, None
+    min_axis = min_axis / norm_m
+
+    return center, y_axis, min_axis, point_cloud
 
 
 # ============================================================
@@ -569,8 +580,14 @@ class HandleCupDetector:
         # ---- 把手中心模式: mask_center (点云重心) | edge_offset (边界偏移法) ----
         self._pos_mode = _c.get("handle_pos_mode", "edge_offset")
         _eo = _c.get("edge_offset", {})
-        self._edge_down_m = float(_eo.get("down_cm", 4.0)) / 100.0   # 上边界向下 (cm→m)
         self._edge_in_m = float(_eo.get("in_cm", 1.0)) / 100.0       # 把手侧边界向内 (cm→m)
+
+        # ---- 诊断: 保存 mask/点云样本 (PCA 主方向偏斜排查用) ----
+        _dbg = _c.get("debug", {})
+        self._debug_save = bool(_dbg.get("save_samples", False))
+        self._debug_dir = os.path.join(_project_root, _dbg.get("save_dir", "logs/detector_debug"))
+        self._debug_interval = int(_dbg.get("save_interval", 30))
+        self._debug_counter = 0
 
         # ---- 点云采样步长 (性能预算: 反投影为 Python 循环, step↑ 耗时↓) ----
         self._pca_step_handle = int(_c.get("pca_step_handle", 2))
@@ -770,15 +787,22 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def _get_anchor_depth(self, bbox, depth_frame):
-        """bbox 内均匀采样 50 个点, 取有效深度中位数."""
+        """bbox 内均匀采样 50 个点, 取有效深度中位数.
+
+        ⚠️ 固定 seed: 随机采样无 seed 时每帧采样点不同 → anchor 抖动 →
+        Z 离群过滤边界变化 → 点云集合变化 → PCA 主轴漂移 (mask 不变但
+        姿态波动的一大来源). 固定 seed 保证帧间采样点一致 (test_handle_6D
+        原版有 seed(0), 重构时曾丢失).
+        """
+        rng = np.random.default_rng(0)  # 固定 seed → 帧间确定性采样
         x1, y1, x2, y2 = [int(v) for v in bbox]
         h_roi = y2 - y1
         w_roi = x2 - x1
 
         depths = []
         for _ in range(50):
-            cy = y1 + np.random.randint(0, max(h_roi, 1))
-            cx = x1 + np.random.randint(0, max(w_roi, 1))
+            cy = y1 + rng.integers(0, max(h_roi, 1))
+            cx = x1 + rng.integers(0, max(w_roi, 1))
             dp = color_to_depth_pixel(
                 cx, cy, depth_frame, self._depth_scale,
                 self._depth_intr, self._color_intr,
@@ -801,11 +825,13 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def _pca_axis(self, mask, depth_frame, anchor_depth, step=2):
-        """mask 区域 PCA 主成分方向 (彩色坐标系). 返回 (pos, y_axis, point_cloud).
+        """mask 区域 PCA 主成分方向 (彩色坐标系).
 
-        y_axis = 点云长轴 (把手长轴 / 壶身长轴), 单位向量符号不定;
-        最终姿态坐标系由 _compute_handle_pose_geometry 构建 (X=壶身轴,
-        Y=把手轴, Z=X×Y).
+        返回 (pos, axis_max, axis_min, point_cloud):
+          axis_max = 最大主成分方向 (长轴, 符号不定)
+          axis_min = 最小方差方向 (环法线/厚度方向, 符号不定)
+        几何法: Y = 壶身轴 × 环法线 (axis_min) — 比 PCA 长轴稳定
+        (弧面长轴 λ1/λ2 接近, 方向对点云变化敏感).
         """
         assert self._color_intr is not None  # type guard for Pylance
         return _compute_pca_axis(
@@ -823,7 +849,7 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def _compute_handle_pose_geometry(self, handle_axis, body_axis):
-        """3D 几何法构建完整姿态旋转矩阵 (替代 dx→θ→R_ref 自标定链).
+        """3D 几何法构建完整姿态旋转矩阵.
 
         坐标约定 (相机系, 符号规则按 grasp_direction + 图像边界):
           Y = 把手长轴 (handle PCA 主成分方向, 符号不定)
@@ -835,11 +861,8 @@ class HandleCupDetector:
           Z = X×Y (把手面法线, TCP 贴合面; 不假设把手面正对相机,
               "Z>0 朝向相机一侧, 但不完全指向")
 
-        优点 (解决 dx/θ 链问题):
-          - 姿态由 3D 几何自足, 不需要"正对参考"自标定 — 水壶不动也能
-            确定姿态 (解决原 dx_ref 依赖"最大 mask"的问题)
-          - Z 是面法线而非"PCA 最小方差+指向相机" — 水壶旋转后把手面
-            朝向 TCP 贴合面而非相机 (解决长方体把手抓取贴面问题)
+        ⚠️ 曾试用 Y = 壶身轴×环法线 (min_axis) — 实机最小方差方向是
+        环厚方向而非环平面法线, B 角大幅倾斜 (-29°), 已回退 PCA 主轴.
         """
         if body_axis is None:
             return None
@@ -1005,12 +1028,14 @@ class HandleCupDetector:
     #  把手中心: 边界偏移法 (mask 覆盖不全时重心不可靠)
     # ------------------------------------------------------------
 
-    def _compute_handle_center_edge(self, handle_mask, depth_frame, anchor_depth):
-        """用 mask 可靠边界 + 固定物理偏移估计把手中心 (相机系图像方向).
+    def _compute_handle_center_edge(self, handle_mask, depth_frame, anchor_depth,
+                                    handle_cloud=None):
+        """用 mask 可靠边界估计把手中心.
 
-        mask 覆盖不全时点云重心会偏移 (如缺下方 → 重心偏上);
-        上边界与把手侧边界通常可靠 → 中心 = 上边界向下 down_m
-        + 把手侧边界向内 in_m (沿相机系图像方向, 实际距离).
+        mask 覆盖不全时点云重心会偏移; mask 上下边界与把手侧边界通常可靠 →
+        中心 y = 上下边界中点 (自适应 mask 高度, 不依赖固定偏移 — 固定 4cm
+        在 mask 被严格剔除切短时会超出到下边界); 中心 x = 把手侧边界向内
+        in_m (沿相机系图像方向).
 
         参数:
             handle_mask  : np.ndarray (H, W), bool
@@ -1024,6 +1049,7 @@ class HandleCupDetector:
         if len(ys) < 10:
             return None
         y_min = int(ys.min())
+        y_max = int(ys.max())
         if self._handle_side == "right":
             x_edge = int(xs.max())   # 右边界 (right 侧)
         else:
@@ -1055,23 +1081,71 @@ class HandleCupDetector:
                 return None
             return np.median(np.array(pts), axis=0)
 
-        # 上边界行 (图像 y_min) 与 把手侧边界列 的 3D 中值点
+        # 上/下边界行 (y_min/y_max) 与 把手侧边界列 的 3D 中值点
         top_row = [(int(cx), y_min) for cx in np.where(handle_mask[y_min, :])[0]]
+        bot_row = [(int(cx), y_max) for cx in np.where(handle_mask[y_max, :])[0]]
         edge_col = [(x_edge, int(cy)) for cy in np.where(handle_mask[:, x_edge])[0]]
         P_top = _edge_points(top_row)
+        P_bot = _edge_points(bot_row)
         P_edge = _edge_points(edge_col)
-        if P_top is None or P_edge is None:
+        if P_top is None or P_bot is None or P_edge is None:
             return None
 
-        down = float(self._edge_down_m)   # 上边界向下 (m, 沿相机系 +y = 图像向下)
         inward = float(self._edge_in_m)   # 把手侧边界向内 (m, 沿图像水平方向)
-        if self._handle_side == "right":
-            center = np.array([P_edge[0] - inward, P_top[1] + down,
-                               (P_top[2] + P_edge[2]) / 2.0])
+
+        # z: 优先用 mask 点云中位数 (所有把手像素 3D z 的中位, 对边缘噪声鲁棒);
+        # 边界点平均对弧顶/弧侧深度差敏感且样本少 → z 波动大
+        if handle_cloud is not None and len(handle_cloud) >= 10:
+            z_center = float(np.median(handle_cloud[:, 2]))
         else:
-            center = np.array([P_edge[0] + inward, P_top[1] + down,
-                               (P_top[2] + P_edge[2]) / 2.0])
+            z_center = float(np.median([P_top[2], P_bot[2], P_edge[2]]))
+
+        if self._handle_side == "right":
+            center = np.array([P_edge[0] - inward,
+                               (P_top[1] + P_bot[1]) / 2.0,
+                               z_center])
+        else:
+            center = np.array([P_edge[0] + inward,
+                               (P_top[1] + P_bot[1]) / 2.0,
+                               z_center])
         return tuple(center)
+
+    # ------------------------------------------------------------
+    #  诊断: 保存 mask/点云样本 (PCA 主方向偏斜排查)
+    # ------------------------------------------------------------
+
+    def _save_debug_sample(self, color_image, full_mask, body_mask, handle_mask,
+                           handle_cloud, body_cloud, kettle_bbox,
+                           euler, handle_axis, body_axis):
+        """保存 mask 叠加图 (壶身橙/把手绿) + 点云/参数 npz, 供离线分析.
+
+        排查场景: PCA 有时把对角线当主方向 (Y 角 6~10° 而非 -2~2°) —
+        需看 mask 覆盖完整性 (缺弧端? 形状偏斜?) 与点云分布.
+        """
+        os.makedirs(self._debug_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        tag = f"{ts}_{self._debug_counter:05d}"
+
+        vis = color_image.copy()
+        overlay = np.zeros_like(vis)
+        if body_mask is not None:
+            overlay[body_mask] = (0, 100, 255)   # 壶身 → 橙
+        if handle_mask is not None:
+            overlay[handle_mask] = (0, 255, 0)   # 把手 → 绿
+        vis = cv2.addWeighted(vis, 1.0, overlay, 0.5, 0)
+        if kettle_bbox is not None:
+            x1, y1, x2, y2 = [int(v) for v in kettle_bbox]
+            cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 165, 255), 1)
+        cv2.imwrite(os.path.join(self._debug_dir, f"{tag}_mask.png"), vis)
+
+        np.savez(os.path.join(self._debug_dir, f"{tag}_cloud.npz"),
+                 handle_cloud=handle_cloud if handle_cloud is not None else np.zeros((0, 3)),
+                 body_cloud=body_cloud if body_cloud is not None else np.zeros((0, 3)),
+                 bbox=np.array(kettle_bbox, dtype=float),
+                 euler=np.array(euler, dtype=float),
+                 handle_axis=handle_axis if handle_axis is not None else np.zeros(3),
+                 body_axis=body_axis if body_axis is not None else np.zeros(3))
+        print(f"[DEBUG] 样本已保存: {self._debug_dir}/{tag}_*")
 
     # ------------------------------------------------------------
     #  主检测接口
@@ -1125,11 +1199,18 @@ class HandleCupDetector:
                     src_mask = full_mask
 
                 if handle_mask is not None and body_mask is not None:
-                    # ---- 3.5 把手 mask 精细化: 严格剔除后上下扩展补回把手弧两端 ----
-                    handle_mask = _extend_handle_mask(
-                        handle_mask, src_mask, kettle_bbox,
-                        int(self._scan_cfg.get("extend_px", 15)),
-                        self._handle_side)
+                    # ---- 3.5 把手 mask 精细化: 上下扩展 (默认关闭) ----
+                    # 扩展 (无论 L 型/补全) 会猜测缺失部分并污染 PCA 主轴 (Y 角),
+                    # 实机验证均破坏姿态 → extend_px 默认 0 关闭;
+                    # 中心位置由边界偏移法 (edge_offset) 保证, 不依赖 mask 重心.
+                    if int(self._scan_cfg.get("extend_px", 0)) > 0:
+                        handle_mask = _extend_handle_mask(
+                            handle_mask, src_mask, kettle_bbox,
+                            int(self._scan_cfg.get("extend_px", 0)),
+                            self._handle_side)
+                        # 扩展像素同步从 body 移除 (防重叠/污染 body 点云)
+                        body_mask = body_mask.copy()
+                        body_mask[handle_mask] = False
 
                     self._last_handle_mask = handle_mask
                     self._last_body_mask = body_mask
@@ -1137,13 +1218,14 @@ class HandleCupDetector:
                     # ---- 4. 锚点深度 + PCA 主成分 ----
                     anchor_depth = self._get_anchor_depth(kettle_bbox, depth_frame)
                     if anchor_depth is not None:
-                        pos, handle_axis, _cloud = self._pca_axis(
+                        pos, handle_axis, _handle_min_axis, _cloud = self._pca_axis(
                             handle_mask, depth_frame, anchor_depth,
                             step=self._pca_step_handle)
                         # 中心模式: edge_offset (边界偏移法, mask 覆盖不全时重心不可靠)
                         if pos is not None and self._pos_mode == "edge_offset":
                             pos_edge = self._compute_handle_center_edge(
-                                handle_mask, depth_frame, anchor_depth)
+                                handle_mask, depth_frame, anchor_depth,
+                                handle_cloud=_cloud)
                             if pos_edge is not None:
                                 pos = pos_edge
                         if pos is not None and handle_axis is not None:
@@ -1152,15 +1234,15 @@ class HandleCupDetector:
 
                             # ---- 5. 壶身长轴 (body PCA 主成分方向) ----
                             body_axis = None
-                            _bpos, body_axis, _ = self._pca_axis(
+                            _bcloud = None
+                            _bpos, body_axis, _bmin, _bcloud = self._pca_axis(
                                 body_mask, depth_frame, anchor_depth,
                                 step=self._pca_step_body)
 
-                            # ---- 6. 3D 几何法姿态: X=壶身长轴, Y=把手长轴,
-                            #        Z=X×Y (面法线, z>0 朝向相机一侧) ----
-                            R_final = self._compute_handle_pose_geometry(handle_axis, body_axis)
-                            if R_final is None:
-                                R_final = rot  # 壶身轴退化时退回把手 PCA
+                            # ---- 6. 3D 几何法姿态: X=壶身长轴, Y=把手 PCA 主轴,
+                            #        Z=X×Y (面法线, z<0 朝向相机) ----
+                            R_final = self._compute_handle_pose_geometry(
+                                handle_axis, body_axis)
 
                             # ---- 姿态稳定链 (180° 翻转修复):
                             #   帧间锚定 (4 候选最近, 覆盖 Y/Z/X 翻转) → 矩阵 EMA → euler unwrap ----
@@ -1184,6 +1266,15 @@ class HandleCupDetector:
                                 f"[Handle] euler=({euler_dyn[0]:.1f},{euler_dyn[1]:.1f},"
                                 f"{euler_dyn[2]:.1f}) lock={lock_dist:.1f} "
                                 f"grasp={self._grasp_direction}")
+
+                            # 诊断: 保存 mask/点云样本 (PCA 主方向偏斜排查)
+                            if self._debug_save:
+                                self._debug_counter += 1
+                                if self._debug_counter % self._debug_interval == 1:
+                                    self._save_debug_sample(
+                                        color_image, src_mask, body_mask, handle_mask,
+                                        _cloud, _bcloud, kettle_bbox,
+                                        euler_dyn, handle_axis, body_axis)
                         else:
                             # PCA 失败: 姿态状态重置 (防陈旧锚点/平滑缓存)
                             self._last_handle_pos = None

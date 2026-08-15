@@ -1,5 +1,19 @@
 # Progress — Project_hand
 
+### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
+- [x] `_get_anchor_depth` 固定 seed (确定性采样) — 实测 C 44°→3.9°、B 12°→2.2°、A 14°→8.9° (mask 稳定但姿态飘的根因)
+- [x] mask 扩展默认关闭 (extend_px: 0); 中心回退 mask_center; 几何法回退 b0b36cd (Y=PCA 主轴)
+- [x] 位置 x/y/z 1-2mm ✅
+- [ ] A 角残余 8.9° (壶身轴 λ1/λ2=1.14 深度噪声) — 可选 rot_smooth_alpha 或壶身轴稳定化
+- [ ] 实机示教 P1 (estun_teach_handle_p1.py) 待跑
+
+### 姿态稳定性: Y 改用壶身轴×环法线 (2026-08-15)
+- [x] `_pca_axis` 返回最小方差方向 (axis_min); 几何法 Y=cross(壶身轴, 环法线) — 由稳定轴决定, 不受弧面主轴摆动影响
+- [x] fallback: 退化时 Y=PCA 主轴 (旧法, 保连续)
+- [x] 中心回退 mask_center (点云重心); edge_offset 暂弃 (固定偏移相对 mask 过大)
+- [x] 离线验证: 水平/符号/翻转一致/单测 11 例全绿
+- [ ] 实机复测: C 角波动 (目标 <10°, 之前 48°)
+
 ### 检测器重构: 消除不符代码 + 边界偏移中心 (2026-08-15)
 - [x] `_compute_handle_6d_pose` 简化为返回 (pos, y_axis, cloud) 主成分方向 (行为等价)
 - [x] ~~`_extend_handle_mask` 判定修复 (body 中位数)~~ **已回退** — 实机 mask 完全不可用, 根因未明, 恢复 bbox 判定版

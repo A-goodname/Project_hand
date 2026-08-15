@@ -2,9 +2,28 @@
 
 ## 当前焦点
 
-**P2/P1 双确认协议适配（对方 D0 门禁）** — 训练侧审计 132051c 后要求：标定失败阻止启动（禁 np.eye(4)）、PREGRIP≠位姿确认、P2 后腕部重观测 + GRASP_AUTH/GRIP_AUTH 一次性双确认。交接文档见 `doc/p2p1-dual-confirm-handoff-2026-08-14.md`，CRP 修改用 `.claude/skills/estun-omnihand-robotics/`。
+**实机示教 P1（本地主线）** — 检测器已稳定（位置 x/y/z 1-2mm、euler C 3.9°/B 2.2°/A 8.9°），下一步实机示教：`conda run -n Proj python Estun/estun_teach_handle_p1.py`（只读相机+人工示教，程序不发运动指令）。示教产出基系偏置（p1_offset/p1_abc）先记录，state_machine teach 模式（Step 3）仍暂停未实施。
+
+训练侧线（并行）：**P2/P1 双确认协议适配（对方 D0 门禁）** — 审计 132051c 后要求：标定失败阻止启动、PREGRIP≠位姿确认、P2 后腕部重观测 + GRASP_AUTH/GRIP_AUTH 一次性双确认。协作线交接见 `~/VLA-BD/docs/handoff-vla-collaboration-2026-08-15.md` + `~/Project/collab-line/`（不随本仓库）；D1-B 阻断项离线修复中（`~/VLA-BD/docs/d1-a-return-audit-and-d1-b-blockers-2026-08-15.md`）。
 
 ## 最近变更
+
+### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
+
+1. **关键修复: `_get_anchor_depth` 固定 seed** — 随机采样无 seed 时每帧采样 50 点不同 → anchor_depth 抖动 → Z 离群过滤(±5cm)边界变化 → 点云集合每帧不同 → PCA 主轴漂移 (**mask 稳定但姿态大幅波动 44° 的真正根因**; test_handle_6D 原版有 seed(0), 重构时丢失)。修复: `np.random.default_rng(0)` 确定性采样 → 实测 C 角 44°→**3.9°**、B 角 12°→**2.2°**、A 角 14°→8.9° (壶身轴 λ1/λ2=1.14 深度噪声残余); 位置 x/y/z 1-2mm
+2. **mask 扩展默认关闭** (extend_px: 0) — L 型(bbox 判定只加右侧段)与补全(x 范围整条)均破坏 PCA 主轴 (Y 角); 中心由 mask_center 保证
+3. **中心回退 mask_center** (点云重心) — edge_offset 边界偏移法暂弃: 固定偏移 (down_cm 4cm/in_cm 1cm) 相对 mask 实际尺寸过大 (4cm 超 mask 高→中心到底; 1cm 超 mask 宽→中心偏左)
+4. **几何法回退 b0b36cd** (Y=handle PCA 主轴) — "壶身轴×环法线"(min_axis) 试验失败: 实机最小方差方向是**环厚方向** (x 20mm 薄) 而非环平面法线 → B 角大幅倾斜 (-29°); 已删 fallback, 注释记录试验结论
+5. z 改进: mask_center 重心 z 实测 2mm (mask 稳定时重心稳); edge_offset 函数保留 (z 点云中位数逻辑) 未用
+6. 离线验证: 编译 + 单测 11 例全绿; 实机 30 帧波动大幅收敛 (C 3.9°/B 2.2°/A 8.9°/位置 1-2mm)
+
+### 姿态稳定性: Y 改用壶身轴×环法线 (2026-08-15)
+
+1. **实机数据 (44 帧)**: 位置稳定 (x/y 1-2mm, z 中位数方案后 4mm) 但姿态波动大 — A 14°/B 6.5°/**C 48°** (112.8~160.8); mask 稳定但 6D 波动 → 根因: handle PCA **主轴** (环弧面长轴) λ1/λ2≈3.5 接近, 弧面近对称 → 主轴方向对点云微小变化极敏感 (对角线主方向的本质)
+2. **修复**: Y = 壶身轴 × 环法线 — `_pca_axis` 额外返回最小方差方向 (axis_min, 环法线/厚度方向, 物理固定); `_compute_handle_pose_geometry(handle_min_axis, body_axis)` — Y=cross(body, min) 由两个稳定轴决定, 与摆动的主轴无关; 新增 `_compute_handle_pose_geometry_fallback` (退化时 Y=主轴旧法)
+3. **排坑 (数学)**: Y = body×min 的水平性依赖"壶身轴≈竖直 + 环法线≈指向相机 (z)" — 侧面视角场景成立 (光轴水平: 壶身轴≈y、环法线≈z → Y≈x 水平); 初版测试用 min_axis≈x 错误 (环厚方向 ≠ 环平面法线)
+4. 离线验证: Y 水平 (z≈-0.10)/符号/翻转一致/fallback/主轴摆动无关/单测 11 例全绿; **待实机复测 C 角波动**
+5. 中心位置: mask_center (点云重心) 回退生效; edge_offset 边界偏移法暂弃 (固定偏移相对 mask 尺寸过大)
 
 ### 检测器重构: 消除与实际不符的代码 + 边界偏移中心 (2026-08-15)
 
@@ -152,6 +171,9 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
+| 🔴 | **实机示教 P1** | `conda run -n Proj python Estun/estun_teach_handle_p1.py`：①机械臂停在接近产线姿态（静止）输入 R0 ②稳定检测把手（边界偏移中心已回退，用 mask 重心）③示教器手动摆 P1 输入读数 ④重复 ≥3 次（可挪水壶）→ 平均偏置+方差(<5mm) ⑤`--apply` 写 estun_config.yaml（注意 yaml 重写丢注释）。**注意**：T_cam2ee 误差会耦合进偏置（全链 7~11cm 方案水平），示教姿态族与产线一致最稳；Step 3（state_machine teach 模式）暂停中，偏置先记录 |
+| 🟡 | A 角残余 8.9° | 壶身轴 λ1/λ2=1.14 深度噪声放大——可选 `rot_smooth_alpha` 调低（0.4→0.25）或壶身轴与图像竖直混合 |
+| 🟡 | 抓取流程验证 | 示教完成后：把手检测位姿→P1 落点验证（先 `handle_teach.enabled: false` 回退对比） |
 | 🔴 | Linux 实机验证: UGREEN | V4L2 720P MJPG 打开 + PersonDetector 全链路跑通 |
 | 🔴 | Linux 实机验证: 机械臂链路 | estun_config.yaml 按 Linux 调整 (IP/串口 COM5 → /dev/ttyUSB*) |
 | 🔴 | 豆包 API Key 申请 | 火山引擎控制台 → API Key 管理,写入 .local.json 的 doubao.api_key |

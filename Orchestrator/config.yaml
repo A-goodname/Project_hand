@@ -49,16 +49,22 @@ scanline:
   trim_top: true            # 顶部 X 中心一致性剔除 (双向剔, 弧两端由扩展补回)
   trim_bottom: true         # 底部 X 中心一致性剔除
   use_mask_extent: true     # 搜索范围扩展到 mask 外接矩形 (防 bbox 截断把手)
-  extend_px: 50             # 严格剔除后向上/向下扩展行数 (补回把手弧两端, 宁多勿漏)
+  extend_px: 0              # 上下扩展行数 — 默认关闭! 扩展 (L 型/补全) 会猜测缺失
+                            # 部分并污染 PCA 主轴 (Y 角破坏); 中心由边界偏移法保证
 
 # ---- 姿态稳定 (180° 翻转修复) ----
 rot_smooth_alpha: 0.4       # 旋转矩阵 EMA 平滑系数 (矩阵空间平滑, 避万向锁跳变)
 
 # ---- 把手中心模式 ----
-handle_pos_mode: edge_offset   # mask_center (点云重心) | edge_offset (边界偏移法)
-edge_offset:
-  down_cm: 4.0              # 上边界向下 (cm, 实际距离, 沿相机系图像方向)
-  in_cm: 1.0                # 把手侧边界向内 (cm; right→右边界向左, left→左边界向右)
+handle_pos_mode: mask_center   # mask_center (点云重心, 当前) | edge_offset (边界偏移法, 暂不用)
+# edge_offset 边界偏移法曾试用: 固定偏移 (down_cm/in_cm) 相对 mask 尺寸过大
+# (4cm 超 mask 高 → 中心到底; 1cm 超 mask 宽 → 中心偏左), 已回退 mask_center
+
+# ---- 诊断 ----
+debug:
+  save_samples: false       # true=保存 mask/点云样本 (PCA 主方向偏斜排查; 波动分析已用控制台打印)
+  save_dir: logs/detector_debug
+  save_interval: 30         # 每 N 帧存一次
 
 # ---- 点云采样步长 (性能预算: 反投影为 Python 循环, step↑ 耗时↓) ----
 pca_step_handle: 2    # 把手点云采样步长
