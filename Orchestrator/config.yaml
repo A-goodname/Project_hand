@@ -41,24 +41,18 @@ mask_postprocess:
   largest_cc_only: true     # 只保留最大连通域
   retry_raw: true           # 后处理失败 → 原始 mask 重试一次 (防 SAM 孤岛)
 
-# ---- 水平扫描线分离 (把手/壶身) ----
+# ---- 水平扫描线分离 (把手/壶身, 严格模式) ----
 scanline:
   min_ratio: 0.05           # 把手面积/壶身面积 最小比例
   max_ratio: 0.55           # 最大比例
-  center_deviation_ratio: 0.5   # X 中心偏差容差 (相对把手宽度; 保守值防切弧)
-  trim_top: false           # 顶部 X 中心一致性剔除 (关=保把手弧)
+  center_deviation_ratio: 0.25  # X 中心偏差容差 (严格=小值, 保 Y 主轴稳定)
+  trim_top: true            # 顶部 X 中心一致性剔除 (双向剔, 弧两端由扩展补回)
   trim_bottom: true         # 底部 X 中心一致性剔除
   use_mask_extent: true     # 搜索范围扩展到 mask 外接矩形 (防 bbox 截断把手)
+  extend_px: 50             # 严格剔除后向上/向下扩展行数 (补回把手弧两端, 宁多勿漏)
 
-# ---- 正对参考旋转角 θ (动态姿态校正) ----
-handle_ref:
-  enabled: true             # false = θ≡0, 输出纯 PCA euler
-  dx_frac_body: 0.45        # 几何兜底: dx_ref = 壶身宽度 × 系数 (距离自适应)
-  dx_px: null               # 配置初值兜底 (px), null=未提供
-  theta_max_deg: 50         # θ 上限 (deg), 超出夹取
-  sign: 1                   # dx→θ 方向符号 (±1, 实机一次标定)
-  ema_alpha: 0.4            # θ EMA 平滑系数
-  auto_calib: true          # 运行期 max|dx| 自标定 (正对时 dx 最大, 只向正对收敛)
+# ---- 姿态稳定 (180° 翻转修复) ----
+rot_smooth_alpha: 0.4       # 旋转矩阵 EMA 平滑系数 (矩阵空间平滑, 避万向锁跳变)
 
 # ---- 点云采样步长 (性能预算: 反投影为 Python 循环, step↑ 耗时↓) ----
 pca_step_handle: 2    # 把手点云采样步长

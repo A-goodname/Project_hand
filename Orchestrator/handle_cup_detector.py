@@ -25,8 +25,7 @@ import time
 import math
 from typing import Optional
 
-# 项目根目录必须在 import pyrealsense2 之前加入 sys.path,
-# 因为 pyrealsense2 是项目根目录下的 .pyd 文件 (非 pip 安装).
+# 项目根目录加入 sys.path (pyrealsense2 为 pip 包, 此注入供 import RealSense_R 等使用)
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -132,8 +131,8 @@ def _postprocess_full_mask(full_mask, cfg, handle_side="right"):
 def _scanline_find_handle_v2(full_mask, bbox,
                              handle_min_ratio=0.05, handle_max_ratio=0.55,
                              handle_side="right",
-                             handle_center_deviation_ratio=0.5,
-                             trim_top=False, trim_bottom=True,
+                             handle_center_deviation_ratio=0.25,
+                             trim_top=True, trim_bottom=True,
                              use_mask_extent=True):
     """水平扫描线法分离壶身与把手 (v2).
 
@@ -141,16 +140,17 @@ def _scanline_find_handle_v2(full_mask, bbox,
       1. 搜索范围 = mask 非零外接矩形 ∪ bbox (原: 钳到 YOLO bbox) —
          把手外弧超出 bbox 的部分也能扫到, 不再截断 (只向把手侧扩展 x,
          壶身侧仍限 bbox 防吸背景; y 用并集).
-      2. X 中心一致性剔除保守化 (原: 双向整段清零会切掉弧形把手):
-         默认只从底部向上剔 (trim_top=False 保把手弧), 连续 ≥2 行超差
-         才剔, 且只删对应行 (原: 从超差行起整段 y: / :y+1 清零).
+      2. X 中心一致性剔除**严格化** (为 Y 主轴 PCA 稳定):
+         双向剔 (trim_top=True), 单行超差即剔 (原: 连续 ≥2 行),
+         且只删对应行 (原: 从超差行起整段 y: / :y+1 清零).
+         (剔掉的把手弧两端由 _extend_handle_mask 扩展补回)
 
     参数:
         full_mask                     : np.ndarray (H, W), bool, SAM 生成的完整水壶 mask
         bbox                          : [x1, y1, x2, y2], YOLO 检测框
         handle_min_ratio / max_ratio  : 把手面积/壶身面积 最小/最大比例
         handle_side                   : "right" 或 "left", 把手预期侧
-        handle_center_deviation_ratio : X 中心偏差容差(相对把手宽度比例)
+        handle_center_deviation_ratio : X 中心偏差容差(相对把手宽度比例, 严格=小值)
         trim_top / trim_bottom        : 顶部/底部 X 中心一致性剔除开关
         use_mask_extent               : True=搜索范围扩展到 mask 外接矩形
 
@@ -271,15 +271,10 @@ def _scanline_find_handle_v2(full_mask, bbox,
         tol = avg_width * handle_center_deviation_ratio
 
         def _trim(rows_descending):
-            """从一端向另一端扫描, 连续 ≥2 行超差才剔除该行 (只删对应行)."""
-            streak = 0
+            """从一端向另一端扫描, 单行超差即剔除该行 (严格版, 只删对应行)."""
             for y, cxc, _ in rows_descending:
                 if abs(cxc - cx_median) > tol:
-                    streak += 1
-                    if streak >= 2:
-                        handle_mask[y, :] = False
-                else:
-                    streak = 0
+                    handle_mask[y, :] = False
 
         if trim_bottom:
             _trim(sorted(row_centers, key=lambda x: -x[0]))  # 底部向上
@@ -291,6 +286,76 @@ def _scanline_find_handle_v2(full_mask, bbox,
     body_mask[handle_mask] = False
 
     return body_mask, handle_mask
+
+
+def _extend_handle_mask(handle_mask, full_mask, kettle_bbox, extend_px, handle_side):
+    """以把手核心 mask 为基准, 向上/向下扩展补回把手弧两端.
+
+    严格 X 中心一致性剔除会把弧形把手的上/下端切掉; 扩展把 full_mask 中
+    位于把手侧 (远离壶身侧) 的像素补回 → Y 主轴 (长轴 PCA) 稳定且 mask 完整.
+
+    参数:
+        handle_mask : np.ndarray (H, W), bool, 严格剔除后的把手核心 mask
+        full_mask   : np.ndarray (H, W), bool, SAM 完整 mask (补像素来源)
+        kettle_bbox : [x1, y1, x2, y2], YOLO 检测框 (把手侧边界基准:
+                      用 bbox 而非 body mask — body 可能含未剔除行的把手像素)
+        extend_px   : int, 上下扩展行数
+        handle_side : "right" | "left"
+    返回:
+        np.ndarray (H, W), bool, 扩展后的把手 mask
+    """
+    if extend_px <= 0:
+        return handle_mask
+    h, w = full_mask.shape
+    ys, xs = np.where(handle_mask)
+    if len(ys) == 0:
+        return handle_mask
+    y_top, y_bot = int(ys.min()), int(ys.max())
+
+    bx1, _by1, bx2, _by2 = [int(v) for v in kettle_bbox]
+
+    def _row_handle_side(y):
+        """该行中位于把手侧 (远离壶身) 的 full_mask 像素."""
+        idx = np.where(full_mask[y, :])[0]
+        if len(idx) == 0:
+            return None
+        if handle_side == "right":
+            ext_idx = idx[idx >= bx2 - 10]  # 壶身右侧 (把手侧, 放宽防漏)
+        else:
+            ext_idx = idx[idx <= bx1 + 10]  # 壶身左侧
+        return ext_idx
+
+    ext = handle_mask.copy()
+    gap_limit = 5  # 连续无把手像素行数 → 停止 (弧端连接壶身处自然停止)
+    max_rows = extend_px * 4  # 扩展上限 (防失控)
+
+    # 向上贪心扩展
+    gap = 0
+    for y in range(y_top - 1, max(-1, y_top - 1 - max_rows), -1):
+        if y < 0:
+            break
+        ext_idx = _row_handle_side(y)
+        if ext_idx is not None and len(ext_idx) > 0:
+            ext[y, ext_idx] = True
+            gap = 0
+        else:
+            gap += 1
+            if gap >= gap_limit:
+                break
+
+    # 向下贪心扩展
+    gap = 0
+    for y in range(y_bot + 1, min(h, y_bot + 1 + max_rows)):
+        ext_idx = _row_handle_side(y)
+        if ext_idx is not None and len(ext_idx) > 0:
+            ext[y, ext_idx] = True
+            gap = 0
+        else:
+            gap += 1
+            if gap >= gap_limit:
+                break
+
+    return ext
 
 
 # ============================================================
@@ -397,32 +462,6 @@ def _compute_handle_6d_pose(handle_mask, depth_frame, anchor_depth,
 #  4. 把手 2D 特征 + 正对参考旋转角 θ
 # ============================================================
 
-def _extract_handle_features(body_mask, handle_mask, handle_side="right"):
-    """从壶身/把手 mask 提取旋转角相关特征.
-
-    核心特征: dx = 把手 x 中心 − 壶身 x 中心 (像素, 按 handle_side 归一化右侧为正).
-    正对相机时 |dx| 最大 (把手弧半径投影); 水壶绕竖直轴旋转 θ 后 |dx| 变小.
-
-    返回:
-        dict {"dx", "width", "ratio", "body_w"} 或 None (点数不足)
-    """
-    xs = np.where(handle_mask)[1]
-    bxs = np.where(body_mask)[1]
-    if len(xs) < 20 or len(bxs) < 50:
-        return None
-
-    dx = float(np.median(xs) - np.median(bxs))
-    if handle_side == "left":
-        dx = -dx  # 归一化: 右侧为正
-
-    return {
-        "dx": dx,
-        "width": float(xs.max() - xs.min()),
-        "ratio": len(xs) / max(len(bxs), 1),
-        "body_w": float(bxs.max() - bxs.min()),
-    }
-
-
 def _rotate_around_axis(axis, angle_deg):
     """绕任意轴 axis 旋转 angle_deg 的旋转矩阵 (Rodrigues).
 
@@ -435,6 +474,63 @@ def _rotate_around_axis(axis, angle_deg):
     axis = axis / n
     rvec = axis * math.radians(angle_deg)
     return cv2.Rodrigues(rvec)[0]
+
+
+def _align_axes(rot, prev_rot):
+    """帧间姿态锚定: 在 4 个候选 (恒等 + 绕 X/Y/Z 各 180°) 中选与上一帧最接近者.
+
+    治 PCA 主轴符号逐帧任意导致的帧间 180° 翻转 (根因 1).
+    覆盖全部翻转模式:
+      - Y 翻转 (绕壶身轴 X 180°)
+      - Z 翻转 (绕把手轴 Y 180°, Z[2]≈0 时 z 符号约束失效的兜底)
+      - X/Y 组合翻转 (绕相机 Z 180°)
+    锚点: 上一帧旋转矩阵 (帧间锚定, 不依赖正对参考).
+    """
+    if prev_rot is None:
+        return rot
+    cands = [rot]
+    for axis_i in range(3):
+        cands.append(_rotate_around_axis(rot[:, axis_i], 180.0) @ rot)
+    return max(cands, key=lambda R: float(np.trace(R.T @ prev_rot)))
+
+
+class _MatrixSmoother:
+    """旋转矩阵 EMA 平滑 + SVD 正交化 (私有化自 realsense_shared.PoseSmoother).
+
+    在矩阵空间平滑, 避开 euler 万向锁区域的帧间跳变 (根因 2 放大因子):
+    接近 B≈±90° 时 euler 提取对微小矩阵噪声敏感 ~100 倍, 矩阵 EMA 使
+    输出平滑摆动而非跳变.
+    """
+
+    def __init__(self, alpha=0.4):
+        self.alpha = alpha
+        self.filtered = None
+
+    def update(self, rot):
+        if self.filtered is None:
+            self.filtered = rot.copy()
+            return self.filtered
+        self.filtered = (1 - self.alpha) * self.filtered + self.alpha * rot
+        U, _, Vt = np.linalg.svd(self.filtered)
+        self.filtered = U @ Vt
+        return self.filtered
+
+    def reset(self):
+        self.filtered = None
+
+
+def _unwrap_euler(euler_new, euler_prev):
+    """A/C 取与上一帧最接近的 ±360k 等价表示 (治 ±180 边界表观跳变).
+
+    B 由矩阵 EMA 保证平滑, 不需要 wrap.
+    """
+    out = list(euler_new)
+    for i in (0, 2):
+        while out[i] - euler_prev[i] > 180:
+            out[i] -= 360
+        while euler_prev[i] - out[i] > 180:
+            out[i] += 360
+    return tuple(out)
 
 
 # ============================================================
@@ -477,10 +573,10 @@ class HandleCupDetector:
         self._sam_conf = float(_c.get("sam_conf", 0.3))
         self._sam_roi_expand_ratio = float(_c.get("sam_roi_expand_ratio", 0.3))
 
-        # ---- mask 后处理 / 扫描线 / 正对参考 配置段 ----
+        # ---- mask 后处理 / 扫描线 配置段 ----
         self._mask_pp_cfg = _c.get("mask_postprocess", {})
         self._scan_cfg = _c.get("scanline", {})
-        self._ref_cfg = _c.get("handle_ref", {})
+        self._grasp_direction = _c.get("grasp_direction", "right")  # 姿态 Y 符号规则
 
         # ---- 点云采样步长 (性能预算: 反投影为 Python 循环, step↑ 耗时↓) ----
         self._pca_step_handle = int(_c.get("pca_step_handle", 2))
@@ -524,10 +620,10 @@ class HandleCupDetector:
         self._last_handle_rot = None   # 3x3 旋转矩阵
         self._last_handle_euler = None # 动态 euler (相机系 ZYX deg)
 
-        # ---- 正对参考状态 (Step 4: 旋转角 θ 估计) ----
-        self._ref_dx = None       # 自标定参考: 把手 x 中心偏移 (px)
-        self._R_ref = None        # 正对参考旋转矩阵 (θ 小时缓存的 PCA 结果)
-        self._theta_ema = 0.0     # θ 平滑值 (deg)
+        # ---- 姿态稳定状态 (180° 翻转修复) ----
+        self._prev_rot = None     # 上一帧旋转矩阵 (Y 翻转锚定)
+        self._matrix_smoother = _MatrixSmoother(  # 旋转矩阵 EMA (避万向锁跳变)
+            alpha=float(_c.get("rot_smooth_alpha", 0.4)))
 
         # ---- 供 state_machine 写入 (类型声明防 Pylance 报错) ----
         self.last_known_pose: Optional[tuple] = None      # (pos_ee, euler_ee) or None
@@ -724,133 +820,61 @@ class HandleCupDetector:
     # ------------------------------------------------------------
     #  旋转角 θ 估计 (正对参考对比)
     # ------------------------------------------------------------
+    #  姿态构建: 3D 几何法 (X=壶身长轴, Y=把手长轴, Z=X×Y 面法线)
+    # ------------------------------------------------------------
 
-    def _ref_quality_ok(self, feat):
-        """自标定质量门控: dx 同侧 + 面积比在界内."""
-        ratio_min = float(self._scan_cfg.get("min_ratio", 0.05))
-        ratio_max = float(self._scan_cfg.get("max_ratio", 0.55))
-        if feat["dx"] <= 0:  # 右侧把手 → dx 应为正 (归一化后)
-            return False
-        if not (ratio_min <= feat["ratio"] <= ratio_max):
-            return False
-        return True
+    def _compute_handle_pose_geometry(self, handle_rot, body_axis):
+        """3D 几何法构建完整姿态旋转矩阵 (替代 dx→θ→R_ref 自标定链).
 
-    def _update_reference(self, feat, rot_pca, theta_deg):
-        """更新正对参考 (自标定):
+        坐标约定 (相机系, 符号规则按 grasp_direction + 图像边界):
+          Y = 把手长轴 (handle PCA 主成分)
+              符号: right → Y 指向图像下边界 (Y·(0,1,0)>0, 相机系 y 向下);
+                    left  → Y 指向图像上边界 (Y·(0,-1,0)>0)
+          X = 壶身长轴 (body PCA 主成分)
+              符号: 右手法则 + Z 朝向相机约束 — Z=X×Y 需满足 z>0,
+                    否则翻转 X (X=-X 时 Z 同步变号)
+          Z = X×Y (把手面法线, TCP 贴合面; 不假设把手面正对相机,
+              "Z>0 朝向相机一侧, 但不完全指向")
 
-        - dx_ref: 运行期 max(|dx|) 迟滞更新 (正对时 |dx| 最大, 只会向正对收敛)
-        - R_ref : θ 小 (接近正对) 时 PCA 结果可信, 缓存为参考姿态
+        优点 (解决 dx/θ 链问题):
+          - 姿态由 3D 几何自足, 不需要"正对参考"自标定 — 水壶不动也能
+            确定姿态 (解决原 dx_ref 依赖"最大 mask"的问题)
+          - Z 是面法线而非"PCA 最小方差+指向相机" — 水壶旋转后把手面
+            朝向 TCP 贴合面而非相机 (解决长方体把手抓取贴面问题)
         """
-        cfg = self._ref_cfg
-        dx = abs(feat["dx"])
+        if body_axis is None:
+            return None
 
-        # dx_ref 自标定 (仅质量好帧)
-        if cfg.get("auto_calib", True) and self._ref_quality_ok(feat):
-            if self._ref_dx is None or dx > self._ref_dx:
-                self._ref_dx = dx
-
-        # R_ref 缓存: 接近正对时 PCA 可信
-        near_front = theta_deg < 15.0  # |dx|/dx_ref > cos15° ≈ 0.966
-        if near_front and rot_pca is not None:
-            rot_aligned = rot_pca
-            if self._R_ref is not None:
-                # PCA 主轴符号不定: 与现有参考的 Y 轴对齐 (防 180° 跳变)
-                if rot_pca[:, 1] @ self._R_ref[:, 1] < 0:
-                    rot_aligned = np.diag([-1.0, -1.0, 1.0]) @ rot_pca
-            if self._R_ref is None:
-                self._R_ref = rot_aligned.copy()
-            else:
-                # EMA 更新 + SVD 正交化
-                alpha = 0.5
-                self._R_ref = (1 - alpha) * self._R_ref + alpha * rot_aligned
-                U, _, Vt = np.linalg.svd(self._R_ref)
-                self._R_ref = U @ Vt
-
-    def _estimate_yaw_signed(self, feat):
-        """由 dx 特征估计绕壶身轴旋转角 θ (deg) + 方向符号.
-
-        θ = arccos(|dx| / dx_ref), dx_ref 优先级:
-          运行期自标定 max > config dx_px > 几何兜底 body_w × dx_frac_body.
-
-        符号: PCA 相对 R_ref 的绕轴角符号 (非退化时可信), 否则 config sign.
-        """
-        cfg = self._ref_cfg
-        if not cfg.get("enabled", True):
-            return 0.0, 1.0
-
-        dx = abs(feat["dx"])
-
-        # 确定 dx_ref
-        if self._ref_dx is not None:
-            dx_ref = self._ref_dx
-        elif cfg.get("dx_px"):
-            dx_ref = float(cfg["dx_px"])
+        Y = handle_rot[:, 1]
+        if self._grasp_direction == "right":
+            img_dir = np.array([0.0, 1.0, 0.0])    # 图像下边界 (相机系 +y)
         else:
-            dx_ref = feat["body_w"] * float(cfg.get("dx_frac_body", 0.45))
+            img_dir = np.array([0.0, -1.0, 0.0])   # 图像上边界 (相机系 -y)
+        if Y @ img_dir < 0:
+            Y = -Y
 
-        if dx_ref <= 1.0:
-            return 0.0, 1.0
+        X = np.asarray(body_axis, dtype=float)
+        Z = np.cross(X, Y)
+        nz = np.linalg.norm(Z)
+        if nz < 1e-9:
+            return None
+        Z = Z / nz
+        if Z[2] > 0:  # Z 朝向相机一侧: RealSense/OpenCV 相机系 z 正=远离相机,
+            #             故朝向相机 = z<0 (与 test_handle_6D PCA 的 Z 约定一致)
+            X = -X
+            Z = -Z
 
-        r = min(1.0, dx / dx_ref)
-        theta = math.degrees(math.acos(r))
-        theta = min(theta, float(cfg.get("theta_max_deg", 50)))
+        nx = np.linalg.norm(X)
+        ny = np.linalg.norm(Y)
+        if nx < 1e-9 or ny < 1e-9:
+            return None
+        X = X / nx
+        Y = Y / ny
 
-        # 方向符号融合在 _synthesize_handle_pose 内完成 (需 rot_pca 与 body_axis);
-        # 此处仅返回 config 默认符号
-        sign = float(cfg.get("sign", 1))
-        return theta, sign
-
-    # ------------------------------------------------------------
-    #  姿态合成: PCA + θ → 完整动态姿态
-    # ------------------------------------------------------------
-
-    def _synthesize_handle_pose(self, rot_pca, body_axis, theta_deg):
-        """合成完整姿态旋转矩阵.
-
-        R_final = Rot(壶身轴, θ) @ R_ref (正对参考缓存).
-        正对参考 R_ref 在 θ≈0 时由 PCA 缓存 → θ 增大后姿态 = 参考 + θ,
-        PCA 的透视/遮挡表观误差被消除; R_ref 未建立时退回 PCA 原样.
-        """
-        sign = float(self._ref_cfg.get("sign", 1))
-
-        # PCA 主轴符号不定: 与 R_ref 的 Y 轴对齐 (防 180° 跳变)
-        if self._R_ref is not None and rot_pca[:, 1] @ self._R_ref[:, 1] < 0:
-            rot_pca = np.diag([-1.0, -1.0, 1.0]) @ rot_pca
-
-        # PCA 相对 R_ref 的绕壶身轴符号 (非退化时可信)
-        if self._R_ref is not None and body_axis is not None:
-            y_now = rot_pca[:, 1]
-            y_ref = self._R_ref[:, 1]
-            a = body_axis
-            # 投影到垂直壶身轴的平面
-            y_ref_p = y_ref - (y_ref @ a) * a
-            y_p = y_now - (y_now @ a) * a
-            n1 = np.linalg.norm(y_ref_p)
-            n2 = np.linalg.norm(y_p)
-            if n1 > 1e-9 and n2 > 1e-9:
-                y_ref_p = y_ref_p / n1
-                y_p = y_p / n2
-                cross_ang = np.cross(y_ref_p, y_p)
-                ang_s = float(np.dot(cross_ang, a))
-                if abs(ang_s) > 1e-6:
-                    sign = 1.0 if ang_s > 0 else -1.0
-
-        theta_signed = sign * theta_deg
-
-        # θ EMA 平滑 (防帧间跳变)
-        alpha = float(self._ref_cfg.get("ema_alpha", 0.4))
-        self._theta_ema = (1 - alpha) * self._theta_ema + alpha * theta_signed
-
-        # 合成: 绕壶身轴旋转参考姿态
-        if self._R_ref is not None and body_axis is not None and abs(self._theta_ema) > 0.5:
-            R_theta = _rotate_around_axis(body_axis, self._theta_ema)
-            R_final = R_theta @ self._R_ref
-            # 正交化
-            U, _, Vt = np.linalg.svd(R_final)
-            R_final = U @ Vt
-            return R_final
-
-        return rot_pca
+        R = np.column_stack((X, Y, Z))
+        # SVD 正交化 (X 壶身轴主导, 保持右手系)
+        U, _, Vt = np.linalg.svd(R)
+        return U @ Vt
 
     # ------------------------------------------------------------
     #  Cup YOLO
@@ -1024,10 +1048,18 @@ class HandleCupDetector:
                 body_mask, handle_mask = self._scanline_split(pp_mask, kettle_bbox)
 
                 # 后处理失败 → 原始 mask 重试一次 (SAM 偶发把把手切成孤岛)
+                src_mask = pp_mask
                 if handle_mask is None and self._mask_pp_cfg.get("retry_raw", True):
                     body_mask, handle_mask = self._scanline_split(full_mask, kettle_bbox)
+                    src_mask = full_mask
 
                 if handle_mask is not None and body_mask is not None:
+                    # ---- 3.5 把手 mask 精细化: 严格剔除后上下扩展补回把手弧两端 ----
+                    handle_mask = _extend_handle_mask(
+                        handle_mask, src_mask, kettle_bbox,
+                        int(self._scan_cfg.get("extend_px", 15)),
+                        self._handle_side)
+
                     self._last_handle_mask = handle_mask
                     self._last_body_mask = body_mask
 
@@ -1041,43 +1073,53 @@ class HandleCupDetector:
                             handle_result["pos_cam"] = pos
                             self._last_handle_pos = pos
 
-                            # ---- 5. 壶身轴 (body PCA 主方向) ----
-                            # 仅 R_ref 建立后才需要 (合成姿态用); θ=0 期间省一次点云
+                            # ---- 5. 壶身轴 (body PCA 主成分 = 壶身长轴) ----
                             body_axis = None
-                            if self._R_ref is not None:
-                                _bpos, _brot, _ = self._handle_6d_pose(
-                                    body_mask, depth_frame, anchor_depth,
-                                    step=self._pca_step_body)
-                                if _brot is not None:
-                                    body_axis = _brot[:, 1]  # 壶身长轴
+                            _bpos, _brot, _ = self._handle_6d_pose(
+                                body_mask, depth_frame, anchor_depth,
+                                step=self._pca_step_body)
+                            if _brot is not None:
+                                body_axis = _brot[:, 1]  # 壶身长轴
 
-                            # ---- 6. 旋转角 θ + 完整动态姿态 ----
-                            feat = _extract_handle_features(
-                                body_mask, handle_mask, self._handle_side)
-                            if feat is not None:
-                                theta, _sign = self._estimate_yaw_signed(feat)
-                                self._update_reference(feat, rot, theta)
-                                R_final = self._synthesize_handle_pose(
-                                    rot, body_axis, theta)
+                            # ---- 6. 3D 几何法姿态: X=壶身长轴, Y=把手长轴,
+                            #        Z=X×Y (面法线, z>0 朝向相机一侧) ----
+                            R_final = self._compute_handle_pose_geometry(rot, body_axis)
+                            if R_final is None:
+                                R_final = rot  # 壶身轴退化时退回把手 PCA
+
+                            # ---- 姿态稳定链 (180° 翻转修复):
+                            #   帧间锚定 (4 候选最近, 覆盖 Y/Z/X 翻转) → 矩阵 EMA → euler unwrap ----
+                            R_aligned = _align_axes(R_final, self._prev_rot)
+                            R_smooth = self._matrix_smoother.update(R_aligned)
+                            self._prev_rot = R_smooth
+
+                            euler_dyn = rotation_matrix_to_euler_angles(R_smooth)
+                            if self._last_handle_euler is not None:
+                                euler_dyn = _unwrap_euler(
+                                    tuple(euler_dyn), self._last_handle_euler)
                             else:
-                                R_final = rot
+                                euler_dyn = tuple(euler_dyn)
+                            handle_result["euler_cam"] = euler_dyn
+                            self._last_handle_rot = R_smooth
+                            self._last_handle_euler = euler_dyn
 
-                            euler_dyn = rotation_matrix_to_euler_angles(R_final)
-                            handle_result["euler_cam"] = tuple(euler_dyn)
-                            self._last_handle_rot = R_final
-                            self._last_handle_euler = tuple(euler_dyn)
-
-                            # 调试日志 (θ / dx / 参考)
-                            if feat is not None:
-                                print(
-                                    f"[Handle] dx={feat['dx']:.1f}px ratio={feat['ratio']:.2f} "
-                                    f"theta={theta:.1f}° ema={self._theta_ema:.1f}° "
-                                    f"ref_dx={self._ref_dx if self._ref_dx is not None else '-'} "
-                                    f"euler=({euler_dyn[0]:.1f},{euler_dyn[1]:.1f},{euler_dyn[2]:.1f})")
+                            # 调试日志 (姿态 / B 角万向锁距离)
+                            lock_dist = abs(abs(euler_dyn[1]) - 90.0)
+                            print(
+                                f"[Handle] euler=({euler_dyn[0]:.1f},{euler_dyn[1]:.1f},"
+                                f"{euler_dyn[2]:.1f}) lock={lock_dist:.1f} "
+                                f"grasp={self._grasp_direction}")
                         else:
+                            # PCA 失败: 姿态状态重置 (防陈旧锚点/平滑缓存)
                             self._last_handle_pos = None
-                # handle_mask 分离失败: 保持 pos=None, euler 回落固定值
-            # SAM 失败: 保持 pos=None
+                            self._prev_rot = None
+                            self._matrix_smoother.reset()
+                else:
+                    # 分离失败: 姿态状态重置
+                    self._last_handle_pos = None
+                    self._prev_rot = None
+                    self._matrix_smoother.reset()
+            # SAM 失败: 保持 pos=None (姿态状态保留, 短时漏检锚点仍有效)
 
         # === Cup 检测 ===
         cup_bbox = self._detect_cup_bbox(color_image)
@@ -1094,15 +1136,15 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def _scanline_split(self, full_mask, kettle_bbox):
-        """扫描线分离把手 (v2), 参数来自 config 的 scanline 段."""
+        """扫描线分离把手 (v2, 严格模式), 参数来自 config 的 scanline 段."""
         cfg = self._scan_cfg
         return _scanline_find_handle_v2(
             full_mask, kettle_bbox,
             handle_min_ratio=float(cfg.get("min_ratio", 0.05)),
             handle_max_ratio=float(cfg.get("max_ratio", 0.55)),
             handle_side=self._handle_side,
-            handle_center_deviation_ratio=float(cfg.get("center_deviation_ratio", 0.5)),
-            trim_top=bool(cfg.get("trim_top", False)),
+            handle_center_deviation_ratio=float(cfg.get("center_deviation_ratio", 0.25)),
+            trim_top=bool(cfg.get("trim_top", True)),
             trim_bottom=bool(cfg.get("trim_bottom", True)),
             use_mask_extent=bool(cfg.get("use_mask_extent", True)),
         )
@@ -1128,9 +1170,6 @@ class HandleCupDetector:
             p = self._last_handle_pos
             e = self._last_handle_euler if self._last_handle_euler is not None else self._handle_euler
             cv2.putText(display, f"H: ({p[0]:.2f},{p[1]:.2f},{p[2]:.2f}) A={e[0]:.0f} B={e[1]:.0f} C={e[2]:.0f}",
-                        (10, _y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
-            _y_off += 20
-            cv2.putText(display, f"   theta={self._theta_ema:.1f}",
                         (10, _y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
             _y_off += 20
         if self._last_cup_pos is not None:

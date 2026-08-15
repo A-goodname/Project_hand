@@ -1,5 +1,20 @@
 # Progress — Project_hand
 
+### 姿态 3D 几何法重构 (用户方案, 2026-08-15)
+- [x] 移除 dx/θ/dx_ref/R_ref 自标定链 → `_compute_handle_pose_geometry` (X=壶身长轴/Y=把手长轴 符号按 grasp_direction+图像边界/Z=X×Y, **Z 朝向相机 = z<0** RealSense 约定)
+- [x] scanline 严格化 (0.25 双向剔单行超差) + `_extend_handle_mask` **贪心扩展** (逐行补至连续 5 行无把手, 上限 50×4; 中心修正 y 183→226/240)
+- [x] `_align_axes` 四候选帧间锚定 (恒等+绕 X/Y/Z 180°, 覆盖 Y/Z/X 全翻转模式)
+- [x] 离线验证: Z 朝相机/4 模式锚定/贪心扩展全覆盖/单测 11 例全绿
+- [ ] 实机复测 D1-A Task 4: 姿态抖动 <10°, Y 符号随 grasp_direction 正确, mask 扩展完整 (中心点不偏), Z 朝向相机
+
+### 抓取流程细化: 180° 翻转修复 + P1 示教工具 (2026-08-15)
+- [x] 180° euler 翻转修复: _align_y_axis 帧锚定 + 统一合成路径 + _MatrixSmoother EMA + _unwrap_euler + B 角监控 (3 层根因, 离线测试全过)
+- [x] `Estun/estun_teach_handle_p1.py`: P1 示教工具 (基系偏置 t_offset = P1_teach - detect_base, 多点平均+方差, --apply 写 config, 变换链闭环验证)
+- [x] 离线验证: py_compile + 单测 11 例全绿 + 翻转修复/闭环测试全过
+- [ ] 实机复测: D1-A Task 4 场景 — 姿态抖动 <10° (目标 <5°)、A/B 无符号翻转聚类 (Step 1)
+- [ ] 实机示教: 采集 ≥3 点位, 方差 <5mm, 输出 yaml 片段 (Step 2)
+- [ ] **Step 3 (state_machine teach 模式) 暂停** — 用户指示, 待实机验证 Step 1/2 后恢复
+
 ### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
 - [x] `handle_cup_detector.py` 重构: YOLO kettle → SAM → 后处理 → scanline v2 → PCA 6D → 完整动态 euler_cam
 - [x] mask 后处理: OPEN→ERODE→CLOSE→连通域过滤 (含把手侧孤岛保留)
@@ -7,7 +22,7 @@
 - [x] 旋转角 θ: dx 特征 + dx_ref 自标定 + R_ref 正对参考缓存 + 壶身轴合成
 - [x] config.yaml: sam/mask_postprocess/scanline/handle_ref/pca_step 新键, 删 white/red 段
 - [x] 离线验证: py_compile + 单测 11 例全绿 + 合成 mask/数学测试
-- [ ] 实机验证: mask+6D 坐标轴 / 后处理效果 / ±30~60° 把手覆盖 / θ 跟随 + 动态 euler (先定 sign)
+- [ ] 实机验证 (部分): 60/60 检测成功、位置抖动 0.7mm、P2 观测 0.46s ✅; **发现动态 euler 帧间 180° 翻转震荡 (A 轴 -100~-178/+130~+169 跳变, 位置稳定姿态不稳 ~100°) — PCA 主轴 180° 跳变未完全解决, 需修复后复测** (2026-08-15 D1-A Task 4)
 - [ ] 后续: state_machine/estun SM 消费动态 euler (本次范围外)
 
 ### P2/P1 双确认协议适配 (2026-08-14, 进行中)

@@ -6,6 +6,37 @@
 
 ## 最近变更
 
+### 几何法实机反馈修复 (2026-08-15)
+
+1. **Z 朝向相机修正**: 用户实机观察"Z 似乎没有调整" → 根因: RealSense/OpenCV 相机系 z 正=远离相机, 原实现 `Z[2]>0` 让面法线背离相机; 改为 `Z[2]<0` (朝向相机, 与 test_handle_6D PCA 的 Z 约定一致)
+2. **帧间锚定升级 `_align_axes`**: 原 `_align_y_axis` 只修 Y 翻转 (绕壶身轴 180°), 面法线水平时 Z[2]≈0 符号约束失效 → Z 独立翻转无法修正; 改为 4 候选 (恒等+绕 X/Y/Z 各 180°) 取与上一帧 trace 最近者, 覆盖全部翻转模式 (测试: 4 模式全对齐 diff<1e-6)
+3. **mask 扩展改为贪心**: 原固定 extend_px=15 + 固定范围 → 核心段偏上/下时弧端超出扩展窗口漏补 (用户: "向下扩展还有空间, mask 下方还有实际把手区域, 中心点偏上"); 改为从核心段边界逐行向外补, 连续 5 行无把手侧像素停止 (弧端连壶身处自然停), extend_px 仅作上限 (50×4); 实测中心 y 183→226 (真实 240), 只补把手侧像素 (x≥bbox_x2-10)
+4. Y 方向确认无问题 (用户: "刚才是我看错了")
+5. 离线验证: Z 朝相机/4 模式锚定/贪心扩展全覆盖/单测 11 例全绿; **待实机复测**
+
+### 姿态 3D 几何法重构 (用户方案, 2026-08-15)
+
+1. **用户指出 dx/θ 链缺陷**: ①D435i 水壶不动时 dx_ref 自标定永远取不到"正对最大 dx", θ 恒 0, 旋转角确认失效; ②PCA 的 Z (最小方差+"指向相机") 假设把手面正对相机, 但把手是长方体, 抓取必须 TCP 贴面
+2. **新坐标系 (用户确认)**: X = 壶身 mask 3D PCA 主成分 (壶身长轴); Y = 把手 mask 3D PCA 主成分 (长轴), 符号按 grasp_direction: right→指向图像下边界 (Y·(0,1,0)>0), left→上边界; Z = X×Y (面法线, TCP 贴合面), 约束 z>0 朝向相机一侧 (不要求完全指向); 右手法则
+3. **已实施 (handle_cup_detector.py)**: 删除 dx/θ/dx_ref/R_ref 自标定链 (_extract_handle_features/_estimate_yaw_signed/_update_reference/_synthesize_handle_pose) → 新增 `_compute_handle_pose_geometry` (3D 几何自足, 水壶不动也能定姿态); scanline 严格化 (center_deviation_ratio 0.25, 双向剔, 单行超差即剔) + 新增 `_extend_handle_mask` (bbox 边界版, 上下扩展 extend_px=15 补回弧两端 — 注意: 用 bbox 而非 body mask 做把手侧判定, body 会被未剔除行把手像素污染); `_align_y_axis` 加 axis 参数 (绕壶身轴 180° 锚定, 替代 diag(-1,-1,1) 绕相机 Z — Y 翻转物理上是绕壶身轴); body PCA 每帧计算
+4. **排坑**: Y 与图像边界方向垂直时 (点积≈0) 符号判断失效 → prev_rot 锚定兜底 (绕壶身轴 180° 修正, 测试验证翻转输入一致性 diff=0); mask 扩展的把手侧判定用 kettle bbox 边界 (body_x_max 会被扩展区把手像素污染成 415 导致漏补)
+5. **离线验证全过**: 符号规则/右手系/Z 朝相机、翻转输入一致性、_align_y_axis 绕壶身轴、mask 扩展只补把手侧; 单测 11 例全绿; **待实机复测 D1-A Task 4** (姿态抖动 <10°)
+6. config.yaml: 删 handle_ref 段; scanline 段更新 (0.25/双向剔/extend_px 15); rot_smooth_alpha 顶层
+
+### 抓取流程细化: 180° 翻转修复 + P1 示教工具 (2026-08-15)
+
+1. **180° euler 翻转修复 (3 层根因, 已数值验证)**: ①主导: PCA 主轴符号逐帧任意 + R_ref 未建立期无锚点 (180° 翻转→euler (A,B,C)→(-A,-B,C±180) 与实机 A 聚类精确匹配); ②放大: B≈±90° 万向锁 (0.02rad 噪声 B=89°→317° 偏差 vs B=45°→3.2°, 放大 100 倍); ③次级: _synthesize_handle_pose 的 abs(theta_ema)>0.5 硬切换不连续
+2. **修复 (handle_cup_detector.py 内 5 点)**: `_align_y_axis` (frame-to-frame Y 锚定, 锚链 R_ref→prev_rot)、统一合成路径 (去硬切换, θ=0 自然连续)、`_MatrixSmoother` (旋转矩阵 EMA+SVD, 矩阵空间避万向锁)、`_unwrap_euler` (A/C ±360k 最短路径)、B 角监控日志 (lock=|abs(B)-90|); config 加 `rot_smooth_alpha: 0.4`; 失败帧 reset 平滑器
+3. **离线验证**: py_compile + 单测 11 例全绿 + 新测试 (Y 锚定幂等/翻转一致、unwrap 179→-179 连续、θ=0.4/0.6 合成连续 0.2°、EMA 正交、翻转帧对齐后与原帧一致) 全过; **待实机复测 D1-A Task 4** (验收: 姿态抖动 <10°, A/B 无符号翻转聚类)
+4. **P1 示教工具 `Estun/estun_teach_handle_p1.py` (新增)**: 镜像 teach_p3 骨架 — 只读相机 + 人工示教, 基系偏置 t_offset = P1_teach_base - detect_handle_base (基系直接加, 含 TCP 偏移语义, 无 t_handle_effective 链); 多点平均+方差; --apply 写 estun_config.yaml; 变换链闭环已验证 (任意检测点恒等式成立, 前提 T_cam2ee 准确 + 机器人姿态族一致)
+5. **Step 3 (state_machine teach 模式) 用户指示暂停**: 不实施 state_machine 改造/estun_config handle_teach 段; 示教工具可独立先用 (产出偏置等 Step 3 恢复后填入 config)
+
+### D1-A 测量完成 + euler 180° 翻转实机确认 (2026-08-15)
+
+1. D1-A 全部完成: Task 0 安全(控制柜上电, 未使能) / Task 1 相机映射 (UGREEN 4.1 迎宾 + 4.2 桌面 Camera B + D435i 2e:00.3, D435i 固件 serial 342222071364 vs USB 层 208223061472 双序列号已澄清) / Task 2 场景测量 (壶口 0.09/底 0.095/最大 0.13m@0.02, 基准点 [-0.37,0.90,0.295], 相对 x 符号修正; 包络间隙 P1 手-桌面 0.01m/P2 0.02m) / Task 3 标定复核 (替代内参方案全链误差 7~11cm 已记录为方案水平, 相机/标定确认无问题) / Task 4 视觉稳定性 / Task 5 协议 16/16
+2. **euler bug 实机确认 (yolo+sam 新链)**: 60/60 检测成功、位置抖动 0.7mm、P2 新鲜观测 0.46s ✅; **动态 euler 帧间 180° 翻转震荡** (A 轴 -100~-178° 与 +130~+169° 跳变, B/C 大幅摆动 ~100°), 即 memory-bank 待办"PCA 主轴 180° 跳变"未完全解决 — 位置稳定姿态不稳, 影响 P1 抓取姿态精度, 修复后需复测
+3. D1-B 前风险记录: 全链误差 7~11cm + P1 包络间隙 1cm (碰撞风险, 需低速+急停观察); 材料在 `~/VLA-BD/docs/d1-measurements-2026-08-15/`
+
 ### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
 
 1. **背景**: 水壶把手红胶带物理移除 → 旧"红胶带优先+白回退"检测链失效; 回退到 RealSense_R 已验证的 yolo+sam (test_handle_6D/test_SAM_handle)
