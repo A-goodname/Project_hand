@@ -1,5 +1,13 @@
 # Progress — Project_hand
 
+### 检测器重构: 消除不符代码 + 边界偏移中心 (2026-08-15)
+- [x] `_compute_handle_6d_pose` 简化为返回 (pos, y_axis, cloud) 主成分方向 (行为等价)
+- [x] ~~`_extend_handle_mask` 判定修复 (body 中位数)~~ **已回退** — 实机 mask 完全不可用, 根因未明, 恢复 bbox 判定版
+- [x] 文件头 docstring 更新 (几何法 + 边界偏移描述)
+- [x] 边界偏移中心法 `_compute_handle_center_edge` (上边界向下 4cm + 把手侧边界向内 1cm, config 可切)
+- [x] 离线验证: 编译 + 单测 11 例全绿
+- [ ] 实机: 边界偏移中心效果 (用户验证中) + D1-A Task 4 复测
+
 ### 姿态 3D 几何法重构 (用户方案, 2026-08-15)
 - [x] 移除 dx/θ/dx_ref/R_ref 自标定链 → `_compute_handle_pose_geometry` (X=壶身长轴/Y=把手长轴 符号按 grasp_direction+图像边界/Z=X×Y, **Z 朝向相机 = z<0** RealSense 约定)
 - [x] scanline 严格化 (0.25 双向剔单行超差) + `_extend_handle_mask` **贪心扩展** (逐行补至连续 5 行无把手, 上限 50×4; 中心修正 y 183→226/240)

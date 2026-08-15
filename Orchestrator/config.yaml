@@ -54,6 +54,12 @@ scanline:
 # ---- 姿态稳定 (180° 翻转修复) ----
 rot_smooth_alpha: 0.4       # 旋转矩阵 EMA 平滑系数 (矩阵空间平滑, 避万向锁跳变)
 
+# ---- 把手中心模式 ----
+handle_pos_mode: edge_offset   # mask_center (点云重心) | edge_offset (边界偏移法)
+edge_offset:
+  down_cm: 4.0              # 上边界向下 (cm, 实际距离, 沿相机系图像方向)
+  in_cm: 1.0                # 把手侧边界向内 (cm; right→右边界向左, left→左边界向右)
+
 # ---- 点云采样步长 (性能预算: 反投影为 Python 循环, step↑ 耗时↓) ----
 pca_step_handle: 2    # 把手点云采样步长
 pca_step_body: 4      # 壶身点云采样步长 (仅 R_ref 建立后计算)

@@ -6,6 +6,16 @@
 
 ## 最近变更
 
+### 检测器重构: 消除与实际不符的代码 + 边界偏移中心 (2026-08-15)
+
+1. **用户指出代码/函数与实际作用不符** → 重构:
+   - A: 文件头 docstring 更新 (θ/R_ref 描述 → 3D 几何法 + 边界偏移)
+   - B: `_compute_handle_6d_pose` 简化 → 改名 `_compute_pca_axis` (类方法 `_pca_axis`) — 不再构造完整 rot (删 Z=最小方差指向相机约束 + X=Y×Z 重正交化, 消费者只用 Y 列), 返回 `(pos, y_axis, cloud)` 主成分方向; `_compute_handle_pose_geometry` 签名改 `(handle_axis, body_axis)`; 调用处 2 处同步 (行为等价)
+   - ~~C: `_extend_handle_mask` 判定修复 (body 中位数边缘)~~ **已回退** — 实机复现"mask 完全不可用", 确认 C 就是上次回退前导致问题的改动之一 (误判根因在 Z 逻辑, 实际是扩展判定); 恢复 a7ecb07 的 bbox 判定版
+2. **边界偏移中心法** `_compute_handle_center_edge` (用户方案): mask 覆盖不全时重心不可靠 → 中心 = 上边界向下 down_cm + 把手侧边界向内 in_cm (相机系图像方向实际距离); config `handle_pos_mode: edge_offset | mask_center`, `edge_offset.down_cm: 4.0 / in_cm: 1.0`; 边界像素 <3 回退 PCA 重心; 用户实机看效果中
+3. **离线验证**: 编译 + 单测 11 例全绿; 待实机
+4. **排坑**: 扩展判定 (body 中位数 edge+1) 在实机导致 mask 完全不可用 — 根因未明 (bbox 判定版正常); 该改动的离线测试 (合成 mask) 全过但实机失败 → 离线合成场景与实机差异大, 改动需实机确认后再保留
+
 ### 几何法实机反馈修复 (2026-08-15)
 
 1. **Z 朝向相机修正**: 用户实机观察"Z 似乎没有调整" → 根因: RealSense/OpenCV 相机系 z 正=远离相机, 原实现 `Z[2]>0` 让面法线背离相机; 改为 `Z[2]<0` (朝向相机, 与 test_handle_6D PCA 的 Z 约定一致)
