@@ -165,7 +165,7 @@ class HandleSM:
 
         self._host = "0.0.0.0"
         self._port = 8080
-        self._hand_port = "COM5"
+        self._hand_port = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"
         self._phase_b_timeout = 60.0
 
         self._stop_event = threading.Event()

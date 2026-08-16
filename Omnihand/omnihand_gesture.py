@@ -23,7 +23,7 @@ OmniHand O10 手势控制模块
 用法:
     from omnihand_gesture import OmniHandGesture, Gesture
     
-    with OmniHandGesture(port="COM5") as hand:
+    with OmniHandGesture(port="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00") as hand:
         hand.enable()
         hand.do_gesture(Gesture.PAPER)    # 手掌展开
         hand.do_gesture(Gesture.FIST)     # 握拳
@@ -356,7 +356,7 @@ class OmniHandGesture:
 
     使用示例::
     
-        with OmniHandGesture(port="COM5") as hand:
+        with OmniHandGesture(port="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00") as hand:
             hand.enable()
             # 单个手势
             hand.do_gesture(Gesture.PAPER)
@@ -724,7 +724,7 @@ def print_menu():
     print()
 
 
-def interactive_mode(port: str = "COM5"):
+def interactive_mode(port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
     """
     交互式手势控制模式
     
@@ -853,7 +853,7 @@ def interactive_mode(port: str = "COM5"):
 # 测试 Demo
 # ============================================================================
 
-def demo(port: str = "COM5"):
+def demo(port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
     """
     手势演示: 依次展示各手势
     """
@@ -908,7 +908,7 @@ def demo(port: str = "COM5"):
 if __name__ == "__main__":
     import sys
 
-    port = "COM5"
+    port = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"
     if len(sys.argv) > 1 and sys.argv[1] == "--port":
         port = sys.argv[2] if len(sys.argv) > 2 else port
     elif len(sys.argv) > 1 and sys.argv[1] in ("--demo", "-d"):

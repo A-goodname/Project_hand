@@ -19,7 +19,7 @@ API Key: 环境变量 MIMO_API_KEY
 使用:
   set MIMO_API_KEY=sk-xxx
   python Omnihand/voice_llm_control.py
-  python Omnihand/voice_llm_control.py --port COM5
+  python Omnihand/voice_llm_control.py --port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00
 """
 
 import os
@@ -536,7 +536,7 @@ class GestureExecutor:
         ],
     }
 
-    def __init__(self, port: str = "COM5"):
+    def __init__(self, port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
         self.ctrl = OmniHandSpeedController(port=port, verbose=False)
         self.ctrl.open()
         self._init_hand()
@@ -628,7 +628,7 @@ class GestureExecutor:
 
 def main():
     parser = argparse.ArgumentParser(description="LLM 语音灵巧手控制")
-    parser.add_argument("--port", default="COM5", help="灵巧手串口号")
+    parser.add_argument("--port", default="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00", help="灵巧手串口号")
     parser.add_argument("--api-key", default=None,
                         help="MiMo API Key (优先级最高)")
     parser.add_argument("--mode", default="auto", choices=["ptt", "auto"],

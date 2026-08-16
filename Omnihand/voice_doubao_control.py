@@ -21,7 +21,7 @@ API Key: --api-key > .local.json > base json > 环境变量 DOUBAO_API_KEY
 
 使用:
   python Omnihand/voice_doubao_control.py
-  python Omnihand/voice_doubao_control.py --mode ptt --port COM5
+  python Omnihand/voice_doubao_control.py --mode ptt --port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00
   python Omnihand/voice_doubao_control.py --no-hand   # 不接灵巧手 (模拟执行)
   python Omnihand/voice_doubao_control.py --mock      # 离线联调 (自动起本地 mock 服务器)
 """
@@ -227,7 +227,7 @@ class GestureQueueExecutor(GestureExecutor):
     _FAST_DURATION = 0.75
     _FAST_STEPS = 15
 
-    def __init__(self, port: str = "COM5", on_stop_cb=None):
+    def __init__(self, port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00", on_stop_cb=None):
         super().__init__(port)
         self._q = queue.Queue()
         self._exit = threading.Event()
@@ -798,7 +798,7 @@ def resolve_api_key(cli_key: str = None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="豆包端到端语音灵巧手控制")
-    parser.add_argument("--port", default="COM5", help="灵巧手串口号")
+    parser.add_argument("--port", default="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00", help="灵巧手串口号")
     parser.add_argument("--api-key", default=None,
                         help="豆包 X-Api-Key (优先级最高)")
     parser.add_argument("--mode", default="auto", choices=["ptt", "auto"],

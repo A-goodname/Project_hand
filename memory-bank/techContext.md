@@ -28,6 +28,7 @@
 - **已装依赖**: numpy 2.4.4, opencv-python / opencv-contrib-python 4.13.0.92, PyYAML 6.0.3, pyserial 3.5, pyrealsense2 2.56.5.9235, ultralytics 8.4.48, mediapipe 0.10.35
 - **未装 (按需)**: EpicEye SDK, pyorbbecsdk2, pygrabber/comtypes (Windows 专属), 语音控制包 (sherpa-onnx / sounddevice / pypinyin / openai / websocket-client)
 - **git 配置**: `core.autocrlf input` + `.gitattributes` (`* text=auto`), 与 Windows 端 `autocrlf=true` 兼容
+- **灵巧手串口**: `/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00` (STM32 VCP, 枚举为 /dev/ttyACM0; **禁 ttyACM 编号**); 460800; 节点 0x01; 当前用户已在 dialout 组直连 (2026-08-16 起全项目默认端口已统一为此路径)
 
 ## 项目目录结构
 

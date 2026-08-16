@@ -16,7 +16,7 @@
 
 使用:
   python Omnihand/voice_omnihand_control.py
-  python Omnihand/voice_omnihand_control.py --port COM5 --mode ptt
+  python Omnihand/voice_omnihand_control.py --port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00 --mode ptt
   python Omnihand/voice_omnihand_control.py --model int8 --mic ugreen
 """
 
@@ -485,7 +485,7 @@ def _extract_gestures(text: str, speed_key: Optional[str] = None) -> Optional[Li
 class HandController:
     """灵巧手 + 语音速度控制."""
 
-    def __init__(self, port: str = "COM5"):
+    def __init__(self, port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
         self.ctrl = OmniHandSpeedController(port=port, verbose=False)
         self.ctrl.open()
         self._stop_requested = False
@@ -919,7 +919,7 @@ def load_asr_model() -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="语音灵巧手控制")
-    parser.add_argument("--port", default="COM5", help="灵巧手串口号")
+    parser.add_argument("--port", default="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00", help="灵巧手串口号")
     parser.add_argument("--mic", default="auto",
                         choices=["auto", "ugreen", "default"],
                         help="麦克风: auto=UGREEN优先, ugreen=仅UGREEN, default=系统默认")

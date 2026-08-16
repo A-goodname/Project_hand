@@ -10,6 +10,14 @@
 
 ## 最近变更
 
+### 灵巧手串口 Linux 适配 (2026-08-16)
+
+1. **背景**: Omnihand 系代码默认端口仍是 Windows `COM5`/`COM3` (仅 omnihand_test/enable 已适配 Linux); estun_config.yaml `hand.port` 早已配 Linux by-id 路径, 但代码 fallback 未同步 — 无 config 场景 (voice/speed_control/gesture 独立入口) 会开错串口
+2. **本机端口结论**: STM32 VCP 枚举为 `/dev/ttyACM0` (ACM 类, 非 ttyUSB); 稳定路径 `/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00`; 当前用户**已在 dialout 组** (直连, 无需 `sg dialout` 包裹 — 2026-08-14 遗留待办已销)
+3. **修改 11 文件 31 处**: `"COM5"`/`--port COM5/COM3` 默认值与 docstring 示例 → by-id 稳定路径: omnihand_gesture / omnihand_speed_control / voice_llm_control / voice_doubao_control / voice_omnihand_control (默认参数+示例), omnihand_test / omnihand_usb_serial (docstring 说明, 禁 ttyACM 编号), state_machine / estun_handle_sm / estun_handle_cup_sm / estun_handle_data_sm (fallback 默认值)
+4. **注意**: estun_handle_*_sm.py 构造默认值改后仍会被 estun_config.yaml `hand.port` 覆盖 (运行时以 config 为准); 其他机器按实机枚举修改
+5. **验证**: py_compile 11 文件全过; 残留检查仅剩 by-id 说明文字
+
 ### putText 中文乱码修复 (Windows→Linux 移植, 2026-08-16)
 
 1. **背景**: OpenCV putText (Hershey 字体) 只支持 ASCII, 中文/✓/↑↓°/均渲染乱码 (Windows 下部分字体可渲染, Linux Qt 后端不行)

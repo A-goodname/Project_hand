@@ -12,7 +12,7 @@ OmniHand O10 速度控制模块 — 软件插值版
 
     from speed_control import OmniHandSpeedController, SpeedLevel
 
-    with OmniHandSpeedController(port="COM5") as ctrl:
+    with OmniHandSpeedController(port="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00") as ctrl:
         ctrl.enable()
         # 软件插值平滑控制
         ctrl.do_gesture_with_speed(Gesture.FIST, speed_level=SpeedLevel.VERY_SLOW)
@@ -133,7 +133,7 @@ class OmniHandSpeedController:
 
     使用示例::
 
-        ctrl = OmniHandSpeedController(port="COM5")
+        ctrl = OmniHandSpeedController(port="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00")
         ctrl.open()
         ctrl.enable()
 
@@ -405,7 +405,7 @@ def _run_speed_demo(ctrl: OmniHandSpeedController):
         )
 
 
-def demo_speed(port: str = "COM5"):
+def demo_speed(port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
     """
     演示: 软件插值速度控制
 
@@ -503,7 +503,7 @@ GESTURE_NAME_MAP: Dict[str, Gesture] = {
 }
 
 
-def interactive_mode(port: str = "COM5"):
+def interactive_mode(port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
     """
     交互式速度控制测试模式
     """
@@ -613,7 +613,7 @@ def interactive_mode(port: str = "COM5"):
 # 快速测试
 # ============================================================================
 
-def quick_test(port: str = "COM5"):
+def quick_test(port: str = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"):
     """
     快速验证速度控制功能
 
@@ -696,7 +696,7 @@ def quick_test(port: str = "COM5"):
 if __name__ == "__main__":
     import sys
 
-    port = "COM5"
+    port = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"
 
     # 解析命令行参数
     if len(sys.argv) > 1:
@@ -718,7 +718,7 @@ if __name__ == "__main__":
     print("  演示命令:")
     print("    python speed_control.py --demo       # 完整速度演示")
     print("    python speed_control.py --quick      # 快速测试")
-    print("    python speed_control.py --port COM3  # 指定串口进入交互模式")
+    print("    python speed_control.py --port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00  # 指定串口进入交互模式")
     print()
     print("  交互模式中可用命令: home / 张开 / 握住 / s / d / status / pos / q")
     print()

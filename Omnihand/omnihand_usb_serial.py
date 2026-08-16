@@ -149,14 +149,14 @@ class OmniHandSerial:
 
     使用示例::
 
-        with OmniHandSerial(port="COM3") as hand:
+        with OmniHandSerial(port="/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00") as hand:
             hand.enable()
             hand.set_all_positions([2048] * 10)
             positions = hand.read_all_positions()
             hand.disable()
 
     参数:
-        port: 串口号 (Windows: COM3, Linux: /dev/ttyUSB0)
+        port: 串口号 (Windows: COM5, Linux: /dev/serial/by-id/... 稳定路径, 禁 ttyACM 编号)
         baudrate: 波特率 (默认 460800)
         node_id: 节点 ID (默认 0x01)
         timeout: 读取超时 (秒)

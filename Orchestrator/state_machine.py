@@ -413,7 +413,7 @@ class GreetingHandler:
         print(f"[GREETING] 位姿已加载: Z1={self._zhaoshou1} Z2={self._zhaoshou2} WS={self._woshou}")
 
         # ---- 灵巧手 (必须在 Phase 0 挥手/握手前初始化) ----
-        hand_port = estun.get("hand", {}).get("port", "COM5")
+        hand_port = estun.get("hand", {}).get("port", "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00")
         init_hand(hand_port=hand_port, initial_gesture="RESET")
         print("[GREETING] 灵巧手已初始化")
 

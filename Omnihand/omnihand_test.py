@@ -7,7 +7,7 @@ OmniHand O10 灵巧手 USB/RS485 通信 Demo
 
 修改下方 PORT 为实际的串口号:
     - Windows: "COM5" (查看设备管理器)
-    - Linux:   "/dev/ttyUSB0" 或 "/dev/ttyACM0"
+    - Linux:   "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00" (by-id 稳定路径, 禁 ttyACM 编号)
 
 安全注意事项:
     - 首次使用请确认灵巧手已正确连接电源
@@ -306,13 +306,13 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] in ("--quick", "-q"):
         quick_test()
     elif len(sys.argv) > 1 and sys.argv[1] == "--port":
-        # python test.py --port COM5 或 /dev/ttyUSB0
+        # python test.py --port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00
         PORT = sys.argv[2] if len(sys.argv) > 2 else PORT
         main()
     else:
         print("用法:")
         print("  python test.py                # 运行完整Demo (需修改上方PORT)")
-        print("  python test.py --port COM3    # 指定串口运行完整Demo")
+        print("  python test.py --port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00    # 指定串口运行完整Demo")
         print("  python test.py --quick        # 快速通信测试")
         print("  python test.py -q             # 同上")
         print("")

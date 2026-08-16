@@ -75,7 +75,8 @@
 - [x] 排坑: /dev/videoN 编号随插拔/驱动重绑漂移 → 必须按 sysfs 名称枚举, 禁止硬编码索引
 - [x] `multi_camera_preview.py` 新建 (名称枚举版三相机预览)
 - [x] 花屏排坑: D435i 与 UGREEN 同 hub 时等时带宽饱和 (video0 720p30 丢包花屏, 内核无报错); 把 D435i 挪到独立控制器后三相机 720p30 全速 0 丢包
-- [ ] 重登会话后验证 dialout 直连 (当前用 sg dialout 绕过)
+- [x] 重登会话后验证 dialout 直连 (2026-08-16: `id` 确认已在 dialout 组, 直连无需 sg 包裹) ✅
+- [x] 灵巧手串口 Linux 适配 (2026-08-16): 11 文件 31 处 COM5/COM3 → by-id 稳定路径 (voice_*/gesture/speed_control/test/usb_serial/state_machine/estun_handle_*_sm)
 
 ### 豆包端到端语音大模型 (全双工) 语音控制 (2026-08-13)
 - [x] `Omnihand/voice_doubao_control.py`: 单文件 S2S 实现 (WS 会话 + 流式音频 + FC + 重连 + barge-in)
