@@ -8,6 +8,31 @@
 
 ## 最近变更
 
+### putText 中文乱码修复 (Windows→Linux 移植, 2026-08-16)
+
+1. **背景**: OpenCV putText (Hershey 字体) 只支持 ASCII, 中文/✓/↑↓°/均渲染乱码 (Windows 下部分字体可渲染, Linux Qt 后端不行)
+2. **修复 3 处**:
+   - rps_gesture.py: 手势名 `gesture_cn`(中文)→ 显示用 `gesture_name`(已有英文 CLASS_NAMES); `"✓"`→`"OK"`; `"↑"/"↓"`→`"UP"/"DN"`; `"°"`→`"deg"`
+   - estun_teach_handle_p1.py: putText `"把手稳定中..."` → `"Stabilizing..."`
+   - estun_teach_p3.py: putText `"Cup 稳定中..."` → `"Cup stabilizing..."`
+3. **窗口标题**: 全项目 45 个 namedWindow/imshow 标题已全部 ASCII (之前处理过), 中文标题在 Linux Qt 后端会导致黑屏/打不开 — 新窗口一律 ASCII
+4. **验证**: py_compile OK; 全项目扫描无剩余 putText 非 ASCII 字面量
+
+### rps_gesture 相机修正: 补 camera_path (2026-08-16)
+
+1. **问题**: rps_gesture.py 的 `run_test` 创建 UGreenCamera 时漏传 `camera_path` → camera_id=-1 时按名称匹配命中第一个 UGREEN (4.1 口 [6]), 而非 Camera B 的 4.2 口 [8] (hand_in_cup 已传, 实测正确)
+2. **修复**: `run_test` UGreenCamera 调用补 `camera_path=_ugreen.get("camera_path", "")`; `_open_camera` 已正确传 path (241 行)
+3. **验证**: 编译 OK + find_camera_id 实跑: 路径匹配 "usb-0:4.2" → [8] ✓
+
+### P1 示教工具升级: 6D 偏置 (检测姿态纳入闭环) (2026-08-16)
+
+1. **背景**: 示教 log 只有位置偏置, 检测姿态 (动态 euler) 未参与 — 用户指出姿态应辅助抓取姿态确定
+2. **改造 (estun_teach_handle_p1.py)**: 稳定窗口同时收集 pos+euler (只收 source=dynamic 帧); 新增 `transform_pose_to_base_6d` (euler_cam→R_cam→T_cam2ee→R_ee→R_ee_base→基系 ABC, ZYX 约定与 ESTUN ABC 一致) + `mean_euler` (逐分量 ±360k 对齐后平均) + `unwrap_deg` (±180)
+3. **偏置语义**: t_offset = P1_teach - detect_base_pos; abc_offset = unwrap(P1_teach_ABC - detect_base_ABC); 运行时 P1_ABC = detect_ABC + abc_offset
+4. **输出**: log/打印补 detect_base ABC + abc_offset; yaml 段加 `abc_offset`; 汇总加角度平均+方差 (验收 <5°)
+5. **离线验证**: euler↔R 闭环 100 例 / 6D 转换与位置版一致 / unwrap 环绕 / mean_euler 179± / 偏置闭环 全过; 单测 30 例不受影响 (工具独立)
+6. **待实机**: 重新示教 ≥3 次, 验证 detect_ABC 合理性 (与示教 P1 ABC 对比) 与 abc_offset 方差
+
 ### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
 
 1. **关键修复: `_get_anchor_depth` 固定 seed** — 随机采样无 seed 时每帧采样 50 点不同 → anchor_depth 抖动 → Z 离群过滤(±5cm)边界变化 → 点云集合每帧不同 → PCA 主轴漂移 (**mask 稳定但姿态大幅波动 44° 的真正根因**; test_handle_6D 原版有 seed(0), 重构时丢失)。修复: `np.random.default_rng(0)` 确定性采样 → 实测 C 角 44°→**3.9°**、B 角 12°→**2.2°**、A 角 14°→8.9° (壶身轴 λ1/λ2=1.14 深度噪声残余); 位置 x/y/z 1-2mm

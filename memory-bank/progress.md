@@ -1,5 +1,11 @@
 # Progress — Project_hand
 
+### P1 示教工具 6D 偏置 (2026-08-16)
+- [x] 稳定窗口收集姿态 (euler_cam, 只收 dynamic 帧) + 基系 6D 预测 (`transform_pose_to_base_6d`)
+- [x] 偏置含角度: abc_offset = unwrap(P1_ABC - detect_ABC); yaml/log 输出补姿态
+- [x] 离线验证: euler↔R 闭环 / 位置一致 / unwrap / mean_euler / 偏置闭环 全过
+- [ ] 实机示教复跑: 检查 detect_ABC 合理性 + abc_offset 方差 (<5°)
+
 ### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
 - [x] `_get_anchor_depth` 固定 seed (确定性采样) — 实测 C 44°→3.9°、B 12°→2.2°、A 14°→8.9° (mask 稳定但姿态飘的根因)
 - [x] mask 扩展默认关闭 (extend_px: 0); 中心回退 mask_center; 几何法回退 b0b36cd (Y=PCA 主轴)

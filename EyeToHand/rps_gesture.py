@@ -418,6 +418,7 @@ def run_test(debug=False):
     cam = UGreenCamera(
         camera_id=_ugreen.get("camera_id", -1),
         camera_name=_ugreen.get("camera_name", "UGREEN Camera 1080P"),
+        camera_path=_ugreen.get("camera_path", ""),
         width=_ugreen.get("width", 1280),
         height=_ugreen.get("height", 720),
         fps=_ugreen.get("fps", 30),
@@ -483,8 +484,9 @@ def run_test(debug=False):
                 x1, y1, x2, y2 = det["hand_bbox"]
                 thickness = 3 if stable else 1
                 cv2.rectangle(display, (x1, y1), (x2, y2), color, thickness)
-                status = "✓" if stable else f"{det['stable_count']}/{detector._stable_required}"
-                label = f"[{handedness}] {det['gesture_cn']} [{status}]"
+                # putText 只支持 ASCII: 手势名用 gesture_name (英文), ✓/箭头等符号禁用
+                status = "OK" if stable else f"{det['stable_count']}/{detector._stable_required}"
+                label = f"[{handedness}] {det['gesture_name']} [{status}]"
                 cv2.putText(display, label, (x1, max(0, y1 - 10)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
@@ -499,9 +501,9 @@ def run_test(debug=False):
                 y_bar = 30
                 for fname in ["thumb", "index", "middle", "ring", "pinky"]:
                     finfo = details.get(fname, {})
-                    ext = "↑" if finfo.get("extended") else "↓"
+                    ext = "UP" if finfo.get("extended") else "DN"
                     ang = finfo.get("angle", 0)
-                    text = f"{fname}: {ext} ({ang:.0f}°)"
+                    text = f"{fname}: {ext} ({ang:.0f}deg)"
                     bar_color = (0, 255, 0) if finfo.get("extended") else (0, 0, 255)
                     cv2.putText(display, text, (10, y_bar),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, bar_color, 1)

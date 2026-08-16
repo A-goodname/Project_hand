@@ -219,7 +219,7 @@ def main():
                 if c_bbox is not None:
                     cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler)
 
-            cv2.putText(display_img, f"Cup 稳定中... ({len(cup_stabilizer_buffer)}/{STABLE_WINDOW})",
+            cv2.putText(display_img, f"Cup stabilizing... ({len(cup_stabilizer_buffer)}/{STABLE_WINDOW})",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             cv2.imshow("P3 Teach - Cup Detection", display_img)
             if cv2.waitKey(1) & 0xFF == ord("q"):

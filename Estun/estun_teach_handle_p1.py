@@ -6,16 +6,18 @@ P1 把手抓取点示教工具 (Handle 检测 + 人工示教)
 自动计算"检测把手基系位置 → P1 末端基系位置"的**基系示教偏置**.
 
 原理 (基系直接加, 含 TCP 偏移语义, 无 t_handle_effective 补偿链):
-    t_offset = P1_teach_base - detect_handle_base
-    运行时: P1_base = detect_handle_base + t_offset
+    t_offset   = P1_teach_xyz - detect_base_xyz
+    abc_offset = P1_teach_ABC - detect_base_ABC   (unwrap 到 ±180)
+    运行时: P1_base = detect_base + t_offset, P1_ABC = detect_ABC + abc_offset
+    检测 euler → 基系预测 ABC → 加角度偏置 → 示教姿态 (euler 辅助抓取姿态确定)
 
 流程:
   [Step 1] 加载配置 / 标定矩阵
   [Step 2] 初始化 HandleCupDetector (启动 pipeline)
   [Step 3] 控制台输入机械臂当前位姿 R0 (机器人静止, 数值仅在差分中抵消)
-  [Step 4] 稳定检测把手 → detect_handle_base
-  [Step 5] 人工示教 P1 (可选 P2) → 输入示教器读数 → 计算偏移
-  [Step 6] 重复多次 → 平均 + 方差
+  [Step 4] 稳定检测把手 (位置+姿态) → 基系 6D 预测 detect_base/ABC
+  [Step 5] 人工示教 P1 (可选 P2) → 输入示教器读数 → 计算位置+角度偏置
+  [Step 6] 重复多次 → 平均 + 方差 (位置 <5mm, 角度 <5°)
   [Step 7] 输出 yaml 片段 / --apply 写入 estun_config.yaml
 
 安全: 只读相机 + 控制台输入, 程序绝不发送任何运动指令.
@@ -41,7 +43,42 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入工具 ----
-from Estun.utils_shared import transform_pose_to_base
+from Estun.utils_shared import transform_pose_to_base, euler_to_rotation_matrix
+from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
+
+
+# =============================================================
+# 姿态辅助 (6D 偏置: 检测姿态 → 基系预测 + 角度差分)
+# =============================================================
+
+def unwrap_deg(diff):
+    """角度差 unwrap 到 (-180, 180] (避免 355°-5°=350° 的环绕差)."""
+    return diff - 360.0 * np.round(diff / 360.0)
+
+
+def mean_euler(eulers):
+    """多帧 euler 平均 (逐分量相对首帧 ±360k 对齐后平均)."""
+    arr = np.array(eulers, dtype=float)
+    ref = arr[0]
+    aligned = arr + 360.0 * np.round((ref - arr) / 360.0)
+    return aligned.mean(axis=0)
+
+
+def transform_pose_to_base_6d(pos_cam, euler_cam, T_cam2ee, r0_xyz, r0_abc):
+    """检测位姿 (相机系) → 基系 6D 预测.
+
+    链: R_cam(euler ZYX) → R_ee = T_cam2ee_rot @ R_cam → R_base = R_ee_base @ R_ee
+        pos_ee = T_cam2ee_rot @ pos_cam + T_cam2ee_t; pos_base = R_ee_base @ pos_ee + r0_xyz
+    返回: (pos_base, abc_base) — 基系预测 (euler 辅助抓取姿态确定).
+    """
+    R_cam = euler_to_rotation_matrix(*euler_cam, order="zyx")
+    R_ee = T_cam2ee[:3, :3] @ R_cam
+    pos_ee = T_cam2ee[:3, :3] @ np.array(pos_cam, dtype=float) + T_cam2ee[:3, 3]
+    R_ee_base = euler_to_rotation_matrix(*r0_abc, order="zyx")
+    R_base = R_ee_base @ R_ee
+    pos_base = R_ee_base @ pos_ee + np.array(r0_xyz, dtype=float)
+    abc_base = rotation_matrix_to_euler_angles(R_base)
+    return pos_base, np.array(abc_base, dtype=float)
 
 
 # =============================================================
@@ -179,7 +216,7 @@ def main():
     import cv2
     cv2.namedWindow("P1 Teach - Handle Detection", cv2.WINDOW_NORMAL)
 
-    teach_results = []   # (detect_base, p1_xyz, t_offset, p1_abc)
+    teach_results = []   # (detect_base, detect_abc, p1_xyz, t_offset, abc_offset, p1_abc)
     p2_results = []      # (p2_offset) or None
     teach_count = 0
     running = True
@@ -190,7 +227,8 @@ def main():
         stable = False
         frame_counter = 0
         buf = []
-        detect_base = None
+        detect_base = None          # (pos_base, abc_base) — 基系 6D 预测
+        detect_abc = None
 
         while not stable:
             color, depth_img, depth_cmap, depth_frame = detector.get_frames()
@@ -208,30 +246,35 @@ def main():
                 result = detector.detect(color, depth_frame)
                 h = result["handle"]
 
-                if h["pos_cam"] is not None:
+                if h["pos_cam"] is not None and h["source"] == "dynamic":
+                    # 只收动态姿态帧 (fallback 固定 euler 无参考价值)
                     pos_cam = np.array(h["pos_cam"])
-                    buf.append(pos_cam)
+                    euler_cam = np.array(h["euler_cam"])
+                    buf.append((pos_cam, euler_cam))
                     if len(buf) > STABLE_WINDOW:
                         buf.pop(0)
                     if len(buf) == STABLE_WINDOW:
-                        pos_range = np.ptp(np.array(buf), axis=0).max()
+                        pos_arr = np.array([b[0] for b in buf])
+                        pos_range = np.ptp(pos_arr, axis=0).max()
                         if pos_range < POS_THRESH:
-                            mean_cam = np.array(buf).mean(axis=0)
-                            # 检测把手位置 → 末端系 → 基系 (不减 t_handle_effective,
-                            # 新方案语义: 偏置已含 TCP 偏移)
-                            pos_ee = T_cam2ee[:3, :3] @ mean_cam + T_cam2ee[:3, 3]
-                            detect_base = transform_pose_to_base(
-                                pos_ee, r0_xyz, r0_abc)
+                            mean_cam = pos_arr.mean(axis=0)
+                            mean_euler_cam = mean_euler([b[1] for b in buf])
+                            # 检测位姿 (位置+姿态) → 末端系 → 基系 (6D 预测;
+                            # 不减 t_handle_effective, 偏置已含 TCP 偏移)
+                            detect_base, detect_abc = transform_pose_to_base_6d(
+                                mean_cam, mean_euler_cam, T_cam2ee, r0_xyz, r0_abc)
                             stable = True
                             print(f"\n[TEACH] 把手稳定! pos_cam=({mean_cam[0]:.3f},{mean_cam[1]:.3f},"
-                                  f"{mean_cam[2]:.3f}) m\n"
-                                  f"[TEACH] detect_handle_base=({detect_base[0]:.4f},{detect_base[1]:.4f},"
-                                  f"{detect_base[2]:.4f}) m", flush=True)
+                                  f"{mean_cam[2]:.3f}) m euler_cam=({mean_euler_cam[0]:.1f},"
+                                  f"{mean_euler_cam[1]:.1f},{mean_euler_cam[2]:.1f}) deg\n"
+                                  f"[TEACH] 预测 base=({detect_base[0]:.4f},{detect_base[1]:.4f},"
+                                  f"{detect_base[2]:.4f}) ABC=({detect_abc[0]:.1f},{detect_abc[1]:.1f},"
+                                  f"{detect_abc[2]:.1f}) deg", flush=True)
                 else:
                     buf = []
 
             display = detector.visualize(color)
-            cv2.putText(display, f"把手稳定中... ({len(buf)}/{STABLE_WINDOW})",
+            cv2.putText(display, f"Stabilizing... ({len(buf)}/{STABLE_WINDOW})",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             cv2.imshow("P1 Teach - Handle Detection", display)
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -255,8 +298,11 @@ def main():
             print(f"[ERROR] 位姿解析失败: {e}")
             continue
 
-        # ---- 计算基系偏置 ----
+        # ---- 计算基系偏置 (位置 + 角度) ----
+        # 语义: 运行时 P1_base = detect_base + t_offset, P1_ABC = detect_ABC + abc_offset
+        # (euler 辅助抓取姿态: 检测姿态加角度偏置 → 示教姿态)
         t_offset = p1_xyz - detect_base
+        abc_offset = unwrap_deg(np.array(p1_abc, dtype=float) - detect_abc)
 
         # ---- 可选示教 P2 (接近点, 回车跳过) ----
         p2_offset = None
@@ -269,17 +315,23 @@ def main():
                 print(f"[ERROR] P2 解析失败, 本次 P2 跳过: {e}")
 
         print(f"\n[TEACH] 第 {teach_count} 次结果:")
-        print(f"[TEACH]   p1_offset = ({t_offset[0]:.4f}, {t_offset[1]:.4f}, {t_offset[2]:.4f}) m")
-        print(f"[TEACH]   p1_abc    = ({p1_abc[0]:.1f}, {p1_abc[1]:.1f}, {p1_abc[2]:.1f}) deg")
+        print(f"[TEACH]   预测 base = ({detect_base[0]:.4f}, {detect_base[1]:.4f}, {detect_base[2]:.4f}) "
+              f"ABC=({detect_abc[0]:.1f},{detect_abc[1]:.1f},{detect_abc[2]:.1f}) deg")
+        print(f"[TEACH]   示教 P1   = ({p1_xyz[0]:.4f}, {p1_xyz[1]:.4f}, {p1_xyz[2]:.4f}) "
+              f"ABC=({p1_abc[0]:.1f},{p1_abc[1]:.1f},{p1_abc[2]:.1f}) deg")
+        print(f"[TEACH]   t_offset  = ({t_offset[0]:.4f}, {t_offset[1]:.4f}, {t_offset[2]:.4f}) m")
+        print(f"[TEACH]   abc_offset= ({abc_offset[0]:.1f}, {abc_offset[1]:.1f}, {abc_offset[2]:.1f}) deg")
         if p2_offset is not None:
             print(f"[TEACH]   p2_offset = ({p2_offset[0]:.4f}, {p2_offset[1]:.4f}, {p2_offset[2]:.4f}) m")
 
         # ---- 写入日志 ----
         log_line = (
-            f"[{teach_count}] detect_base=({detect_base[0]:.4f},{detect_base[1]:.4f},{detect_base[2]:.4f}) | "
+            f"[{teach_count}] detect_base=({detect_base[0]:.4f},{detect_base[1]:.4f},{detect_base[2]:.4f}) "
+            f"ABC=({detect_abc[0]:.1f},{detect_abc[1]:.1f},{detect_abc[2]:.1f}) | "
             f"P1=({p1_xyz[0]:.4f},{p1_xyz[1]:.4f},{p1_xyz[2]:.4f}) "
             f"ABC=({p1_abc[0]:.1f},{p1_abc[1]:.1f},{p1_abc[2]:.1f}) | "
-            f"t_offset=({t_offset[0]:.4f},{t_offset[1]:.4f},{t_offset[2]:.4f})\n"
+            f"t_offset=({t_offset[0]:.4f},{t_offset[1]:.4f},{t_offset[2]:.4f}) | "
+            f"abc_offset=({abc_offset[0]:.1f},{abc_offset[1]:.1f},{abc_offset[2]:.1f})\n"
         )
         if p2_offset is not None:
             log_line += (f"[{teach_count}] P2 offset=({p2_offset[0]:.4f},{p2_offset[1]:.4f},"
@@ -289,7 +341,7 @@ def main():
             f.writelines(log_lines)
         print(f"[TEACH] 已保存到日志: {log_path}")
 
-        teach_results.append((detect_base, p1_xyz, t_offset, p1_abc))
+        teach_results.append((detect_base, detect_abc, p1_xyz, t_offset, abc_offset, p1_abc))
         p2_results.append(p2_offset)
 
         # ---- 询问是否继续 ----
@@ -306,14 +358,20 @@ def main():
     print(f"  日志: {log_path}")
 
     if teach_count >= 1:
-        offsets = np.array([r[2] for r in teach_results])
+        offsets = np.array([r[3] for r in teach_results])
         mean_off = offsets.mean(axis=0)
         std_off = offsets.std(axis=0)
-        print(f"\n  p1_offset 平均: ({mean_off[0]:.4f}, {mean_off[1]:.4f}, {mean_off[2]:.4f}) m")
-        print(f"  p1_offset 方差: ({std_off[0]:.4f}, {std_off[1]:.4f}, {std_off[2]:.4f}) m "
+        abc_offsets = np.array([r[4] for r in teach_results])
+        mean_abc = abc_offsets.mean(axis=0)
+        std_abc = abc_offsets.std(axis=0)
+        print(f"\n  t_offset 平均: ({mean_off[0]:.4f}, {mean_off[1]:.4f}, {mean_off[2]:.4f}) m")
+        print(f"  t_offset 方差: ({std_off[0]:.4f}, {std_off[1]:.4f}, {std_off[2]:.4f}) m "
               f"(验收: <0.005 m)")
+        print(f"  abc_offset 平均: ({mean_abc[0]:.1f}, {mean_abc[1]:.1f}, {mean_abc[2]:.1f}) deg")
+        print(f"  abc_offset 方差: ({std_abc[0]:.1f}, {std_abc[1]:.1f}, {std_abc[2]:.1f}) deg "
+              f"(验收: <5.0 deg)")
         # p1_abc 取最后一次示教值 (姿态通常不变; 若变化大人工取舍)
-        p1_abc_final = teach_results[-1][3]
+        p1_abc_final = teach_results[-1][5]
         print(f"  p1_abc (末次): ({p1_abc_final[0]:.1f}, {p1_abc_final[1]:.1f}, "
               f"{p1_abc_final[2]:.1f}) deg")
 
@@ -328,7 +386,8 @@ def main():
             "  handle_teach:                     # 把手抓取示教偏置 (基系直接加)",
             "    enabled: true",
             f"    p1_offset: [{mean_off[0]:.4f}, {mean_off[1]:.4f}, {mean_off[2]:.4f}]  # 基系: P1 = detect_base + p1_offset (m)",
-            f"    p1_abc: [{p1_abc_final[0]:.1f}, {p1_abc_final[1]:.1f}, {p1_abc_final[2]:.1f}]  # 示教 ABC (deg)",
+            f"    abc_offset: [{mean_abc[0]:.1f}, {mean_abc[1]:.1f}, {mean_abc[2]:.1f}]  # 基系: P1_ABC = detect_ABC + abc_offset (deg)",
+            f"    p1_abc: [{p1_abc_final[0]:.1f}, {p1_abc_final[1]:.1f}, {p1_abc_final[2]:.1f}]  # 示教 ABC (deg, 校验参考)",
         ]
         if p2_mean is not None:
             yaml_block.append(
@@ -347,6 +406,7 @@ def main():
                 cfg_all.setdefault("estun", {})["handle_teach"] = {
                     "enabled": True,
                     "p1_offset": [round(float(x), 4) for x in mean_off],
+                    "abc_offset": [round(float(x), 1) for x in mean_abc],
                     "p1_abc": [round(float(x), 1) for x in p1_abc_final],
                     "p2_offset": [round(float(x), 4) for x in p2_mean] if p2_mean is not None else [0.0, 0.0, 0.0],
                     "p2_abc": [round(float(x), 1) for x in p1_abc_final],
