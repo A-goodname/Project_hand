@@ -126,13 +126,16 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None,
 
     模式说明:
         free      : 仅叠加固定灵巧手安装偏移 Rz(C)
+        dynamic   : 动态检测姿态 (B2, 2026-08-16) — 直接使用 R_obj_ee
+                    (相机→末端链修正后的动态旋转) + Y 轴消歧 + 安装偏移;
+                    与 free 数学相同, 但 R_obj_ee 来自实时检测而非固定配置
         vertical  : 末端XY平面与基坐标系Z轴平行,
                     ee-X || 水瓶Y轴(向下), ee-Y || 水瓶X轴, ee-Z || -水瓶Z轴
         horizontal: 暂未实现
 
     参数:
         R_obj_ee        : 3x3, 物体在末端系下的旋转矩阵
-        mode            : str, "vertical" | "horizontal" | "free"
+        mode            : str, "vertical" | "horizontal" | "free" | "dynamic"
         r_offset        : np.ndarray, 旋转偏移 [A, B, C], 度
         R_ee_base       : 3x3 or None, 末端在基系下的旋转矩阵
         grasp_direction : str, "right"(右手/掌心向左) | "left"(左手/掌心向右),
@@ -162,6 +165,12 @@ def compute_grasp_rotation(R_obj_ee, mode, r_offset, R_ee_base=None,
     # 第二步: 按模式计算
     if mode == "free":
         # 仅叠加固定灵巧手安装偏移,不做方向修正
+        R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
+        return R @ R_offset.T
+
+    if mode == "dynamic":
+        # B2 动态抓取: R 已为相机→末端链修正的动态姿态 (含 Y 轴消歧),
+        # 仅叠加灵巧手安装偏移 — 跟随检测姿态, 不做固定方向约束
         R_offset = euler_to_rotation_matrix(*r_offset, order="zyx")
         return R @ R_offset.T
 

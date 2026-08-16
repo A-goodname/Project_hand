@@ -1,8 +1,19 @@
 # Orchestrator Handle+Cup 检测器独立配置
 # HandleCupDetector 完全由此配置驱动, 不依赖 RealSense_R/config.yaml
 
-# 抓取模式: fixed (基系ABC直用) | vertical | free
-orientation_mode: fixed
+# 抓取模式: fixed (基系ABC直用) | vertical | free | dynamic (B2 动态抓取)
+orientation_mode: dynamic
+
+# B2 动态抓取: 姿态连续性门禁阈值 (稳定窗口最大测地距离, deg; 超阈禁 arm)
+attitude_geodesic_deg: 3.0
+
+# 现场门禁 site_gate (audit 修复 1): 标定后 bind 前只读检查
+site_gate:
+  preparation_ok: false        # 现场准备确认 (操作员清场后置 true)
+  camera_b_path: usb-0:4.2     # Camera B (UGREEN) USB 物理口 (假序列号 SN0001)
+  hand_serial_path: /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00
+  eth_iface: enp36s0f1         # 机械臂有线网 (NO-CARRIER 仅记录警告)
+  block_link_down: false       # true = 网线断开也阻止启动
 
 # 把手方向
 handle_side: right             # 水壶把手方向: right | left (实机: 把手在左)

@@ -36,6 +36,12 @@ if _project_root not in sys.path:
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles
 from Orchestrator.handle_cup_detector import HandleCupDetector
 from Orchestrator.logger import session_log
+from Orchestrator.rot_math import (  # B2 动态姿态链 (2026-08-16)
+    quaternion_geodesic_deg,
+    quaternion_mean,
+    quaternion_to_rotation_matrix,
+)
+from Orchestrator.site_gate import run_site_gate  # audit 修复 1 (2026-08-16)
 from Orchestrator.session_barrier import (
     BarrierReject,
     SessionBarrier,
@@ -159,7 +165,12 @@ _gf = 0  # 全局代际
 
 
 class PoseStabilizer:
-    """位姿稳定器 — 缓存最近 N 帧, 位置+角度波动低于阈值时输出均值."""
+    """位姿稳定器 — 缓存最近 N 帧, 位置+角度波动低于阈值时输出均值.
+
+    B2 扩展 (2026-08-16): 支持四元数姿态缓冲, 以**测地距离**判定姿态连续性
+    (PCA 180° 翻转/符号歧义场景下欧拉角范围判定会失真); get_mean_attitude
+    输出 Markley 四元数均值旋转; continuity_report 供轨迹日志/现场证据.
+    """
 
     def __init__(self, window=5, pos_thresh=0.005, angle_thresh=3.0):
         self.window = window
@@ -180,26 +191,68 @@ class PoseStabilizer:
     def is_generation_valid(self):
         return self._sf == _gf
 
-    def add(self, pos, euler):
-        self._buffer.append((np.array(pos, dtype=float), np.array(euler, dtype=float)))
+    def add(self, pos, euler, quat=None):
+        """quat=(w,x,y,z) 可选; 提供时参与测地连续性判定."""
+        self._buffer.append((np.array(pos, dtype=float),
+                             np.array(euler, dtype=float),
+                             None if quat is None else np.array(quat, dtype=float)))
         if len(self._buffer) > self.window:
             self._buffer.pop(0)
+
+    def _max_geodesic_deg(self):
+        """窗口内四元数两两测地距离最大值 (°); 不足两个或无四元数 → None."""
+        quats = [q for _, _, q in self._buffer if q is not None]
+        if len(quats) < 2:
+            return None
+        maxd = 0.0
+        for i in range(len(quats)):
+            for j in range(i + 1, len(quats)):
+                d = quaternion_geodesic_deg(quats[i], quats[j])
+                if d > maxd:
+                    maxd = d
+        return float(maxd)
 
     def is_stable(self):
         if len(self._buffer) < self.window:
             return False
-        poses = np.array([p for p, _ in self._buffer])
-        angles = np.array([a for _, a in self._buffer])
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
         pos_range = np.ptp(poses, axis=0).max()
         angle_range = np.ptp(angles, axis=0).max()
+        geo = self._max_geodesic_deg()
+        if geo is not None and geo > self.angle_thresh:
+            return False
         return pos_range < self.pos_thresh and angle_range < self.angle_thresh
 
     def get_mean(self):
         if not self._buffer:
             return None, None
-        poses = np.array([p for p, _ in self._buffer])
-        angles = np.array([a for _, a in self._buffer])
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
         return poses.mean(axis=0), angles.mean(axis=0)
+
+    def get_mean_attitude(self):
+        """窗口四元数 Markley 均值 → (R 3x3, quat (w,x,y,z)); 无四元数 → (None, None)."""
+        quats = [q for _, _, q in self._buffer if q is not None]
+        if not quats:
+            return None, None
+        q_mean = quaternion_mean(quats)
+        return quaternion_to_rotation_matrix(q_mean), q_mean
+
+    def continuity_report(self):
+        """连续性报告: 帧数/位置范围/欧拉范围/最大测地距离/判定 (供轨迹日志)."""
+        if not self._buffer:
+            return None
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
+        geo = self._max_geodesic_deg()
+        return {
+            "frames": len(self._buffer),
+            "pos_range_m": float(np.ptp(poses, axis=0).max()),
+            "euler_range_deg": float(np.ptp(angles, axis=0).max()),
+            "max_geodesic_deg": geo,
+            "verdict": "stable" if self.is_stable() else "unstable",
+        }
 
     def reset(self):
         self._buffer = []
@@ -823,6 +876,23 @@ class HandleGraspAndPourHandler:
         ctx.T_cam2ee = load_cam2ee(calib_path)
         session_log(f"标定已加载 (D0 门禁): {calib_path}")
 
+        # ---- 现场门禁 site_gate (audit 修复 1): 标定后、bind 前, 只读检查 ----
+        _sg = self._orch_cfg.get("site_gate", {})
+        _sg_failures = run_site_gate(
+            preparation_ok=bool(_sg.get("preparation_ok", False)),
+            camera_a_serial=ctx.camera_a_serial or "",
+            camera_b_path=_sg.get("camera_b_path", "usb-0:4.2"),
+            hand_serial_path=_sg.get(
+                "hand_serial_path",
+                "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"),
+            eth_iface=_sg.get("eth_iface", "enp36s0f1"),
+            block_link_down=bool(_sg.get("block_link_down", False)),
+        )
+        if _sg_failures:
+            raise RuntimeError(
+                f"site gate 阻止启动 ({len(_sg_failures)} 项): {_sg_failures[0]}")
+        session_log("现场门禁通过 (相机身份/物理口/carrier 活体)")
+
         # ---- TCP 服务器 (标定通过后才监听运动 socket) ----
         host = estun["tcp_server"]["host"]
         port = estun["tcp_server"]["port"]
@@ -921,6 +991,11 @@ class HandleGraspAndPourHandler:
 
         # Orientation + 把手方向 (从 orch config)
         self._orientation_mode = self._orch_cfg.get("orientation_mode", "fixed")
+        # B2 动态抓取 (2026-08-16): 姿态连续性门禁阈值 + 最近稳定动态姿态
+        self._attitude_geodesic_deg = float(
+            self._orch_cfg.get("attitude_geodesic_deg", 3.0))
+        self._last_handle_attitude_ee = None       # 最近稳定动态姿态 R_ee (3x3)
+        self._last_handle_geodesic_deg = None      # 稳定窗口最大测地距离 (°)
         self._handle_side = self._orch_cfg.get("handle_side", "right")
         self._grasp_direction = self._orch_cfg.get("grasp_direction", self._handle_side)
         if self._handle_side != self._grasp_direction:
@@ -939,13 +1014,16 @@ class HandleGraspAndPourHandler:
         print(f"[INFO] Cup   P1 ABC (基系): {tuple(self._cup_fixed_abc)}")
 
         # 校验
-        valid_modes = {"vertical", "horizontal", "free", "fixed"}
+        valid_modes = {"vertical", "horizontal", "free", "fixed", "dynamic"}
         if self._orientation_mode not in valid_modes:
             print(f"[WARN] 未知 orientation_mode: {self._orientation_mode}, → free")
             self._orientation_mode = "free"
         elif self._orientation_mode == "horizontal":
             print("[WARN] horizontal 模式未实现, → free")
             self._orientation_mode = "free"
+        elif self._orientation_mode == "dynamic":
+            print(f"[INFO] dynamic 模式: 姿态连续性门禁 "
+                  f"attitude_geodesic_deg={self._attitude_geodesic_deg}°")
 
         # 跳帧
         self._skip_frames = self._orch_cfg.get("skip_frames", 5)
@@ -1010,8 +1088,9 @@ class HandleGraspAndPourHandler:
         h = result["handle"]
         if h["pos_cam"] is not None:
             pos_cam = np.array(h["pos_cam"])
-            euler = np.array(h["euler_cam"])  # 基系 ABC, 仅用于稳定器角度检查
-            self._handle_stabilizer.add(tuple(pos_cam), tuple(euler))  # type: ignore[arg-type]
+            euler = np.array(h["euler_cam"])  # 相机系 ZYX (动态) 或 config 回退, 窗口范围检查用
+            quat = h.get("quat_cam") if h.get("source") == "dynamic" else None
+            self._handle_stabilizer.add(tuple(pos_cam), tuple(euler), quat)  # type: ignore[arg-type]
             if self._handle_stabilizer.is_stable():
                 if not self._handle_stabilizer.is_generation_valid():
                     self._handle_stabilizer.reset()
@@ -1020,12 +1099,29 @@ class HandleGraspAndPourHandler:
                     mean_pos, _mean_euler = self._handle_stabilizer.get_mean()
                     if mean_pos is not None:
                         pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
-                        # 基系 ABC 来自 config, 不经过 T_cam2ee 旋转
-                        det.last_known_pose = (pos_ee, tuple(self._handle_fixed_abc))
+                        # B2: 动态链 — 旋转经 相机→末端 链 (修旧: 直接写 config ABC)
+                        R_mean_cam, _q_mean = self._handle_stabilizer.get_mean_attitude()
+                        if R_mean_cam is not None:
+                            R_ee = T_cam2ee[:3, :3] @ R_mean_cam
+                            euler_ee = tuple(rotation_matrix_to_euler_angles(R_ee))
+                            self._last_handle_attitude_ee = R_ee
+                            report = self._handle_stabilizer.continuity_report()
+                            self._last_handle_geodesic_deg = (
+                                report.get("max_geodesic_deg") if report else None)
+                            print(f"\n[Handle STABLE dynamic] ee=({pos_ee[0]:.3f},"
+                                  f"{pos_ee[1]:.3f},{pos_ee[2]:.3f}) "
+                                  f"euler_ee={tuple(round(v, 2) for v in euler_ee)} "
+                                  f"geodesic={self._last_handle_geodesic_deg}")
+                        else:
+                            euler_ee = tuple(self._handle_fixed_abc)  # 无动态姿态 → config 回退
+                            self._last_handle_attitude_ee = None
+                            self._last_handle_geodesic_deg = None
+                            print(f"\n[Handle STABLE fallback] ee=({pos_ee[0]:.3f},"
+                                  f"{pos_ee[1]:.3f},{pos_ee[2]:.3f}) fixed_abc")
+                        det.last_known_pose = (pos_ee, euler_ee)
                         det.last_known_pose_ts = time.time()
                         det.last_known_pose_observation_id += 1
                         det.last_known_pose_at_monotonic_ns = time.monotonic_ns()
-                        print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})")
         # (else: 不稳定时保持上次稳定值, 不停清零)
 
         # === Cup 稳定 ===
@@ -1063,6 +1159,8 @@ class HandleGraspAndPourHandler:
         det.last_known_pose = None
         det.last_known_pose_ts = 0.0
         det.last_known_pose_at_monotonic_ns = 0
+        self._last_handle_attitude_ee = None    # B2: 姿态随观测一起作废
+        self._last_handle_geodesic_deg = None
         self._handle_stabilizer.reset()
         self._handle_stabilizer.capture_generation()
         self._frame_counter = 0
@@ -1082,6 +1180,22 @@ class HandleGraspAndPourHandler:
             time.sleep(0.05)
         print("[BARRIER] P2 复核超时: 未获得新稳定观测")
         return None
+
+    def _arm_allowed(self):
+        """B2 模式门禁: orientation_mode=fixed 禁 arm; dynamic 需姿态连续性达标.
+
+        返回 (ok, reason). 门禁通过才允许 P2 授权/抓取下发.
+        """
+        if self._orientation_mode == "fixed":
+            return False, "orientation_mode=fixed 禁 arm (B2: 动态姿态未用于抓取)"
+        if self._orientation_mode == "dynamic":
+            if self._last_handle_geodesic_deg is None:
+                return False, "无动态姿态连续性判定 (未见稳定动态观测)"
+            if self._last_handle_geodesic_deg > self._attitude_geodesic_deg:
+                return (False, f"姿态连续性超阈 "
+                        f"{self._last_handle_geodesic_deg:.1f}° > "
+                        f"{self._attitude_geodesic_deg}°")
+        return True, ""
 
     def _release_camera_a_late(self, ctx: SharedContext):
         """P2 复核结束后释放 Camera A 引用 (延迟交给 main 线程关闭)."""
@@ -1457,6 +1571,9 @@ class HandleGraspAndPourHandler:
                                 calibration_fingerprint=current_calibration,
                                 now_ns=time.monotonic_ns(),
                             )
+                            ok_arm, arm_reason = self._arm_allowed()
+                            if not ok_arm:
+                                raise BarrierReject(arm_reason, "ARM_GATE")
                             observation = self._refresh_handle_observation(
                                 ctx, after_ns=barrier.p2_arrived_at_ns,
                             )
