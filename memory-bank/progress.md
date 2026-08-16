@@ -4,7 +4,12 @@
 - [x] 稳定窗口收集姿态 (euler_cam, 只收 dynamic 帧) + 基系 6D 预测 (`transform_pose_to_base_6d`)
 - [x] 偏置含角度: abc_offset = unwrap(P1_ABC - detect_ABC); yaml/log 输出补姿态
 - [x] 离线验证: euler↔R 闭环 / 位置一致 / unwrap / mean_euler / 偏置闭环 全过
-- [ ] 实机示教复跑: 检查 detect_ABC 合理性 + abc_offset 方差 (<5°)
+- [x] 实机适配: 非连续帧 (失败帧不清空 buf + SKIP=1) — 排坑 `%1==1` 恒 False bug; BUF_MAX_AGE 5s 防漂移
+- [x] 姿态波动门限: 窗口内 euler 极差 <5° (对齐后) — 位置+姿态双门限才判稳定
+- [x] 流程: R0 延后到稳定检测后 (首次必输/回车复用) + 示教阶段窗口关闭 (下次迭代重开)
+- [x] 欧拉约定验证: A/B/C=绕基 X/Y/Z (Rz(C)Ry(B)Rx(A)), 绕竖直轴只改 C — 与用户实机观察一致
+- [x] 实机首跑 1 次: detect_ABC=(-104.5,18.8,-170.8) 合理; t_offset=(0.0474,-0.0805,0.0064); abc_offset=(-26.9,66.3,141.1)
+- [ ] 实机示教 ≥3 次: abc_offset 方差 <5° (当前仅 1 次, 方差无意义)
 
 ### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
 - [x] `_get_anchor_depth` 固定 seed (确定性采样) — 实测 C 44°→3.9°、B 12°→2.2°、A 14°→8.9° (mask 稳定但姿态飘的根因)
