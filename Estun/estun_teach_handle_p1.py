@@ -227,6 +227,8 @@ def main():
         buf = []
         mean_cam = None            # 稳定窗口均值 (相机系, 基系预测延后到 R0 输入后)
         mean_euler_cam = None
+        stable_pos_range = 0.0     # 稳定时窗口位置极差 (m, 记录波动裕度)
+        stable_eul_range = 0.0     # 稳定时窗口姿态极差 (deg)
 
         while not stable:
             color, depth_img, depth_cmap, depth_frame = detector.get_frames()
@@ -272,6 +274,8 @@ def main():
                         eul_aligned = eul_arr + 360.0 * np.round((_ref - eul_arr) / 360.0)
                         eul_range = np.ptp(eul_aligned, axis=0).max()
                         if pos_range < POS_THRESH and eul_range < ANGLE_THRESH:
+                            stable_pos_range = pos_range
+                            stable_eul_range = eul_range
                             mean_cam = pos_arr.mean(axis=0)
                             mean_euler_cam = mean_euler([b[1] for b in buf])
                             # 基系 6D 预测延后: 需输入 R0 后计算 (见稳定后步骤)
@@ -377,8 +381,12 @@ def main():
         if p2_offset is not None:
             print(f"[TEACH]   p2_offset = ({p2_offset[0]:.4f}, {p2_offset[1]:.4f}, {p2_offset[2]:.4f}) m")
 
-        # ---- 写入日志 ----
+        # ---- 写入日志 (自包含: 时间戳 + 相机系稳定均值 + 窗口极差 + 基系偏置) ----
+        _ts_now = datetime.now().strftime("%H:%M:%S")
         log_line = (
+            f"[{teach_count}] {_ts_now} cam_mean=({mean_cam[0]:.4f},{mean_cam[1]:.4f},{mean_cam[2]:.4f}) "
+            f"euler_cam=({mean_euler_cam[0]:.1f},{mean_euler_cam[1]:.1f},{mean_euler_cam[2]:.1f}) "
+            f"| range pos={stable_pos_range*1000:.1f}mm eul={stable_eul_range:.1f}deg\n"
             f"[{teach_count}] detect_base=({detect_base[0]:.4f},{detect_base[1]:.4f},{detect_base[2]:.4f}) "
             f"ABC=({detect_abc[0]:.1f},{detect_abc[1]:.1f},{detect_abc[2]:.1f}) | "
             f"P1=({p1_xyz[0]:.4f},{p1_xyz[1]:.4f},{p1_xyz[2]:.4f}) "
@@ -432,6 +440,23 @@ def main():
         p2_mean = np.array(p2_offsets).mean(axis=0) if p2_offsets else None
         if p2_mean is not None:
             print(f"  p2_offset 平均: ({p2_mean[0]:.4f}, {p2_mean[1]:.4f}, {p2_mean[2]:.4f}) m")
+
+        # ---- 汇总写入日志 (验收统计自包含, 不依赖终端输出) ----
+        log_lines.append(f"== 汇总 ({teach_count} 次) ==\n")
+        log_lines.append(
+            f"t_offset 平均: ({mean_off[0]:.4f}, {mean_off[1]:.4f}, {mean_off[2]:.4f}) m | "
+            f"方差: ({std_off[0]:.4f}, {std_off[1]:.4f}, {std_off[2]:.4f}) m (验收 <0.005)\n")
+        log_lines.append(
+            f"abc_offset 平均: ({mean_abc[0]:.1f}, {mean_abc[1]:.1f}, {mean_abc[2]:.1f}) deg | "
+            f"方差: ({std_abc[0]:.1f}, {std_abc[1]:.1f}, {std_abc[2]:.1f}) deg (验收 <5.0)\n")
+        log_lines.append(
+            f"p1_abc (末次): ({p1_abc_final[0]:.1f}, {p1_abc_final[1]:.1f}, "
+            f"{p1_abc_final[2]:.1f}) deg\n")
+        if p2_mean is not None:
+            log_lines.append(
+                f"p2_offset 平均: ({p2_mean[0]:.4f}, {p2_mean[1]:.4f}, {p2_mean[2]:.4f}) m\n")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.writelines(log_lines)
 
         # ---- 输出 yaml 片段 ----
         print(f"\n  [提示] 将以下片段写入 Estun/estun_config.yaml 的 estun: 段:")
