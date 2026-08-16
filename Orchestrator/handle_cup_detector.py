@@ -38,6 +38,15 @@ import numpy as np
 import pyrealsense2 as rs
 from ultralytics import YOLO, SAM
 
+# 姿态数学统一在 rot_math (协作线 B2: 动态抓取 + 测地连续性), 本模块只留别名.
+from Orchestrator.rot_math import (
+    MatrixSmoother as _MatrixSmoother,
+    align_axes as _align_axes,
+    rotate_around_axis as _rotate_around_axis,
+    rotation_matrix_to_quaternion,
+    unwrap_euler as _unwrap_euler,
+)
+
 from RealSense_R.realsense_shared import (
     load_camera_params,
     color_to_depth_pixel,
@@ -461,75 +470,9 @@ def _compute_pca_axis(mask, depth_frame, anchor_depth,
 #  4. 把手 2D 特征 + 正对参考旋转角 θ
 # ============================================================
 
-def _rotate_around_axis(axis, angle_deg):
-    """绕任意轴 axis 旋转 angle_deg 的旋转矩阵 (Rodrigues).
-
-    返回 3x3 旋转矩阵 (作用于列向量, 即 R @ v).
-    """
-    axis = np.asarray(axis, dtype=float)
-    n = np.linalg.norm(axis)
-    if n < 1e-10:
-        return np.eye(3)
-    axis = axis / n
-    rvec = axis * math.radians(angle_deg)
-    return cv2.Rodrigues(rvec)[0]
-
-
-def _align_axes(rot, prev_rot):
-    """帧间姿态锚定: 在 4 个候选 (恒等 + 绕 X/Y/Z 各 180°) 中选与上一帧最接近者.
-
-    治 PCA 主轴符号逐帧任意导致的帧间 180° 翻转 (根因 1).
-    覆盖全部翻转模式:
-      - Y 翻转 (绕壶身轴 X 180°)
-      - Z 翻转 (绕把手轴 Y 180°, Z[2]≈0 时 z 符号约束失效的兜底)
-      - X/Y 组合翻转 (绕相机 Z 180°)
-    锚点: 上一帧旋转矩阵 (帧间锚定, 不依赖正对参考).
-    """
-    if prev_rot is None:
-        return rot
-    cands = [rot]
-    for axis_i in range(3):
-        cands.append(_rotate_around_axis(rot[:, axis_i], 180.0) @ rot)
-    return max(cands, key=lambda R: float(np.trace(R.T @ prev_rot)))
-
-
-class _MatrixSmoother:
-    """旋转矩阵 EMA 平滑 + SVD 正交化 (私有化自 realsense_shared.PoseSmoother).
-
-    在矩阵空间平滑, 避开 euler 万向锁区域的帧间跳变 (根因 2 放大因子):
-    接近 B≈±90° 时 euler 提取对微小矩阵噪声敏感 ~100 倍, 矩阵 EMA 使
-    输出平滑摆动而非跳变.
-    """
-
-    def __init__(self, alpha=0.4):
-        self.alpha = alpha
-        self.filtered = None
-
-    def update(self, rot):
-        if self.filtered is None:
-            self.filtered = rot.copy()
-            return self.filtered
-        self.filtered = (1 - self.alpha) * self.filtered + self.alpha * rot
-        U, _, Vt = np.linalg.svd(self.filtered)
-        self.filtered = U @ Vt
-        return self.filtered
-
-    def reset(self):
-        self.filtered = None
-
-
-def _unwrap_euler(euler_new, euler_prev):
-    """A/C 取与上一帧最接近的 ±360k 等价表示 (治 ±180 边界表观跳变).
-
-    B 由矩阵 EMA 保证平滑, 不需要 wrap.
-    """
-    out = list(euler_new)
-    for i in (0, 2):
-        while out[i] - euler_prev[i] > 180:
-            out[i] -= 360
-        while euler_prev[i] - out[i] > 180:
-            out[i] += 360
-    return tuple(out)
+# 姿态数学 (rotate_around_axis / align_axes / MatrixSmoother / unwrap_euler)
+# 已迁移至 Orchestrator/rot_math.py, 本模块以别名导入 (见文件头), 行为与
+# 7c7a6fd 完全一致; 新增输出键 rot_cam/quat_cam/source 供动态抓取消费.
 
 
 # ============================================================
@@ -1158,6 +1101,9 @@ class HandleCupDetector:
             dict with keys "handle", "cup". 每个子 dict:
               {"pos_cam": (x,y,z) or None,
                "euler_cam": (A,B,C),          # 检测成功=动态相机系 ZYX; 失败=config 固定值
+               "rot_cam": 3x3 ndarray or None,  # 动态链平滑后旋转矩阵 (B2 动态抓取)
+               "quat_cam": (w,x,y,z) or None,   # 同一旋转的四元数
+               "source": "dynamic" | "fallback",# 本帧 euler_cam 来源 (动态链/配置回退)
                "kettle_bbox": [...] or None,   # handle only
                "red_center": None,             # 兼容键 (红胶带已移除)
                "white_roi": None,              # 兼容键 (白把手流程已移除)
@@ -1166,6 +1112,7 @@ class HandleCupDetector:
         """
         handle_result = {
             "pos_cam": None, "euler_cam": self._handle_euler,
+            "rot_cam": None, "quat_cam": None, "source": "fallback",
             "kettle_bbox": None, "red_center": None,
             "white_roi": None, "red_contour": None,
         }
@@ -1257,6 +1204,9 @@ class HandleCupDetector:
                             else:
                                 euler_dyn = tuple(euler_dyn)
                             handle_result["euler_cam"] = euler_dyn
+                            handle_result["rot_cam"] = R_smooth
+                            handle_result["quat_cam"] = rotation_matrix_to_quaternion(R_smooth)
+                            handle_result["source"] = "dynamic"
                             self._last_handle_rot = R_smooth
                             self._last_handle_euler = euler_dyn
 

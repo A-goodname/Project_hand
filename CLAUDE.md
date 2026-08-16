@@ -16,7 +16,7 @@
 **规则**：
 1. 变更记录格式：`### <主题> (<日期>)` + 编号列表，保留排坑细节（原因+解决）
 2. 会话结束前确认 memory-bank 与实况一致，**变更随代码一起提交**
-3. 当前任务权威文档：`doc/p2p1-dual-confirm-handoff-2026-08-14.md`（P2/P1 双确认适配）
+3. 本仓库 = **传统线**（handle 检测更新 + 全流程调优），当前焦点见 `memory-bank/activeContext.md`；**协作线**（VLA-BD：D0 门禁 / P2/P1 双屏障 / D1 授权）状态记录在 `~/Project/collab-line/` + `~/VLA-BD/docs/`，不随本仓库，协作线 session 不写入本 memory-bank
 
 ## 工具与 Skill
 
