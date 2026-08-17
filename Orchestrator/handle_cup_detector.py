@@ -4,22 +4,19 @@ Orchestrator Camera A Handle+Cup 检测器
 =============================================
 独立于 RealSense_R 体系, 不继承 BaseRealSenseDetector.
 
-Handle 检测 (yolo+sam): YOLO kettle bbox → SAM bbox 提示分割 full_mask
-             → 形态学后处理 (腐蚀/开运算/闭运算/连通域过滤)
-             → 水平扫描线分离把手 (v2: mask 外接矩形范围, 严格剔除)
-             → 贪心扩展补回把手弧两端 → 3D 几何法姿态
-             (X=壶身长轴, Y=把手长轴, Z=X×Y 面法线, 完整动态 euler)
+Handle 检测 (yolo+HSV, 2026-08-17 简化): YOLO kettle bbox → bbox 右 30%
+             (把手侧) HSV 青色贴纸分割 → 最大域
+             质心 = 中心 (3D, 深度: 彩色→深度坐标映射 + 质心邻域中位数)
+             长短轴 = 6D 姿态 (X=短轴, Y=长轴, Z=X×Y 面法线, z<0 朝相机)
+             → 帧间锚定 + 矩阵 EMA → euler_cam (完整动态 euler)
+             (SAM 链已移除加载, 方法定义保留未调用)
 Cup 检测:    YOLO cup bbox → bbox 采样 → 深度反投影 → 3D 位置 (原样保留)
 
 euler_cam 语义: 检测成功 → 相机系动态 ZYX 欧拉角 (deg, 完整检测姿态);
                 检测失败 → 回落 config 固定值 (永不为 None).
-中心位置:   handle_pos_mode: mask_center (点云重心) | edge_offset
-            (边界偏移法: 上边界向下 + 把手侧边界向内, mask 覆盖不全时更可靠).
 
-yolo+sam 检测链拷贝自 RealSense_R/test_handle_6D.py + realsense_shared.py
-(上游文件冻结, 此处私有化改造, 改动独立演化).
-
-参考: RealSense_R/test_handle_6D.py, test_SAM_handle.py
+参考: Orchestrator/test_tag_points.py (HSV 链实机验证), 旧 yolo+sam 链
+      (RealSense_R/test_handle_6D.py, 方法定义保留)
 """
 
 import os
@@ -61,6 +58,135 @@ from RealSense_R.realsense_shared import (
 HANDLE_EULER = (-90.0, 89.0, -90.0)
 CUP_EULER_BACK = (-90.0, 89.0, -110.0)
 CUP_EULER_LEFT = (-90.0, 89.0, -90.0)
+
+
+# ============================================================
+#  HSV 青色贴纸检测 (2026-08-17 简化: 替代 SAM 链)
+#  把手正面贴青色贴纸; YOLO bbox 右 30% 内 HSV 分割 → 最大域
+#  质心 = 中心 (3D), 长短轴 = 6D 姿态 (X=短轴, Y=长轴, Z=X×Y).
+#  逻辑移植自 Orchestrator/test_tag_points.py (实机验证:
+#  中心 ±0.2px, euler 稳定, 深度 0.63m 正常).
+# ============================================================
+HSV_HUE_LOW, HSV_HUE_HIGH = 40, 110   # 贴纸实测 H 36-105 (青绿渐变)
+HSV_SAT_MIN, HSV_VAL_MIN = 50, 50     # 白色 S 低 / 黑色 V 低 排除
+HANDLE_SIDE_RATIO = 0.3               # 把手在 bbox 右侧 30%
+TAG_MIN_AREA, TAG_MAX_AREA = 8, 5000  # 青色域面积过滤
+DEPTH_MIN = 0.1                       # 有效深度下限 (m)
+
+
+def _detect_tag_region(color_image, bbox):
+    """YOLO bbox 右 30% 内 HSV 青色贴纸检测 (最大域).
+
+    返回 (u, v, area, angle, axis1, axis2, region_mask) 或 None.
+    region_mask 为全图系 bool; angle/axis1/axis2 来自 fitEllipse
+    (angle 对应 width 边, 长轴按 axis1/axis2 大小取).
+    """
+    x0, y0, x1, y1 = bbox
+    x0 = x1 - int((x1 - x0) * HANDLE_SIDE_RATIO)
+    roi = color_image[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    lower = np.array([HSV_HUE_LOW, HSV_SAT_MIN, HSV_VAL_MIN], dtype=np.uint8)
+    upper = np.array([HSV_HUE_HIGH, 255, 255], dtype=np.uint8)
+    bw = cv2.inRange(hsv, lower, upper)
+    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(bw, 8)
+    best_i, best_area = None, 0
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if TAG_MIN_AREA <= area <= TAG_MAX_AREA and area > best_area:
+            best_i, best_area = i, area
+    if best_i is None:
+        return None
+    u = x0 + float(cents[best_i][0])
+    v = y0 + float(cents[best_i][1])
+    angle = None
+    axis1 = axis2 = 0.0
+    ys, xs = np.where(labels == best_i)
+    if len(xs) >= 5:
+        (_, _), (axis1, axis2), angle = cv2.fitEllipse(
+            np.column_stack((xs, ys)).astype(np.float32))
+    mask_full = np.zeros(color_image.shape[:2], dtype=bool)
+    mask_full[y0:y1, x0:x1] = (labels == best_i)
+    return (u, v, best_area, angle, axis1, axis2, mask_full)
+
+
+def _depth_at_center(depth_frame, du, dv, depth_scale, radius=5):
+    """深度坐标邻域有效深度中位数 (中心深度).
+
+    排坑: color/depth FOV 不同, 彩色坐标必须经 color_to_depth_pixel
+    映射后再取 (直接取会错位到背景); 深色贴纸区域空洞由中位数抗噪.
+    """
+    depth_img = np.asanyarray(depth_frame.get_data())
+    h, w = depth_img.shape[:2]
+    du, dv = int(round(du)), int(round(dv))
+    vals = []
+    for vv in range(-radius, radius + 1):
+        for uu in range(-radius, radius + 1):
+            x, y = du + uu, dv + vv
+            if 0 <= x < w and 0 <= y < h:
+                d = depth_img[y, x] * depth_scale
+                if d > DEPTH_MIN:
+                    vals.append(d)
+    if not vals:
+        return None
+    return float(np.median(vals))
+
+
+def _depth_in_region(depth_frame, region_mask, depth_scale):
+    """贴纸区域 mask 内有效深度中位数 (区域内, 不取区域外背景)."""
+    depth_img = np.asanyarray(depth_frame.get_data())
+    ys, xs = np.where(region_mask)
+    if len(xs) == 0:
+        return None
+    vals = depth_img[ys, xs] * depth_scale
+    vals = vals[vals > DEPTH_MIN]
+    if len(vals) == 0:
+        return None
+    return float(np.median(vals))
+
+
+def _pixel_to_3d(u, v, depth_m, intr):
+    """图像像素 → 相机系 3D (pyrealsense2 intrinsics: 主点 ppx/ppy)."""
+    return np.array([(u - intr.ppx) / intr.fx * depth_m,
+                     (v - intr.ppy) / intr.fy * depth_m,
+                     depth_m])
+
+
+def _pose_from_tag_axes(u, v, angle, axis1, axis2, depth, intr):
+    """贴纸长短轴 → 把手坐标系 R.
+
+    Y = 长轴 (把手主轴, 原把手 PCA 主轴), X = 短轴 (替代原壶身 PCA),
+    Z = X×Y, 约束 z<0 朝相机 (RealSense 约定).
+    fitEllipse: angle 对应 width 边 (axis1), 长轴取较大边.
+    返回 3x3 旋转矩阵或 None (退化).
+    """
+    if axis1 >= axis2:
+        long_ang, L, S = angle, axis1 / 2.0, axis2 / 2.0
+    else:
+        long_ang, L, S = angle + 90.0, axis2 / 2.0, axis1 / 2.0
+    rad = np.deg2rad(long_ang)
+    rad_s = np.deg2rad(long_ang + 90.0)
+    p1 = _pixel_to_3d(u + L * np.cos(rad), v + L * np.sin(rad), depth, intr)
+    p2 = _pixel_to_3d(u - L * np.cos(rad), v - L * np.sin(rad), depth, intr)
+    p3 = _pixel_to_3d(u + S * np.cos(rad_s), v + S * np.sin(rad_s), depth, intr)
+    p4 = _pixel_to_3d(u - S * np.cos(rad_s), v - S * np.sin(rad_s), depth, intr)
+    d_long = p1 - p2
+    d_short = p3 - p4
+    n_long = np.linalg.norm(d_long)
+    n_short = np.linalg.norm(d_short)
+    if n_long < 1e-6 or n_short < 1e-6:
+        return None
+    y_axis = d_long / n_long
+    x_raw = d_short / n_short
+    z_axis = np.cross(x_raw, y_axis)
+    zn = np.linalg.norm(z_axis)
+    if zn < 1e-6:
+        return None
+    z_axis = z_axis / zn
+    if z_axis[2] > 0:      # z 朝相机 (RealSense 约定)
+        z_axis = -z_axis
+    x_axis = np.cross(y_axis, z_axis)  # 重正交, 右手系
+    return np.column_stack([x_axis, y_axis, z_axis])
 
 
 # ============================================================
@@ -631,12 +757,8 @@ class HandleCupDetector:
         self._cup_model = YOLO(self._cup_model_path)
         self._cup_model.to(self._device)
 
-        print(f"[HandleCup] SAM: {self._sam_model_path}")
-        if not os.path.exists(self._sam_model_path):
-            raise FileNotFoundError(
-                f"SAM 模型未找到: {self._sam_model_path} (handle 检测依赖 SAM, 无降级)")
-        self._sam_model = SAM(self._sam_model_path)
-        self._sam_model.to(self._device)
+        # 2026-08-17 简化: handle 检测改用 HSV 青色贴纸, 不再加载 SAM
+        # (SAM 链方法保留定义未调用; _sam_model 恒 None)
 
     # ------------------------------------------------------------
     #  帧获取
@@ -1121,7 +1243,7 @@ class HandleCupDetector:
             "cup_bbox": None,
         }
 
-        # === Handle 检测 (yolo+sam) ===
+        # === Handle 检测 (YOLO bbox + HSV 青色贴纸; 2026-08-17 简化, 替代 SAM 链) ===
         kettle_bbox = self._detect_kettle(color_image)
         handle_result["kettle_bbox"] = kettle_bbox
 
@@ -1130,112 +1252,71 @@ class HandleCupDetector:
             self._last_body_mask = None
             self._last_handle_rot = None
 
-            # ---- 1. SAM 分割完整 mask ----
-            full_mask = self._sam_segment(color_image, kettle_bbox)
-            if full_mask is not None:
-                # ---- 2. mask 后处理 (腐蚀/去噪点/填洞/连通域过滤) ----
-                pp_mask = _postprocess_full_mask(full_mask, self._mask_pp_cfg, self._handle_side)
+            # ---- HSV 青色贴纸检测 (把手在 bbox 右侧 30%) ----
+            tag = _detect_tag_region(color_image, kettle_bbox)
+            if tag is not None:
+                (u, v, _area, angle, axis1, axis2, region_mask) = tag
+                # 深度: 彩色→深度坐标映射 (FOV 不同) → 质心邻域 → 区域内兜底
+                dpix = color_to_depth_pixel(
+                    int(round(u)), int(round(v)), depth_frame,
+                    self._depth_scale, self._depth_intr, self._color_intr,
+                    self._c2d_extr, self._d2c_extr)
+                d = None
+                if dpix is not None:
+                    d = _depth_at_center(depth_frame, dpix[0], dpix[1],
+                                         self._depth_scale)
+                if d is None:
+                    d = _depth_in_region(depth_frame, region_mask,
+                                         self._depth_scale)
+                if d is not None:
+                    pos = _pixel_to_3d(u, v, d, self._color_intr)
+                    handle_result["pos_cam"] = pos
+                    self._last_handle_pos = pos
 
-                # ---- 3. 扫描线分离把手 ----
-                body_mask, handle_mask = self._scanline_split(pp_mask, kettle_bbox)
-
-                # 后处理失败 → 原始 mask 重试一次 (SAM 偶发把把手切成孤岛)
-                src_mask = pp_mask
-                if handle_mask is None and self._mask_pp_cfg.get("retry_raw", True):
-                    body_mask, handle_mask = self._scanline_split(full_mask, kettle_bbox)
-                    src_mask = full_mask
-
-                if handle_mask is not None and body_mask is not None:
-                    # ---- 3.5 把手 mask 精细化: 上下扩展 (默认关闭) ----
-                    # 扩展 (无论 L 型/补全) 会猜测缺失部分并污染 PCA 主轴 (Y 角),
-                    # 实机验证均破坏姿态 → extend_px 默认 0 关闭;
-                    # 中心位置由边界偏移法 (edge_offset) 保证, 不依赖 mask 重心.
-                    if int(self._scan_cfg.get("extend_px", 0)) > 0:
-                        handle_mask = _extend_handle_mask(
-                            handle_mask, src_mask, kettle_bbox,
-                            int(self._scan_cfg.get("extend_px", 0)),
-                            self._handle_side)
-                        # 扩展像素同步从 body 移除 (防重叠/污染 body 点云)
-                        body_mask = body_mask.copy()
-                        body_mask[handle_mask] = False
-
-                    self._last_handle_mask = handle_mask
-                    self._last_body_mask = body_mask
-
-                    # ---- 4. 锚点深度 + PCA 主成分 ----
-                    anchor_depth = self._get_anchor_depth(kettle_bbox, depth_frame)
-                    if anchor_depth is not None:
-                        pos, handle_axis, _handle_min_axis, _cloud = self._pca_axis(
-                            handle_mask, depth_frame, anchor_depth,
-                            step=self._pca_step_handle)
-                        # 中心模式: edge_offset (边界偏移法, mask 覆盖不全时重心不可靠)
-                        if pos is not None and self._pos_mode == "edge_offset":
-                            pos_edge = self._compute_handle_center_edge(
-                                handle_mask, depth_frame, anchor_depth,
-                                handle_cloud=_cloud)
-                            if pos_edge is not None:
-                                pos = pos_edge
-                        if pos is not None and handle_axis is not None:
-                            handle_result["pos_cam"] = pos
-                            self._last_handle_pos = pos
-
-                            # ---- 5. 壶身长轴 (body PCA 主成分方向) ----
-                            body_axis = None
-                            _bcloud = None
-                            _bpos, body_axis, _bmin, _bcloud = self._pca_axis(
-                                body_mask, depth_frame, anchor_depth,
-                                step=self._pca_step_body)
-
-                            # ---- 6. 3D 几何法姿态: X=壶身长轴, Y=把手 PCA 主轴,
-                            #        Z=X×Y (面法线, z<0 朝向相机) ----
-                            R_final = self._compute_handle_pose_geometry(
-                                handle_axis, body_axis)
-
-                            # ---- 姿态稳定链 (180° 翻转修复):
-                            #   帧间锚定 (4 候选最近, 覆盖 Y/Z/X 翻转) → 矩阵 EMA → euler unwrap ----
+                    # ---- 6D 姿态: 贴纸长短轴 → 把手坐标系 → 锚定/EMA → euler ----
+                    euler_dyn = None
+                    if angle is not None and axis1 >= 2 and axis2 >= 2:
+                        R_final = _pose_from_tag_axes(u, v, angle, axis1, axis2,
+                                                      d, self._color_intr)
+                        if R_final is not None:
                             R_aligned = _align_axes(R_final, self._prev_rot)
                             R_smooth = self._matrix_smoother.update(R_aligned)
                             self._prev_rot = R_smooth
-
                             euler_dyn = rotation_matrix_to_euler_angles(R_smooth)
                             if self._last_handle_euler is not None:
                                 euler_dyn = _unwrap_euler(
                                     tuple(euler_dyn), self._last_handle_euler)
                             else:
                                 euler_dyn = tuple(euler_dyn)
-                            handle_result["euler_cam"] = euler_dyn
                             handle_result["rot_cam"] = R_smooth
                             handle_result["quat_cam"] = rotation_matrix_to_quaternion(R_smooth)
-                            handle_result["source"] = "dynamic"
                             self._last_handle_rot = R_smooth
-                            self._last_handle_euler = euler_dyn
-
-                            # 调试日志 (姿态 / B 角万向锁距离)
-                            lock_dist = abs(abs(euler_dyn[1]) - 90.0)
-                            print(
-                                f"[Handle] euler=({euler_dyn[0]:.1f},{euler_dyn[1]:.1f},"
-                                f"{euler_dyn[2]:.1f}) lock={lock_dist:.1f} "
-                                f"grasp={self._grasp_direction}")
-
-                            # 诊断: 保存 mask/点云样本 (PCA 主方向偏斜排查)
-                            if self._debug_save:
-                                self._debug_counter += 1
-                                if self._debug_counter % self._debug_interval == 1:
-                                    self._save_debug_sample(
-                                        color_image, src_mask, body_mask, handle_mask,
-                                        _cloud, _bcloud, kettle_bbox,
-                                        euler_dyn, handle_axis, body_axis)
-                        else:
-                            # PCA 失败: 姿态状态重置 (防陈旧锚点/平滑缓存)
-                            self._last_handle_pos = None
-                            self._prev_rot = None
-                            self._matrix_smoother.reset()
+                    if euler_dyn is not None:
+                        handle_result["euler_cam"] = euler_dyn
+                        handle_result["source"] = "dynamic"
+                        self._last_handle_euler = euler_dyn
+                        lock_dist = abs(abs(euler_dyn[1]) - 90.0)
+                        print(
+                            f"[Handle] HSV pos=({pos[0]:.3f},{pos[1]:.3f},{pos[2]:.3f}) "
+                            f"euler=({euler_dyn[0]:.1f},{euler_dyn[1]:.1f},"
+                            f"{euler_dyn[2]:.1f}) lock={lock_dist:.1f} "
+                            f"grasp={self._grasp_direction}", flush=True)
+                    else:
+                        # 姿态退化 (长短轴无效): 位置有效但姿态回退
+                        handle_result["pos_cam"] = None
+                        self._last_handle_pos = None
+                        self._prev_rot = None
+                        self._matrix_smoother.reset()
                 else:
-                    # 分离失败: 姿态状态重置
+                    # 深度空洞: 姿态状态重置
                     self._last_handle_pos = None
                     self._prev_rot = None
                     self._matrix_smoother.reset()
-            # SAM 失败: 保持 pos=None (姿态状态保留, 短时漏检锚点仍有效)
+            else:
+                # HSV 失败 (无青色): 姿态状态重置
+                self._last_handle_pos = None
+                self._prev_rot = None
+                self._matrix_smoother.reset()
 
         # === Cup 检测 ===
         cup_bbox = self._detect_cup_bbox(color_image)

@@ -48,6 +48,13 @@
 - [ ] 实机示教: 采集 ≥3 点位, 方差 <5mm, 输出 yaml 片段 (Step 2)
 - [ ] **Step 3 (state_machine teach 模式) 暂停** — 用户指示, 待实机验证 Step 1/2 后恢复
 
+### Handle 检测 HSV 化: SAM 链 → 青色贴纸链 (2026-08-17)
+- [x] 新链: YOLO bbox → 右 30% HSV → 最大域 → 质心=中心 + 长短轴=6D 姿态 (X=短轴/Y=长轴/Z=X×Y)
+- [x] 深度排坑: color_to_depth_pixel 坐标映射 (FOV 不同) + 质心邻域/区域内中位数 (不取背景)
+- [x] HSV 参数标定: H 40-110 (贴纸青绿渐变 36-105), S/V ≥50
+- [x] 移除 SAM 加载; 单测 31 例全过; 实机验证 (test_tag_points.py): 中心 ±0.2px / euler 0.1-0.2° / 深度 0.63m
+- [ ] 实机复测: 完整 HandleCupDetector HSV 链 (detect 输出 pos/euler/consume 链)
+
 ### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
 - [x] `handle_cup_detector.py` 重构: YOLO kettle → SAM → 后处理 → scanline v2 → PCA 6D → 完整动态 euler_cam
 - [x] mask 后处理: OPEN→ERODE→CLOSE→连通域过滤 (含把手侧孤岛保留)

@@ -2,7 +2,7 @@
 """
 P1 把手抓取点示教工具 (Handle 检测 + 人工示教)
 =============================================
-基于 yolo+sam 把手检测 (HandleCupDetector), 人工示教 P1 抓取点位,
+基于 HandleCupDetector 把手检测 (2026-08-17 起 yolo+HSV 青色贴纸链), 人工示教 P1 抓取点位,
 自动计算"检测把手基系位置 → P1 末端基系位置"的**基系示教偏置**.
 
 原理 (基系直接加, 含 TCP 偏移语义, 无 t_handle_effective 补偿链):
@@ -254,7 +254,7 @@ def main():
                     euler_cam = np.array(h["euler_cam"])
                     now = time.time()
                     # 非连续帧适配: 示教场景机械臂静止+水壶不动, 稳定窗口
-                    # 只需成功帧累积 — SAM 偶发失败帧不再清空缓冲; 但相邻
+                    # 只需成功帧累积 — 检测偶发失败帧不再清空缓冲; 但相邻
                     # 成功帧间隔过长 (位置可能已变) 时重置
                     if buf and now - buf[-1][2] > BUF_MAX_AGE:
                         print(f"[INFO] 相邻成功帧间隔 {now - buf[-1][2]:.1f}s > "
