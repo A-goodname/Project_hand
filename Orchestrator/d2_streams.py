@@ -127,6 +127,7 @@ class WristStreamRecorder:
         self._serial = serial
         self._writer = None
         self._depth_count = 0
+        self._rgb_count = 0            # 本实例彩色帧计数 (采样基准, 2026-08-17)
         self._ts_rgb = []
         self._ts_depth = []
         self._started = False
@@ -149,7 +150,10 @@ class WristStreamRecorder:
                   f"depth_skip={self._depth_skip}")
         self._writer.write(color)
         self._ts_rgb.append(_ts_row(frame_idx))
-        if frame_idx % self._depth_skip == 0:
+        # 修复 (2026-08-17): 采样基准用本实例计数而非调用方 frame_idx —
+        # data_sm 主循环里 _frame_counter 每轮被加 2 次 (主循环 + _detect 跳帧),
+        # frame_idx 恒为奇数, `frame_idx % depth_skip == 0` 永不成立 → 深度 0 张.
+        if self._rgb_count % self._depth_skip == 0:
             png_path = os.path.join(
                 raw, f"wrist_depth_{self._depth_count:06d}.png")
             ok = cv2.imwrite(
@@ -164,6 +168,7 @@ class WristStreamRecorder:
                       f"frame={frame_idx} ep={os.path.basename(self._ep_dir)}")
             self._ts_depth.append(_ts_row(frame_idx))
             self._depth_count += 1
+        self._rgb_count += 1
 
     def close(self):
         if self._writer is not None:

@@ -198,6 +198,29 @@ class StreamRecorderTest(unittest.TestCase):
         self.assertEqual(meta["depth_skip"], 2)
         self.assertEqual(meta["frames"], 5)
 
+    def test_wrist_depth_skip_with_odd_frame_idx(self):
+        """回归 (2026-08-17): data_sm 主循环 _frame_counter 每轮 +2
+        (主循环 + _detect 跳帧), frame_idx 恒为奇数 — 旧实现
+        `frame_idx % depth_skip == 0` 永不成立 → 深度 PNG 0 张
+        (195545/200451/201010 冷液运行全部缺深度). 采样改本实例计数."""
+        out = tempfile.mkdtemp(prefix="d2stream-")
+        wr = WristStreamRecorder(out, fps=10.0)      # depth_skip=2
+        wr.start()
+        for i in range(6):
+            color = np.full((480, 640, 3), 10, dtype=np.uint8)
+            depth = np.full((480, 640), 5, dtype=np.uint16)
+            wr.record_frame(color, depth, frame_idx=1 + 2 * i)   # 全奇数
+        wr.close()
+        raw = os.path.join(out, "raw")
+        self.assertTrue(os.path.exists(
+            os.path.join(raw, "wrist_depth_000000.png")))
+        self.assertTrue(os.path.exists(
+            os.path.join(raw, "wrist_depth_000002.png")))
+        with open(os.path.join(raw, "wrist_depth_timestamps.jsonl"),
+                  encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(rows), 3)               # 0,2,4 三张
+
     def test_wrist_recorder_without_start_writes_nothing(self):
         """回归 (2026-08-17): 未 start() 的 WristStreamRecorder 每帧直接 return,
         wrist_rgb/depth 不落盘 — data_sm 曾漏调 .start() 导致整段腕部流缺失."""
