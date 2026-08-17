@@ -22,7 +22,11 @@ A = (-115.2, 85.0, -21.1)
 
 
 def _f(prefix, xyz=P, abc=A):
-    return f"{prefix}|{xyz[0]},{xyz[1]},{xyz[2]},{abc[0]},{abc[1]},{abc[2]}"
+    """现行 CRP 格式: <PREFIX>[x,y,z,a,b,c] (CPosToStr strstring='P2[' endstring=']')."""
+    return (f"{prefix}[{xyz[0]},{xyz[1]},{xyz[2]},"
+            f"{abc[0]},{abc[1]},{abc[2]}]")
+
+
 
 
 class PrefixMapTest(unittest.TestCase):
@@ -58,13 +62,15 @@ class PrefixMapTest(unittest.TestCase):
 
     def test_bad_values(self):
         with self.assertRaises(ValueError):
-            parse_pose_prefix("P2|0.1,0.2,0.3,1,2", {})          # 5 字段
+            parse_pose_prefix("P2[0.1,0.2,0.3,1,2]", {})          # 5 字段
         with self.assertRaises(ValueError):
-            parse_pose_prefix("P2|0.1,abc,0.3,1,2,3", {})         # 非数值
+            parse_pose_prefix("P2[0.1,abc,0.3,1,2,3]", {})         # 非数值
         with self.assertRaises(ValueError):
-            parse_pose_prefix("P2|nan,0.2,0.3,1,2,3", {})         # NaN
+            parse_pose_prefix("P2[nan,0.2,0.3,1,2,3]", {})         # NaN
         with self.assertRaises(ValueError):
-            parse_pose_prefix("P2|111.9,378.3,698.3,1,2,3", {})   # mm 误作 m
+            parse_pose_prefix("P2[111.9,378.3,698.3,1,2,3]", {})   # mm 误作 m
+        with self.assertRaises(ValueError):
+            parse_pose_prefix("0.1,0.2,0.3,1,2,3", {})             # 无前缀
 
     def test_map_structure(self):
         self.assertEqual(PREFIX_EVENT_MAP["P0"], ("P0_ACTUAL",))
@@ -135,21 +141,21 @@ class DataSmDispatchTest(unittest.TestCase):
         rec = EpisodeRecorder(out, "ep-sm-001", "canonical-a")
         occ = {}
         lines = [
-            "P0|0.1,0.9,0.3,-115,85,-21;",
-            "P2|0.13,1.11,0.295,-125.6,0.7,4.8;",
+            "P0[0.1,0.9,0.3,-115,85,-21]",
+            "P2[0.13,1.11,0.295,-125.6,0.7,4.8]",
             "PREGRIP",
-            "P1|0.06,0.985,0.3,-115.2,85,-21.1;",
+            "P1[0.06,0.985,0.3,-115.2,85,-21.1]",
             "GRIPDONE",
-            "P4|0.05,1.05,0.5,-115.2,85,-21.1;",
-            "P3|0.07,1.02,0.42,-93.3,30.5,-5.3;",
-            "P4|0.05,1.05,0.5,-115.2,85,-21.1;",
-            "P1|0.06,0.985,0.3,-115.2,85,-21.1;",
-            "P2|0.13,1.11,0.295,-125.6,0.7,4.8;",
-            "Home|0.1119,0.3783,0.6983,-125.6,0.76,4.8;",
+            "P4[0.05,1.05,0.5,-115.2,85,-21.1]",
+            "P3[0.07,1.02,0.42,-93.3,30.5,-5.3]",
+            "P4[0.05,1.05,0.5,-115.2,85,-21.1]",
+            "P1[0.06,0.985,0.3,-115.2,85,-21.1]",
+            "P2[0.13,1.11,0.295,-125.6,0.7,4.8]",
+            "Home[0.1119,0.3783,0.6983,-125.6,0.76,4.8]",
             "RESET",
         ]
         for line in lines:
-            sm._dispatch(rec, occ, line.strip().rstrip(";"))
+            sm._dispatch(rec, occ, line.strip())
         rec.close()
         with open(os.path.join(out, "ep-sm-001", "signals",
                                "robot_state.jsonl"), encoding="utf-8") as f:

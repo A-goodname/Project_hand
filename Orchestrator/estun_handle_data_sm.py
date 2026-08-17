@@ -883,9 +883,10 @@ class HandleDataSM:
         print(f"[RECV] {event}: xyz={xyz} abc={abc}")
 
     def _phase_c(self, conn, recorder):
-        """Phase C: 分号分帧接收 — 位姿事件 (P0-P4/Home) + 指令 (PREGRIP/GRIPDONE/RESET).
-        裸命令 (无 ';') 通过 pop_pending 回退兼容; SocketClose 退出."""
-        reader = FramedLineReader(conn, delimiter=b";")
+        """Phase C: ']' 分帧接收 — 位姿事件 (P0-P4/Home, 格式 P2[..] 等) +
+        指令 (PREGRIP/GRIPDONE/RESET). 裸命令通过 pop_pending 回退兼容;
+        SocketClose 退出."""
+        reader = FramedLineReader(conn, delimiter=b"]")
         occurrences = {}
         print("[INFO] Phase C: 等待机器人指令/位姿事件...")
 

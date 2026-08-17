@@ -43,13 +43,19 @@ _UNIT_ANG_MAX_DEG = 360.0
 
 
 def parse_pose_prefix(line, occurrences):
-    """解析 '<PREFIX>|x,y,z,a,b,c' → (d2_event, xyz_m, abc_deg).
+    """解析位姿帧 → (d2_event, xyz_m, abc_deg).
+
+    现行格式 (实机 CRP 2026-08-17 下载版, CPosToStr strstring="P2[" endstring="]"):
+      <PREFIX>[x,y,z,a,b,c]
 
     occurrences: dict {prefix: 已出现次数}, 决定第 N 次映射到哪个 D2 事件.
     失败抛 ValueError(原因).
     """
-    prefix, _, payload = line.partition("|")
-    names = PREFIX_EVENT_MAP.get(prefix)
+    if "[" not in line:
+        raise ValueError(f"帧缺少 '[' 前缀分隔: {line!r}")
+    prefix, _, payload = line.partition("[")
+    payload = payload.split("]")[0].strip()
+    names = PREFIX_EVENT_MAP.get(prefix.strip())
     if names is None:
         raise ValueError(f"未知前缀 {prefix!r} (P0/P1/P2/P3/P4/Home)")
     parts = payload.split(",")
