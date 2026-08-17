@@ -39,6 +39,9 @@ if _project_root not in sys.path:
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles, load_camera_serial
 from Orchestrator.handle_cup_detector import HandleCupDetector
 from Orchestrator.d2_recorder import EpisodeRecorder, parse_pose_prefix  # D2 (2026-08-17)
+from Orchestrator.d2_streams import (  # D2 raw/ 流记录 (2026-08-17)
+    SceneRecorder, WristStreamRecorder,
+)
 from Orchestrator.tcp_framing import FramedLineReader                 # D2 (2026-08-17)
 from Estun.utils_shared import (
     euler_to_rotation_matrix,
@@ -230,6 +233,9 @@ class HandleDataSM:
         self._ep_out_dir = os.path.join(_project_root, "logs", "d2")
         self._scene_batch_id = "canonical-a"
         self._episode_id = None          # None → 会话时间自动生成
+        # D2 raw/ 流记录器 (会话期间由主循环/会话线程挂载)
+        self._wrist_recorder = None      # 腕部 D435i (主循环挂钩)
+        self._scene_recorder = None      # 场景 UGREEN (独立线程)
 
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
@@ -265,6 +271,10 @@ class HandleDataSM:
 
                 # [Step 2] 跳帧检测 + 稳定化
                 self._frame_counter += 1
+                # D2: 会话期间记录腕部 D435i 彩色/深度流 (raw/wrist_*)
+                if self._wrist_recorder is not None:
+                    self._wrist_recorder.record_frame(
+                        color, depth_img, self._frame_counter)
                 self._detect()
 
                 # [Step 3] 可视化
@@ -637,6 +647,11 @@ class HandleDataSM:
                                    self._scene_batch_id)
         recorder.record_receipt("socket_connected", remote=repr(addr))
 
+        # ---- D2 raw/ 流记录 (场景 UGREEN 线程 + 腕部 D435i 挂钩) ----
+        self._scene_recorder = SceneRecorder(recorder.ep_dir)
+        self._scene_recorder.start()
+        self._wrist_recorder = WristStreamRecorder(recorder.ep_dir)
+
         # ---- 预计算工具偏移 ----
         _, t_handle_effective = compute_gripper_offset_transform(
             self._handle_t_offset, self._handle_r_offset)
@@ -817,6 +832,14 @@ class HandleDataSM:
             recorder.note_invalid(f"Session 异常: {type(e).__name__}: {e}")
         finally:
             PoseStabilizer.on_disconnect()
+            # D2: 停止 raw/ 流记录 (场景线程 + 腕部挂钩)
+            if self._scene_recorder is not None:
+                self._scene_recorder.stop()
+                self._scene_recorder.join(timeout=3.0)
+                self._scene_recorder = None
+            if self._wrist_recorder is not None:
+                self._wrist_recorder.close()
+                self._wrist_recorder = None
             recorder.close()
             if det is not None:
                 det.last_known_pose = None
@@ -870,6 +893,7 @@ class HandleDataSM:
                 hand_reset()
             print(f"[INFO] {line}")
             recorder.record_receipt(line.lower(), command=line)
+            recorder.record_hand(command=line, hand_available=self._hand_available)
             return
         try:
             event, xyz, abc = parse_pose_prefix(line, occurrences)

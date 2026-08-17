@@ -24,6 +24,9 @@ import math
 import os
 import time
 
+from Orchestrator.d2_streams import (  # noqa: E402
+    write_force_unavailable, write_hand_state,
+)
 from Orchestrator.estun_d2_telemetry_sm import (  # noqa: E402
     D2_EVENT_SEQUENCE, SCHEMA_VERSION, CLOCK_ID,
 )
@@ -110,6 +113,16 @@ class EpisodeRecorder:
         self._occurrences = {}
         self._closed = False
         self.record_transition("session_start")
+        # FORCE_TORQUE: 无真实力传感器 → UNAVAILABLE 健康记录 (每 episode 一次)
+        write_force_unavailable(self._ep_dir)
+
+    @property
+    def ep_dir(self):
+        return self._ep_dir
+
+    def record_hand(self, **fields):
+        """灵巧手状态事件 → signals/hand_state.jsonl (追加)."""
+        write_hand_state(self._ep_dir, **fields)
 
     # ---- 写入 ----
 

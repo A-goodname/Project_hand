@@ -12,9 +12,12 @@ import os
 import tempfile
 import unittest
 
+import numpy as np
+
 from Orchestrator.d2_recorder import (
     EpisodeRecorder, PREFIX_EVENT_MAP, parse_pose_prefix,
 )
+from Orchestrator.d2_streams import WristStreamRecorder  # noqa: E402
 from Orchestrator.estun_handle_data_sm import HandleDataSM   # noqa: E402
 
 P = (0.1, 0.9, 0.3)
@@ -108,7 +111,8 @@ class EpisodeRecorderTest(unittest.TestCase):
         with open(os.path.join(out, "ep-rec-001",
                                "artifact_manifest.json"), encoding="utf-8") as f:
             art = json.load(f)
-        self.assertEqual(len(art["files"]), 3)
+        # robot_state + state_transition + action_receipt + force_torque(UNAVAILABLE)
+        self.assertEqual(len(art["files"]), 4)
         self.assertTrue(all(fi["sha256"] for fi in art["files"]))
         # 回执
         with open(os.path.join(out, "ep-rec-001", "signals",
@@ -130,6 +134,62 @@ class EpisodeRecorderTest(unittest.TestCase):
         self.assertFalse(man["sequence_complete"])
         self.assertEqual(man["outcome"], "ABORTED")
         self.assertTrue(any("解析失败" in r for r in man["invalid_reasons"]))
+
+
+class StreamRecorderTest(unittest.TestCase):
+    """raw/ 流记录: 腕部合成帧 + hand/force JSONL + manifest 含 raw."""
+
+    def test_wrist_stream_synthetic(self):
+        out = tempfile.mkdtemp(prefix="d2stream-")
+        wr = WristStreamRecorder(out, fps=10.0)
+        wr.start()
+        for i in range(10):
+            color = np.full((480, 640, 3), i * 10, dtype=np.uint8)
+            depth = np.full((480, 640), i, dtype=np.uint16)
+            wr.record_frame(color, depth, i)
+        wr.close()
+        raw = os.path.join(out, "raw")
+        self.assertTrue(os.path.exists(os.path.join(raw, "wrist_rgb.mp4")))
+        self.assertTrue(os.path.exists(os.path.join(raw, "wrist_depth_000000.png")))
+        self.assertTrue(os.path.exists(os.path.join(raw, "wrist_depth_000009.png")))
+        with open(os.path.join(raw, "wrist_rgb_timestamps.jsonl"),
+                  encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(rows), 10)
+        with open(os.path.join(raw, "wrist_depth_meta.json"),
+                  encoding="utf-8") as f:
+            meta = json.load(f)
+        self.assertEqual(meta["depth_dtype"], "uint16")
+        self.assertEqual(meta["frames"], 10)
+
+    def test_hand_and_force_records(self):
+        """hand_state (命令事件) + force_torque (UNAVAILABLE) 落盘."""
+        out = tempfile.mkdtemp(prefix="d2stream-")
+        rec = EpisodeRecorder(out, "ep-stream-001", "canonical-a")
+        rec.record_hand(command="GRIPDONE", hand_available=True)
+        rec.close()
+        with open(os.path.join(out, "ep-stream-001", "signals",
+                               "hand_state.jsonl"), encoding="utf-8") as f:
+            hands = [json.loads(l) for l in f if l.strip()]
+        self.assertTrue(any(h.get("command") == "GRIPDONE" for h in hands))
+        with open(os.path.join(out, "ep-stream-001", "signals",
+                               "force_torque.jsonl"), encoding="utf-8") as f:
+            forces = [json.loads(l) for l in f if l.strip()]
+        self.assertEqual(len(forces), 1)
+        self.assertEqual(forces[0]["health"], "UNAVAILABLE")
+        self.assertIsNone(forces[0]["values"])     # 禁填零伪造
+        # manifest 覆盖 signals 全部工件
+        with open(os.path.join(out, "ep-stream-001",
+                               "artifact_manifest.json"), encoding="utf-8") as f:
+            art = json.load(f)
+        art_names = {fi["relpath"] for fi in art["files"]}
+        self.assertIn("signals/hand_state.jsonl", art_names)
+        self.assertIn("signals/force_torque.jsonl", art_names)
+        # python_authorization_enabled=false 声明
+        with open(os.path.join(out, "ep-stream-001",
+                               "episode_manifest.json"), encoding="utf-8") as f:
+            man = json.load(f)
+        self.assertIs(man["python_authorization_enabled"], False)
 
 
 class DataSmDispatchTest(unittest.TestCase):
