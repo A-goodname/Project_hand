@@ -24,30 +24,52 @@ import socket
 
 
 class FramedLineReader:
-    """TCP 换行行帧读取器: 分片拼接 + 粘包保留 + 超时/EOF/超长防护."""
+    """TCP 行帧读取器: 分片拼接 + 粘包保留 + 超时/EOF/超长防护.
 
-    def __init__(self, conn: socket.socket, max_line: int = 4096) -> None:
+    delimiter: 帧结束符 (默认换行; D2 遥测协议用分号 ";").
+    """
+
+    def __init__(self, conn: socket.socket, max_line: int = 4096,
+                 delimiter: bytes = b"\n") -> None:
         self._conn = conn
         self._buf = b""
         self._max_line = max_line
+        self._delim = delimiter
+        self._eof = False
+
+    @property
+    def pending_bytes(self) -> int:
+        """未分帧的残留缓冲字节数 (断链残帧检测, PROTOCOL_TRUNCATED)."""
+        return len(self._buf)
+
+    @property
+    def eof(self) -> bool:
+        """对端已关闭/连接失效 (超时不置位, 仅真正断链置位)."""
+        return self._eof
 
     def read_line(self, timeout: float | None = None) -> str | None:
-        """读取一行 (换行结尾, 返回去换行 str). 超时 / EOF / 行超长 → None."""
+        """读取一帧 (delimiter 结尾, 返回去结束符 str).
+
+        返回 None 表示: 超时 (eof=False, 可继续等) / EOF (eof=True) /
+        帧超长 (eof=False). 调用方必须区分三者, 不得把超时当断链.
+        """
         if timeout is not None:
             self._conn.settimeout(timeout)
-        while b"\n" not in self._buf:
+        while self._delim not in self._buf:
             try:
                 chunk = self._conn.recv(4096)
             except socket.timeout:
-                return None
+                return None                      # 仅超时, 连接仍活
             except OSError:
+                self._eof = True
                 return None                      # 连接已失效
             if not chunk:
+                self._eof = True
                 return None                      # 对端关闭
             self._buf += chunk
             if len(self._buf) > self._max_line:
-                return None                      # 行超长, 协议错误
-        line, self._buf = self._buf.split(b"\n", 1)
+                return None                      # 帧超长, 协议错误
+        line, self._buf = self._buf.split(self._delim, 1)
         return line.decode("utf-8", errors="replace").strip()
 
 
