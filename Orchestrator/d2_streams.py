@@ -115,7 +115,7 @@ class WristStreamRecorder:
       - 深度 → raw/wrist_depth_<idx:06d>.png (uint16 无损) + 时间戳 sidecar
     """
 
-    def __init__(self, ep_dir, fps=15.0, depth_skip=1,
+    def __init__(self, ep_dir, fps=15.0, depth_skip=2,
                  serial="342222071364"):
         self._ep_dir = ep_dir
         self._fps = float(fps)

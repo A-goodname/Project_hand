@@ -153,7 +153,8 @@ class StreamRecorderTest(unittest.TestCase):
         raw = os.path.join(out, "raw")
         self.assertTrue(os.path.exists(os.path.join(raw, "wrist_rgb.mp4")))
         self.assertTrue(os.path.exists(os.path.join(raw, "wrist_depth_000000.png")))
-        self.assertTrue(os.path.exists(os.path.join(raw, "wrist_depth_000009.png")))
+        self.assertTrue(os.path.exists(os.path.join(raw, "wrist_depth_000004.png")))
+        self.assertFalse(os.path.exists(os.path.join(raw, "wrist_depth_000005.png")))
         with open(os.path.join(raw, "wrist_rgb_timestamps.jsonl"),
                   encoding="utf-8") as f:
             rows = [json.loads(l) for l in f if l.strip()]
@@ -162,7 +163,8 @@ class StreamRecorderTest(unittest.TestCase):
                   encoding="utf-8") as f:
             meta = json.load(f)
         self.assertEqual(meta["depth_dtype"], "uint16")
-        self.assertEqual(meta["frames"], 10)
+        self.assertEqual(meta["depth_skip"], 2)
+        self.assertEqual(meta["frames"], 5)
 
     def test_wrist_recorder_without_start_writes_nothing(self):
         """回归 (2026-08-17): 未 start() 的 WristStreamRecorder 每帧直接 return,
