@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -197,6 +198,54 @@ class StreamRecorderTest(unittest.TestCase):
         self.assertEqual(meta["depth_dtype"], "uint16")
         self.assertEqual(meta["depth_skip"], 2)
         self.assertEqual(meta["frames"], 5)
+
+    def test_close_waits_for_inflight_wrist_frame(self):
+        """会话收尾不能在一张深度帧落盘中途写出 sidecar。"""
+        out = tempfile.mkdtemp(prefix="d2stream-")
+        wr = WristStreamRecorder(out, fps=10.0)
+        wr.start()
+        entered = threading.Event()
+        release = threading.Event()
+        closed = threading.Event()
+
+        def delayed_imwrite(path, _depth, _params):
+            entered.set()
+            self.assertTrue(release.wait(timeout=2.0))
+            with open(path, "wb"):
+                pass
+            return True
+
+        def record():
+            color = np.zeros((480, 640, 3), dtype=np.uint8)
+            depth = np.zeros((480, 640), dtype=np.uint16)
+            wr.record_frame(color, depth, frame_idx=1)
+
+        def close():
+            wr.close()
+            closed.set()
+
+        with mock.patch("Orchestrator.d2_streams.cv2.imwrite", delayed_imwrite):
+            record_thread = threading.Thread(target=record)
+            record_thread.start()
+            self.assertTrue(entered.wait(timeout=2.0))
+            close_thread = threading.Thread(target=close)
+            close_thread.start()
+            try:
+                self.assertFalse(closed.wait(timeout=0.2))
+            finally:
+                release.set()
+                record_thread.join(timeout=2.0)
+                close_thread.join(timeout=2.0)
+
+        self.assertFalse(record_thread.is_alive())
+        self.assertFalse(close_thread.is_alive())
+        raw = os.path.join(out, "raw")
+        with open(os.path.join(raw, "wrist_depth_timestamps.jsonl"),
+                  encoding="utf-8") as f:
+            self.assertEqual(len([line for line in f if line.strip()]), 1)
+        with open(os.path.join(raw, "wrist_depth_meta.json"),
+                  encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["frames"], 1)
 
     def test_wrist_depth_skip_with_odd_frame_idx(self):
         """回归 (2026-08-17): data_sm 主循环 _frame_counter 每轮 +2

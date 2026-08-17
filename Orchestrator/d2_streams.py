@@ -131,6 +131,7 @@ class WristStreamRecorder:
         self._ts_rgb = []
         self._ts_depth = []
         self._started = False
+        self._io_lock = threading.RLock()
 
     def start(self):
         raw = os.path.join(self._ep_dir, "raw")
@@ -138,6 +139,10 @@ class WristStreamRecorder:
         self._started = True
 
     def record_frame(self, color, depth, frame_idx):
+        with self._io_lock:
+            self._record_frame_locked(color, depth, frame_idx)
+
+    def _record_frame_locked(self, color, depth, frame_idx):
         if not self._started:
             return
         raw = os.path.join(self._ep_dir, "raw")
@@ -171,6 +176,10 @@ class WristStreamRecorder:
         self._rgb_count += 1
 
     def close(self):
+        with self._io_lock:
+            self._close_locked()
+
+    def _close_locked(self):
         if self._writer is not None:
             self._writer.release()
             self._writer = None
