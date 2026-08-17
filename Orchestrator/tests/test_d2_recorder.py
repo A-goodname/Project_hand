@@ -19,7 +19,7 @@ import numpy as np
 from Orchestrator.d2_recorder import (
     EpisodeRecorder, PREFIX_EVENT_MAP, parse_pose_prefix,
 )
-from Orchestrator.d2_streams import WristStreamRecorder  # noqa: E402
+from Orchestrator.d2_streams import SceneRecorder, WristStreamRecorder  # noqa: E402
 from Orchestrator.estun_handle_data_sm import HandleDataSM   # noqa: E402
 
 P = (0.1, 0.9, 0.3)
@@ -140,6 +140,38 @@ class EpisodeRecorderTest(unittest.TestCase):
 
 class StreamRecorderTest(unittest.TestCase):
     """raw/ 流记录: 腕部合成帧 + hand/force JSONL + manifest 含 raw."""
+
+    def test_scene_recorder_stop_and_join_no_crash(self):
+        """回归 (2026-08-17): SceneRecorder 曾用 self._stop 覆盖 threading.Thread
+        内部同名方法 → join() 抛 "TypeError: 'Event' object is not callable",
+        会话线程 finally 中断 → recorder.close() 不执行 (192820/195545 等
+        无 manifest / 无 wrist sidecar 的根因)."""
+        out = tempfile.mkdtemp(prefix="d2stream-")
+
+        class _FakeCap:
+            def isOpened(self):
+                return True
+
+            def read(self):
+                return (False, None)      # 首帧失败 → run 自然结束
+
+            def release(self):
+                pass
+
+        # 自然结束路径
+        sr = SceneRecorder(out)
+        sr._open_camera = lambda: _FakeCap()
+        sr.start()
+        sr.join(timeout=3.0)
+        self.assertFalse(sr.is_alive())
+
+        # stop() + join() 路径 (修复前此处抛 TypeError)
+        sr2 = SceneRecorder(out)
+        sr2._open_camera = lambda: _FakeCap()
+        sr2.start()
+        sr2.stop()
+        sr2.join(timeout=3.0)
+        self.assertFalse(sr2.is_alive())
 
     def test_wrist_stream_synthetic(self):
         out = tempfile.mkdtemp(prefix="d2stream-")

@@ -48,7 +48,11 @@ class SceneRecorder(threading.Thread):
         self._ep_dir = ep_dir
         self._fps = float(fps)
         self._serial_note = serial_note
-        self._stop = threading.Event()
+        # 修复 (2026-08-17): 属性名不得用 _stop — threading.Thread 内部同名
+        # 方法, 覆盖后 join() 抛 "TypeError: 'Event' object is not callable",
+        # 会话线程 finally 中断 → recorder.close() 不执行 (192820/195545 等
+        # 无 manifest / 无 wrist sidecar 的根因)
+        self._stop_event = threading.Event()
         self._cap = None
         self._writer = None
         self._ts = []
@@ -79,7 +83,7 @@ class SceneRecorder(threading.Thread):
             self._writer = cv2.VideoWriter(
                 os.path.join(raw, "scene_rgb.mp4"),
                 cv2.VideoWriter_fourcc(*"mp4v"), self._fps, (w, h))
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 ok, frame = self._cap.read()
                 if not ok:
                     break
@@ -104,7 +108,7 @@ class SceneRecorder(threading.Thread):
                 f.write(json.dumps(row) + "\n")
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
 
 class WristStreamRecorder:
@@ -146,13 +150,18 @@ class WristStreamRecorder:
         self._writer.write(color)
         self._ts_rgb.append(_ts_row(frame_idx))
         if frame_idx % self._depth_skip == 0:
+            png_path = os.path.join(
+                raw, f"wrist_depth_{self._depth_count:06d}.png")
             ok = cv2.imwrite(
-                os.path.join(raw, f"wrist_depth_{self._depth_count:06d}.png"),
-                depth, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+                png_path, depth, [cv2.IMWRITE_PNG_COMPRESSION, 1])
             if not ok:
-                print(f"[D2-WRIST] 警告: imwrite 失败 frame={frame_idx} "
+                print(f"[D2-WRIST] 警告: imwrite 返回 False frame={frame_idx} "
                       f"dtype={getattr(depth, 'dtype', None)} "
                       f"shape={getattr(depth, 'shape', None)}")
+            if self._depth_count % 300 == 0:
+                print(f"[D2-WRIST] 深度落盘: {os.path.basename(png_path)} "
+                      f"ok={ok} 存在={os.path.exists(png_path)} "
+                      f"frame={frame_idx} ep={os.path.basename(self._ep_dir)}")
             self._ts_depth.append(_ts_row(frame_idx))
             self._depth_count += 1
 
