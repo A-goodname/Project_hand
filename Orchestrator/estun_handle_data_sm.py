@@ -38,6 +38,8 @@ if _project_root not in sys.path:
 
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles, load_camera_serial
 from Orchestrator.handle_cup_detector import HandleCupDetector
+from Orchestrator.d2_recorder import EpisodeRecorder, parse_pose_prefix  # D2 (2026-08-17)
+from Orchestrator.tcp_framing import FramedLineReader                 # D2 (2026-08-17)
 from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
@@ -223,6 +225,11 @@ class HandleDataSM:
         self._port = 8080
         self._hand_port = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"
         self._phase_b_timeout = 60.0
+
+        # ---- D2 episode 记录 (2026-08-17: 位姿事件 P0-P4/Home 前缀接收) ----
+        self._ep_out_dir = os.path.join(_project_root, "logs", "d2")
+        self._scene_batch_id = "canonical-a"
+        self._episode_id = None          # None → 会话时间自动生成
 
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
@@ -623,6 +630,13 @@ class HandleDataSM:
         无 Cup 抓取阶段."""
         print(f"[INFO] 客户端已连接: {addr}")
 
+        # ---- D2 episode 记录器 (2026-08-17) ----
+        episode_id = self._episode_id or (
+            f"tea-{self._scene_batch_id}-{time.strftime('%Y%m%dT%H%M%S')}")
+        recorder = EpisodeRecorder(self._ep_out_dir, episode_id,
+                                   self._scene_batch_id)
+        recorder.record_receipt("socket_connected", remote=repr(addr))
+
         # ---- 预计算工具偏移 ----
         _, t_handle_effective = compute_gripper_offset_transform(
             self._handle_t_offset, self._handle_r_offset)
@@ -631,12 +645,17 @@ class HandleDataSM:
 
         try:
             # ================================================================
-            #  Phase A: 接收机器人初始末端位姿
+            #  Phase A: 接收机器人初始末端位姿 (P0_ACTUAL 记录, 2026-08-17)
             # ================================================================
             robot_xyz, robot_ABC = self._phase_a(conn)
             if robot_xyz is None:
+                recorder.note_invalid("Phase A 失败 (初始位姿未收到)")
                 print("[INFO] Phase A 失败, 断开连接")
                 return
+            recorder.record_pose(
+                "P0_ACTUAL", robot_xyz, robot_ABC,
+                raw_payload=f"[{robot_xyz[0]},{robot_xyz[1]},{robot_xyz[2]},"
+                            f"{robot_ABC[0]},{robot_ABC[1]},{robot_ABC[2]}]")
 
             R_ee_base = euler_to_rotation_matrix(*robot_ABC, order="zyx")
             t_ee_base = np.array(robot_xyz, dtype=float)
@@ -787,15 +806,18 @@ class HandleDataSM:
             #  Phase C: 指令循环 (无 Cup 阶段)
             #  运动流程: PREGRIP / GRIPDONE / RESET
             #  CRP 负责: DCp1 回退点 + 倒水 + 回 Home
+            #  D2 (2026-08-17): 分号分帧接收位姿事件 (P0-P4/Home 前缀) → 记录
             # ================================================================
-            self._phase_c(conn)
+            self._phase_c(conn, recorder)
 
         except Exception as e:
             print(f"[ERROR] Session 异常: {e}")
             import traceback
             traceback.print_exc()
+            recorder.note_invalid(f"Session 异常: {type(e).__name__}: {e}")
         finally:
             PoseStabilizer.on_disconnect()
+            recorder.close()
             if det is not None:
                 det.last_known_pose = None
                 det.last_known_cup_pose = None
@@ -836,48 +858,58 @@ class HandleDataSM:
     #  Phase C: 指令循环 (PREGRIP / GRIPDONE / RESET)
     # ================================================================
 
-    def _phase_c(self, conn):
-        """Phase C: PREGRIP / GRIPDONE / RESET, SocketClose 退出.
-        无 CUP/RELEASE/GRIP — 数据采集版不抓杯."""
-        conn.settimeout(2.0)
-        print("[INFO] Phase C: 等待机器人指令...")
+    def _dispatch(self, recorder, occurrences, line):
+        """分发一条消息 (分号帧或裸命令):
+        位姿帧 P0-P4/Home 前缀 → D2 事件记录; PREGRIP/GRIPDONE/RESET → 动作."""
+        if line in ("PREGRIP", "GRIPDONE", "RESET"):
+            if line == "PREGRIP" and self._hand_available:
+                hand_pre_grip()
+            elif line == "GRIPDONE" and self._hand_available:
+                hand_grip_done()
+            elif line == "RESET" and self._hand_available:
+                hand_reset()
+            print(f"[INFO] {line}")
+            recorder.record_receipt(line.lower(), command=line)
+            return
+        try:
+            event, xyz, abc = parse_pose_prefix(line, occurrences)
+        except ValueError as e:
+            reason = f"位姿帧解析失败: {e} | raw={line!r}"
+            recorder.note_invalid(reason)
+            recorder.record_transition("protocol_error", reason=reason)
+            print(f"[WARN] {reason}")
+            return
+        recorder.record_pose(event, xyz, abc, raw_payload=line)
+        print(f"[RECV] {event}: xyz={xyz} abc={abc}")
+
+    def _phase_c(self, conn, recorder):
+        """Phase C: 分号分帧接收 — 位姿事件 (P0-P4/Home) + 指令 (PREGRIP/GRIPDONE/RESET).
+        裸命令 (无 ';') 通过 pop_pending 回退兼容; SocketClose 退出."""
+        reader = FramedLineReader(conn, delimiter=b";")
+        occurrences = {}
+        print("[INFO] Phase C: 等待机器人指令/位姿事件...")
 
         try:
             while not self._stop_event.is_set():
-                try:
-                    data = conn.recv(1024)
-                except socket.timeout:
+                line = reader.read_line(timeout=2.0)
+                if line is None:
+                    if reader.eof:
+                        print("[INFO] Phase C: 连接已关闭 (SocketClose)")
+                        break
+                    # 超时: 裸命令回退 (旧格式无结束符)
+                    bare = reader.pop_pending()
+                    if bare:
+                        self._dispatch(recorder, occurrences, bare)
                     continue
-
-                if not data:
-                    print("[INFO] Phase C: 连接已关闭 (SocketClose)")
-                    break
-
-                cmd = data.decode("utf-8").strip()
-                print(f"[RECV] {cmd}")
-
-                if cmd == "PREGRIP":
-                    if self._hand_available:
-                        hand_pre_grip()
-                    print("[INFO] PREGRIP")
-
-                elif cmd == "GRIPDONE":
-                    if self._hand_available:
-                        hand_grip_done()
-                    print("[INFO] GRIPDONE")
-
-                elif cmd == "RESET":
-                    if self._hand_available:
-                        hand_reset()
-                    print("[INFO] RESET")
-
-                else:
-                    print(f"[INFO] 忽略: {cmd}")
+                if not line:
+                    continue
+                self._dispatch(recorder, occurrences, line)
 
         except ConnectionResetError:
             print("[INFO] Phase C: 连接重置")
         except Exception as e:
             print(f"[ERROR] Phase C: 异常: {e}")
+            recorder.note_invalid(f"Phase C 异常: {type(e).__name__}: {e}")
 
 
 # ============================================================
@@ -894,7 +926,18 @@ def main():
     print("  CRP:  P2 → P1(抓) → DCp1(避碰) → P3(倒水) → DCp1 → P1 → P2 → Home")
     print("=" * 60)
 
+    import argparse  # noqa: PLC0415
+    ap = argparse.ArgumentParser(description="HandleDataSM (D2 采集版)")
+    ap.add_argument("--out", default=None, help="episode 输出根目录 (默认 logs/d2)")
+    ap.add_argument("--scene-batch-id", default="canonical-a")
+    ap.add_argument("--episode-id", default=None)
+    args = ap.parse_args()
+
     sm = HandleDataSM()
+    if args.out:
+        sm._ep_out_dir = args.out
+    sm._scene_batch_id = args.scene_batch_id
+    sm._episode_id = args.episode_id
     sm.start()
     sm.run()
 

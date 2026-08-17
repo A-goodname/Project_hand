@@ -47,6 +47,17 @@ class FramedLineReader:
         """对端已关闭/连接失效 (超时不置位, 仅真正断链置位)."""
         return self._eof
 
+    def pop_pending(self) -> str | None:
+        """取走缓冲中未分帧的内容 (裸命令回退: 旧格式无结束符的消息).
+
+        仅在超时且缓冲非空时调用; 返回去空白 str 并清空缓冲, 空缓冲返回 None.
+        """
+        if not self._buf:
+            return None
+        text = self._buf.decode("utf-8", errors="replace").strip()
+        self._buf = b""
+        return text or None
+
     def read_line(self, timeout: float | None = None) -> str | None:
         """读取一帧 (delimiter 结尾, 返回去结束符 str).
 
