@@ -154,6 +154,7 @@ class WristStreamRecorder:
             self._writer.release()
             self._writer = None
         raw = os.path.join(self._ep_dir, "raw")
+        os.makedirs(raw, exist_ok=True)   # 未 start 时目录不存在, sidecar 写入前补建
         with open(os.path.join(raw, "wrist_rgb_timestamps.jsonl"), "w",
                   encoding="utf-8") as f:
             for row in self._ts_rgb:

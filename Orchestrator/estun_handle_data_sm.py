@@ -236,6 +236,7 @@ class HandleDataSM:
         # D2 raw/ 流记录器 (会话期间由主循环/会话线程挂载)
         self._wrist_recorder = None      # 腕部 D435i (主循环挂钩)
         self._scene_recorder = None      # 场景 UGREEN (独立线程)
+        self._session_thread = None      # 当前 TCP 会话线程 (退出时 join 收尾)
 
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
@@ -297,6 +298,16 @@ class HandleDataSM:
             traceback.print_exc()
         finally:
             self.stop()
+            # 会话线程为 daemon, 主线程退出即杀进程 → 其 finally 不执行,
+            # recorder.close() (session_end + 双 manifest) 会丢失 (修复 2026-08-17).
+            # _phase_c 每 2s 轮询 _stop_event, 有界等待其收尾后再退出.
+            self._join_session()
+
+    def _join_session(self, timeout=8.0):
+        """等待当前 TCP 会话线程收尾, 保证 recorder.close() 完成再退出进程."""
+        t, self._session_thread = self._session_thread, None
+        if t is not None:
+            t.join(timeout=timeout)
 
     def stop(self):
         """清理所有资源."""
@@ -539,6 +550,7 @@ class HandleDataSM:
                 daemon=True,
             )
             t.start()
+            self._session_thread = t     # 供主循环退出时 join, 保证 recorder.close() 完成
             print("[INFO] 等待下一次连接...")
         except BlockingIOError:
             pass
@@ -651,6 +663,7 @@ class HandleDataSM:
         self._scene_recorder = SceneRecorder(recorder.ep_dir)
         self._scene_recorder.start()
         self._wrist_recorder = WristStreamRecorder(recorder.ep_dir)
+        self._wrist_recorder.start()     # 缺此调用 record_frame 每帧直接 return (修复 2026-08-17)
 
         # ---- 预计算工具偏移 ----
         _, t_handle_effective = compute_gripper_offset_transform(

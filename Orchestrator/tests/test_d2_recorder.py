@@ -10,6 +10,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 
 import numpy as np
@@ -162,6 +164,20 @@ class StreamRecorderTest(unittest.TestCase):
         self.assertEqual(meta["depth_dtype"], "uint16")
         self.assertEqual(meta["frames"], 10)
 
+    def test_wrist_recorder_without_start_writes_nothing(self):
+        """回归 (2026-08-17): 未 start() 的 WristStreamRecorder 每帧直接 return,
+        wrist_rgb/depth 不落盘 — data_sm 曾漏调 .start() 导致整段腕部流缺失."""
+        out = tempfile.mkdtemp(prefix="d2stream-")
+        wr = WristStreamRecorder(out, fps=10.0)      # 刻意不 start
+        color = np.full((480, 640, 3), 7, dtype=np.uint8)
+        depth = np.full((480, 640), 7, dtype=np.uint16)
+        for i in range(5):
+            wr.record_frame(color, depth, i)
+        wr.close()
+        raw = os.path.join(out, "raw")
+        self.assertFalse(os.path.exists(os.path.join(raw, "wrist_rgb.mp4")))
+        self.assertFalse(os.path.exists(os.path.join(raw, "wrist_depth_000000.png")))
+
     def test_hand_and_force_records(self):
         """hand_state (命令事件) + force_torque (UNAVAILABLE) 落盘."""
         out = tempfile.mkdtemp(prefix="d2stream-")
@@ -190,6 +206,30 @@ class StreamRecorderTest(unittest.TestCase):
                                "episode_manifest.json"), encoding="utf-8") as f:
             man = json.load(f)
         self.assertIs(man["python_authorization_enabled"], False)
+
+
+class DataSmSessionShutdownTest(unittest.TestCase):
+    """回归 (2026-08-17): 主循环退出前 join 会话线程, 否则 daemon 线程被进程
+    杀死, recorder.close() (session_end + 双 manifest) 不执行."""
+
+    def test_join_session_waits_then_clears(self):
+        sm = HandleDataSM()          # __init__ 轻量, 无硬件 (start 才初始化)
+        done = threading.Event()
+
+        def worker():
+            done.set()
+            time.sleep(0.05)
+
+        t = threading.Thread(target=worker)
+        sm._session_thread = t
+        t.start()
+        sm._join_session(timeout=2.0)
+        self.assertTrue(done.is_set())          # 线程收尾被等待
+        self.assertIsNone(sm._session_thread)   # 引用已清
+
+    def test_join_session_none_is_noop(self):
+        sm = HandleDataSM()
+        sm._join_session(timeout=0.1)           # 无会话线程 → 不抛异常
 
 
 class DataSmDispatchTest(unittest.TestCase):
