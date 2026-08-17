@@ -31,6 +31,7 @@ P1 把手抓取点示教工具 (Handle 检测 + 人工示教)
 """
 
 import os
+import re
 import sys
 import time
 import argparse
@@ -160,6 +161,8 @@ def parse_pose_input(prompt: str, allow_empty: bool = False):
     allow_empty=True 时空回车返回 (None, None) (用于 R0 复用上次值).
     """
     raw = input(prompt).strip().strip("[]")
+    # 剥离 ANSI 转义序列 (终端方向键误按会混入 ^[[D, 导致 float 解析失败丢示教)
+    raw = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw)
     if not raw:
         if allow_empty:
             return None, None

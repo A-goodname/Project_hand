@@ -4,11 +4,33 @@
 
 ## 当前焦点
 
-**实机示教 P1（本地主线）** — 工具已实机跑通（非连续帧适配 + R0 延后 + 窗口开关 + 姿态门限，2026-08-16）。**示教数据落盘 `logs/teach_handle_p1_*.log`（自包含:时间戳/相机系均值/窗口极差/基系偏置/汇总统计），不存 memory-bank**。**下一步:水壶正对 XZ、不同位置示教 ≥3 次验收方差（位置<5mm/角度<5°）**；欧拉约定已验证（A/B/C=绕基 X/Y/Z，绕竖直轴只改 C，与用户实机观察一致）；state_machine teach 模式（Step 3）仍暂停未实施。
+**data_sm 接入 handle_teach（本地主线）** — 正对示教验收全过后（8-17 log: t_offset 方差 2mm/abc_offset 2.5°），把示教偏置接入运行时完整流程（抓壶→倒水→放回→Home），落点 = `estun_handle_data_sm.py`（无 Cup 阶段 + cup 检测定 P3，CRP `estun_handle_data_sm.crp` 现成）。代码+离线数学验证完成（log 回放 P1 误差 0.7-3.2mm）。**下一步:实机只读跑 data_sm 看 Handle/Cup STABLE → P1 落点对比（正对场景）→ 通过后 `handle_teach.enabled: true` 完整流程低速验证**。旧焦点（实机示教 P1 正对验收）已完成；state_machine teach 模式（Step 3）仍暂停未实施。
 
 训练侧线（并行）：**P2/P1 双确认协议适配（对方 D0 门禁）** — 审计 132051c 后要求：标定失败阻止启动、PREGRIP≠位姿确认、P2 后腕部重观测 + GRASP_AUTH/GRIP_AUTH 一次性双确认。协作线交接见 `/data/VLA/VLA-BD/docs/handoff-vla-collaboration-2026-08-15.md` + `/data/VLA/Project/collab-line/`（不随本仓库）；D1-B 阻断项离线修复中（`/data/VLA/VLA-BD/docs/d1-a-return-audit-and-d1-b-blockers-2026-08-15.md`）。
 
 ## 最近变更
+
+### P3 修正 + teach_p3 换源 (2026-08-17)
+
+1. **实机问题 (data_sm 完整流程首次实跑)**: ①P1/P2 落点正常 (handle_teach 链 ✓) ②**P4/DCp1** 为运行时 CposOffset 计算 (H_P3−H_P1 差值写入 DCPOS, 初始 0 正常, 无需改) ③**P3 逆解失败** — 姿态 AC 跳变: p3_teach_r_abc (-90, 30.3, -90) 是旧固定 ABC 时代值, 与 handle_teach 后 P1 (-115.2, 85, -21.1) 不匹配 ④**P3 位置不对** — teach_p3 硬编码 Home (387,100,616)/(-118.6,0.8,-91.8) 已过时, 当前 Home = [-111.901, 378.274, 698.33, -125.647, 0.759, 4.803] (mm/deg, 与示教 R0 附近一致), Cup 基系转换全错
+2. **data_sm P3 姿态**: 完整固定 ABC = p3_teach_r_abc (示教值, **与 P1/P2 姿态不要求一致** — 用户约定 2026-08-17; 曾试 AC 继承 P1 合成, 用户否决回退)。逆解失败根因 = 旧 Home 致 P3 位置不可达 + 旧 r_abc 过时, 重标后直接用示教值
+3. **estun_config.yaml**: 新增 `home_pose` 段 (mm/deg, 与示教器 CRP Home 同步, 2026-08-17)
+4. **estun_teach_p3.py 换源**: 检测器 RealSense.test_cup_6D (旧链) → HandleCupDetector (Orchestrator, 与 data_sm 同源); Home 从 config 读 (不再硬编码); 稳定窗口只用位置 (cup 无动态 euler); compute_cup_base 删 cam_euler 死代码; **输出格式未动**
+5. **t_offset 判定**: P1/P2 实机 OK + 方差验收过 → 但用户决定重新标定 (t_offset 重标进行中)
+6. **P3 重标完成 (teach_p3, 2026-08-17)**: 新 Home + HandleCupDetector 同源; 3 次示教 (第 2 次 cup 深度 z 异常剔除, 第 3 次方向键转义丢记录已补记); 汇总 t_offset (0.0686, -0.0094, 0.2536) + r_abc (-93.3, 30.5, -5.3) → 已写 config p3_teach_offset.left.30
+7. **排坑 (输入解析)**: 终端方向键误按 → ^[[D 转义混入 input() → float 解析失败丢示教; teach_p3/teach_p1 均已加 ANSI 转义剥离
+8. **完整流程实机验证通过 (2026-08-17 17:19)**: data_sm + 新版 CRP 完美运行 — P1/P2 (handle_teach 链) / P4 (DCp1 动态回退) / P3 (重标位置+固定 ABC) 全部正常; t_offset 用户判定不用重标 (handle_teach 保持 8-17 值)
+9. **CRP 更新 (2026-08-17)**: 用户修好诸多问题后回传 `data_sm-Down-638.crp` → 已替换 `doc/estun_handle_data_sm.crp` (保持命名; 旧版备份 `.bak`, sha256 旧 0a4aa33→新 1e88b99)。新版 38 widgets (旧 35): equal 5→7、movl 7→8 — **新增 P3 倒水后 `MovL H_P1` 放回水壶步骤**; 流程 = P2→P1→PREGRIP/GRIPDONE→P4(CposOffset DCp1+H_P1)→P3(sudu)→P4→H_P1(放回)→RESET→P2→Home; TranStrToCpos lengthunit=m ✓ / CposOffset pointa/pointb ✓; points 新增 P1 (9 个)
+10. **提交 + 回传 (2026-08-17)**: 提交 08b067a (7 文件 +191/-75, 本地不 push); 回传训练侧 inbox (sha256 对方校验全过): `estun_handle_data_sm.crp` (1e88b99) + `git-diff-144c025..HEAD.patch` (b0b3f22) + `project-hand-pour-flow-frontal-2026-08-17.md` (eba3554, 说明"正对时倒水流程") + sha256.txt; staging 目录 ~/p2p1-handoff-staging/
+
+### data_sm 接入 handle_teach: 示教偏置进运行时完整流程 (2026-08-17)
+
+1. **背景**: 正对示教验收通过 (t_offset 方差 2.0/1.7/2.0mm, abc_offset 0.2/2.5/2.0°) 后, 把偏置接入运行时。用户定案: 完整流程 = 抓壶→倒水→放回→Home, 无 Cup 阶段, cup 检测定 P3 倒水点, 姿态仍固定 ABC (参考 log p1_abc)。**落点 = `estun_handle_data_sm.py`** (该状态机已具备全部骨架: cup 稳定器 + P3 倒水点 + 无 Cup 阶段; CRP `doc/estun_handle_data_sm.crp` 35 widgets 现成: P2→P1→DCp1→P3→DCp1→P1→RESET→P2→Home)
+2. **estun_config.yaml**: 新增 `handle_teach` 段 (参考 8-17 log: `p1_offset [0.0330,-0.0834,0.0022]` / `abc_offset [-169.2,76.2,-19.7]` 备用 / `p1_abc [-115.2,85.0,-21.1]`), `enabled: false` 先对照, P1 落点验证通过后置 true
+3. **estun_handle_data_sm.py 三处**: ① `__init__` 补属性 ② `_load_configs` 加载 handle_teach, enabled 且含 p1_abc 时覆盖 `_handle_fixed_abc` ③ Phase B P1/P2 位置**双链切换** (enabled → P1 = detect_base + t_offset 基系直接加, **跳过 t_handle_effective**; P2 = P1 + R_base_fix @ pre_offset; 否则旧链 ee 系减 t_eff 对照)。P3 倒水点/Phase C/CRP 未动
+4. **关键约束 (排坑)**: handle_teach 链 (基系直接加, 含 TCP 语义) 与 t_handle_effective ee 系补偿链**数学语义不同, 不能混用** — enabled 二选一; P2 推导式 `P2 = P1 + R_base_fix @ pre` 由 `R_ee_base@R_grasp_ee == R_base_fix` 恒等保证 (数值验证 True)
+5. **离线验证全过**: 示教 log 4 次回放 (cam_mean → 新链 P1) 误差 0.7-3.2mm (在示教方差内, 新链复现示教落点); P2 双链各自内部一致; 新旧链 P1 差 11.4mm (语义差, 对照意义)
+6. **待实机**: 只读跑 data_sm (不连机器人) 看 [Handle STABLE]/[Cup STABLE] → Phase B 发送前 [TEACH] 打印与示教 P1 对比 → enabled: true 完整流程低速验证
 
 ### 检测器 HSV 化: SAM 链 → 青色贴纸链 (2026-08-17)
 
@@ -230,9 +252,9 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | **实机示教 P1** | `conda run -n Proj python Estun/estun_teach_handle_p1.py`：①机械臂停在接近产线姿态（静止）输入 R0 ②稳定检测把手（边界偏移中心已回退，用 mask 重心）③示教器手动摆 P1 输入读数 ④重复 ≥3 次（可挪水壶）→ 平均偏置+方差(<5mm) ⑤`--apply` 写 estun_config.yaml（注意 yaml 重写丢注释）。**注意**：T_cam2ee 误差会耦合进偏置（全链 7~11cm 方案水平），示教姿态族与产线一致最稳；Step 3（state_machine teach 模式）暂停中，偏置先记录 |
-| 🟡 | A 角残余 8.9° | 壶身轴 λ1/λ2=1.14 深度噪声放大——可选 `rot_smooth_alpha` 调低（0.4→0.25）或壶身轴与图像竖直混合 |
-| 🟡 | 抓取流程验证 | 示教完成后：把手检测位姿→P1 落点验证（先 `handle_teach.enabled: false` 回退对比） |
+| 🔴 | **data_sm handle_teach 实机验证** | `conda run -n Proj python Orchestrator/estun_handle_data_sm.py`（只读，不连机器人）：①确认 [Handle STABLE]/[Cup STABLE] 输出 ②机器人连上后 Phase B 发送前看 [TEACH] 打印 P1，与示教 log P1 对比（正对场景）③落点 OK → `estun_config.yaml` `handle_teach.enabled: true`（固定 ABC 变 log p1_abc）④完整流程低速验证（CRP `doc/estun_handle_data_sm.crp`，DCp1 回退避碰 + 放回 + Home） |
+| 🟡 | A 角残余 8.9° | 壶身轴 λ1/λ2=1.14 深度噪声放大——可选 `rot_smooth_alpha` 调低（0.4→0.25）或壶身轴与图像竖直混合（HSV 链已消除，留存参考） |
+| 🟡 | 多朝向示教 | 正对完成后：水壶旋转至其他朝向示教多位置 → abc_offset/detect_C 变化曲线（HSV 链 C 系统偏差验证） |
 | 🔴 | Linux 实机验证: UGREEN | V4L2 720P MJPG 打开 + PersonDetector 全链路跑通 |
 | 🔴 | Linux 实机验证: 机械臂链路 | estun_config.yaml 按 Linux 调整 (IP/串口 COM5 → /dev/ttyUSB*) |
 | 🔴 | 豆包 API Key 申请 | 火山引擎控制台 → API Key 管理,写入 .local.json 的 doubao.api_key |

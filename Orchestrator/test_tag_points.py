@@ -247,6 +247,8 @@ def main():
     stats_mid = deque(maxlen=STAT_N)   # 中点 3D (相机系)
     stats_ang = deque(maxlen=STAT_N)   # 水平投影方向角 (deg)
     frame_counter = 0
+    ratio_ref = None                   # 宽高比基准 r0 (正对时按 c 记录, 方案 A)
+    current_ratio = None               # 最近一帧宽高比 (供 c 键记录)
 
     # ---- 鼠标圈定: 左键拖拽框选把手区域 → HSV 统计 + 保存原图 ----
     # (不依赖按键 — Linux Qt 后端 waitKey 需窗口聚焦才收按键, 鼠标事件无此限制)
@@ -372,6 +374,16 @@ def main():
                         stats_mid.append(mid)
                         if ang is not None:
                             stats_ang.append(ang)
+                        # 方案 A (2026-08-17): 宽高比 → 旋转角
+                        # r = 短轴/长轴 = r0·cosθ (正对 r0 标定, 按 c 记录当前帧)
+                        ratio = None
+                        theta = None
+                        if angle is not None and axis1 >= 2 and axis2 >= 2:
+                            ratio = min(axis1, axis2) / max(axis1, axis2)
+                            current_ratio = ratio
+                            if ratio_ref is not None:
+                                _c = max(-1.0, min(1.0, ratio / ratio_ref))
+                                theta = float(np.degrees(np.arccos(_c)))
                         euler_str = (f"{euler_cam[0]:.1f},{euler_cam[1]:.1f},"
                                      f"{euler_cam[2]:.1f}" if euler_cam is not None
                                      else "None")
@@ -380,6 +392,8 @@ def main():
                               f"angle_img={angle if angle is None else f'{angle:.1f}'} "
                               f"mid=({mid[0]:.3f},{mid[1]:.3f},{mid[2]:.3f}) "
                               f"ang={ang if ang is None else f'{ang:.1f}'}deg "
+                              f"ratio={ratio if ratio is None else f'{ratio:.3f}'} "
+                              f"theta={theta if theta is None else f'{theta:.1f}'}deg "
                               f"euler_cam=({euler_str})", flush=True)
                         # 可视化: 青色区域 mask 轮廓 + 长轴方向线 + 中心
                         cnts, _ = cv2.findContours(
@@ -447,6 +461,14 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
+            elif key == ord("c"):
+                # 记录正对基准宽高比 r0 (方案 A 标定)
+                if current_ratio is not None:
+                    ratio_ref = current_ratio
+                    print(f"[CALIB] 正对基准 r0={ratio_ref:.3f} 已记录 "
+                          f"(旋转后 theta=arccos(r/r0))")
+                else:
+                    print("[CALIB] 尚无检测帧, 无法记录")
             elif key == ord("s"):
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 path = os.path.join(save_dir, f"tagpoints_{ts}.png")

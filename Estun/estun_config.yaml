@@ -7,6 +7,8 @@ estun:
     host: "192.168.101.96"      # 服务器 IP 地址(本机IP地址, DHCP 动态分配; 机器人端需连此 IP)
     port: 8080                   # 服务器端口
     phase_b_timeout: 60.0        # Phase B 等待稳定位姿超时 (秒)
+  # Home 位姿 (mm/deg; 示教工具参考, 与示教器 CRP 同步, 2026-08-17 更新)
+  home_pose: [-111.901, 378.274, 698.33, -125.647, 0.759, 4.803]
   hand:
     port: "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"  # 灵巧手串口 (Linux 稳定路径)
   calibration:
@@ -73,15 +75,25 @@ estun:
           t_offset: [-0.0171, -0.0750, 0.2493]
           r_abc: [-90.0, 20.3, -90.0]
         30:
-          t_offset: [-0.0175, -0.0965, 0.2400]
-          r_abc: [-90.0, 30.3, -90.0]
+          t_offset: [0.0686, -0.0094, 0.2536]   # 2026-08-17 重标 (新 Home + HandleCupDetector 同源, 剔除 cup 深度异常次)
+          r_abc: [-93.3, 30.5, -5.3]            # 示教固定 ABC (与 P1 不要求一致, 2026-08-17)
     pre_offset:
       t_offset: [0, -0.10, -0.05]      # 末端系下预抓取平移偏移 (x, y, z) m
       r_offset: [0.0, 0.0, 0.0]         # 末端系下预抓取旋转偏移 (A, B, C) 度
     target_offset:
       t_offset: [-0.20, 0.04, -0.04]    # 末端系下目标点平移偏移 (x, y, z) m
       r_offset: [0.0, 0.0, -45.0]       # 末端系下目标点旋转偏移 (A, B, C) 度
-         
+
+  # --- P1 把手抓取示教偏置 (基系直接加, 参考 logs/teach_handle_p1_20260817_150040.log) ---
+  # 运行时: P1_base = detect_base + p1_offset (含 TCP 偏移语义, 不再经过 t_handle_effective 补偿)
+  # enabled: false 时走旧链 (ee 系减 t_eff + config handle_euler) 做对照
+  handle_teach:
+    enabled: true                   # P1 落点验证通过后置 true (2026-08-17 实机启用)
+    p1_offset: [0.0330, -0.0834, 0.0022]   # 基系: P1 = detect_base + p1_offset (m)
+    abc_offset: [-169.2, 76.2, -19.7]      # 基系: P1_ABC = detect_ABC + abc_offset (deg, 动态姿态链备用)
+    p1_abc: [-115.2, 85.0, -21.1]          # 示教 ABC (deg; enabled 时覆盖 config.yaml handle_euler)
+    p2_offset: [0.0, 0.0, 0.0]             # 未示教 P2 → 运行时 P2 = P1 + R_base_fix @ pre_offset
+    grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
 
   handle_detection:
     fine_tune_mode: true           # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移

@@ -2,27 +2,28 @@
 """
 P3 倒水位置示教工具 (仅 Cup 检测)
 =================================
-仅使用 Cup 6D 检测器获取水杯位置, 人工示教 P3 倒水姿态,
-自动计算 Cup P1 法兰到 P3 法兰的基系偏移.
+使用 HandleCupDetector (Orchestrator, 与运行时 data_sm 同源) 的 Cup 检测
+获取水杯位置, 人工示教 P3 倒水姿态, 自动计算 Cup P1 法兰到 P3 法兰的基系偏移.
 
 流程:
   [Step 1] 加载配置 / 标定矩阵
-  [Step 2] 初始化 Cup 检测器 (启动 pipeline, 跳帧加速)
+  [Step 2] 初始化 HandleCupDetector (启动 pipeline, 跳帧加速)
   [Step 3] 仅检测 Cup, 稳定后计算基系位置 (用 Home 位姿转换)
   [Step 4] 提示用户输入 P3 末端位姿
   [Step 5] 计算偏移并显示
   [Step 6] 写入 log / 询问是否继续
 
 输入:
-  - RealSense/config.yaml            : 相机 / YOLO / cup 配置
-  - Estun/estun_config.yaml          : 标定路径 / cup 偏移
-  - calib_data/calibration_result.yaml : 手眼标定矩阵
+  - Orchestrator/config.yaml            : 检测器配置 (cup_handle_side 等)
+  - Estun/estun_config.yaml             : 标定路径 / cup 偏移 / home_pose
+  - calib_data/calibration_result.yaml  : 手眼标定矩阵
 
 输出:
   - logs/teach_p3_*.log              : 示教记录
 """
 
 import os
+import re
 import sys
 import yaml
 import cv2
@@ -36,15 +37,15 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # ---- 导入工具 ----
-from Estun.utils_shared import euler_to_rotation_matrix, transform_pose_to_base, compute_gripper_offset_transform
-from RealSense.realsense_shared import rotation_matrix_to_euler_angles
+from Estun.utils_shared import transform_pose_to_base, compute_gripper_offset_transform
+from RealSense_R.realsense_shared import load_camera_serial
 
 
 # =============================================================
 # 配置加载
 # =============================================================
 
-_cfg_path = os.path.join(_project_root, "RealSense", "config.yaml")
+_cfg_path = os.path.join(_project_root, "Orchestrator", "config.yaml")
 with open(_cfg_path, "r", encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
@@ -57,12 +58,18 @@ with open(_estun_cfg_path, "r", encoding="utf-8") as f:
 
 CALIB_RESULT_PATH = os.path.join(_project_root, _cfg_estun["calibration"]["result_path"])
 
-# ---- Home 位姿 (固定, 用于 Cup 检测后的位姿转换) ----
-HOME_XYZ = (0.387292, 0.100580, 0.616543)  # 米
-HOME_ABC = (-118.552, 0.803, -91.776)      # 度
+# ---- Home 位姿 (从 estun_config.yaml home_pose 读取, 与示教器 CRP 同步) ----
+_home = _cfg_estun.get("home_pose")
+if not _home or len(_home) != 6:
+    print(f"[FATAL] estun_config.yaml 缺少 home_pose (mm/deg), 请与示教器 CRP 的 Home 点同步")
+    sys.exit(1)
+HOME_XYZ = tuple(v / 1000.0 for v in _home[:3])   # mm → m
+HOME_ABC = tuple(_home[3:6])                      # deg
+print(f"[INFO] Home 位姿 (config): xyz=({HOME_XYZ[0]:.4f},{HOME_XYZ[1]:.4f},{HOME_XYZ[2]:.4f}) "
+      f"ABC=({HOME_ABC[0]:.2f},{HOME_ABC[1]:.2f},{HOME_ABC[2]:.2f})")
 
 # ---- 水杯偏移 ----
-CUP_HANDLE_SIDE = _cfg.get("cup", {}).get("handle_side", "back")
+CUP_HANDLE_SIDE = _cfg.get("cup_handle_side", "back")
 if CUP_HANDLE_SIDE == "left":
     CUP_T_OFFSET = np.array(_cfg_estun["cup_grasp"]["gripper_offset"]["t_cup_offset_left"], dtype=float)
 else:
@@ -103,13 +110,12 @@ def load_cam2ee(yaml_path: str) -> np.ndarray:
     return T
 
 
-def compute_cup_base(cam_pos, cam_euler, T_cam2ee, home_xyz, home_abc, t_cup_eff):
+def compute_cup_base(cam_pos, T_cam2ee, home_xyz, home_abc, t_cup_eff):
     """
-    将 Cup 相机系位姿转换到基坐标系下的法兰位置 (含灵巧手补偿).
+    将 Cup 相机系位置转换到基坐标系下的法兰位置 (含灵巧手补偿).
 
     参数:
         cam_pos    : (x, y, z) 相机系位置 (m)
-        cam_euler  : (A, B, C) 相机系欧拉角 (deg)
         T_cam2ee   : 4x4 相机→法兰矩阵
         home_xyz   : (x, y, z) Home 位姿位置 (m)
         home_abc   : (A, B, C) Home 位姿欧拉角 (deg)
@@ -119,7 +125,6 @@ def compute_cup_base(cam_pos, cam_euler, T_cam2ee, home_xyz, home_abc, t_cup_eff
         c_pos_base : 基系下 Cup 法兰位置 (m)
     """
     c_pos_ee = T_cam2ee[:3, :3] @ np.array(cam_pos) + T_cam2ee[:3, 3]
-    c_rot_ee = T_cam2ee[:3, :3] @ euler_to_rotation_matrix(*cam_euler, order="zyx")
     # 减去灵巧手偏移得到法兰位置 (与 estun_cup_demo.py 保持一致)
     c_pos_ee_compensated = c_pos_ee - t_cup_eff
     # 用 Home 位姿将末端系→基系
@@ -136,20 +141,23 @@ def main():
     # ---- 加载手眼标定 ----
     T_cam2ee = load_cam2ee(CALIB_RESULT_PATH)
 
-    # ---- 初始化 Cup 检测器 (启动 pipeline) ----
-    from RealSense.test_cup_6D import RealSenseCup6DDetector
-    print("[INFO] 初始化 Cup 6D 检测器...")
+    # ---- 初始化 HandleCupDetector (与运行时 data_sm 同源, 仅用 Cup 部分) ----
+    from Orchestrator.handle_cup_detector import HandleCupDetector
+    serial = load_camera_serial(
+        os.path.join(_project_root, "RealSense_R/D435i_info.yaml"))
+    import torch
+    dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+    print(f"[INFO] 初始化 HandleCupDetector (serial={serial or 'default'}, device={dev})...")
     try:
-        cup_detector = RealSenseCup6DDetector(config_dict=_cfg, start_pipeline=True)
+        cup_detector = HandleCupDetector(orch_config=_cfg, serial=serial, device=dev)
     except Exception as e:
         print(f"[FATAL] Cup 检测器初始化失败: {e}")
         return
 
-    # ---- 位姿稳定器 ----
+    # ---- 位姿稳定器 (cup 仅位置, 无动态 euler → 只用位置门限) ----
     cup_stabilizer_buffer = []
     STABLE_WINDOW = 3
     POS_THRESH = 0.01
-    ANGLE_THRESH = 5.0
 
     # ---- 预计算水杯有效偏移 ----
     _, t_cup_effective = compute_gripper_offset_transform(CUP_T_OFFSET, CUP_R_OFFSET)
@@ -174,7 +182,6 @@ def main():
         cup_stable = False
         frame_counter = 0
         c_pos_cam = None
-        c_euler_cam = None
 
         while not cup_stable:
             color_image, depth_image, depth_colormap, depth_frame = cup_detector.get_frames()
@@ -185,40 +192,26 @@ def main():
                     break
                 continue
 
-            display_img = color_image.copy()
             frame_counter += 1
 
             if frame_counter % CUP_SKIP_FRAMES == 1:
-                (c_bbox, c_pos, c_rot, c_euler, c_point_cloud) = cup_detector.compute_cup_6d_pose(color_image, depth_frame)
+                result = cup_detector.detect(color_image, depth_frame)
+                c = result["cup"]
+                if c["pos_cam"] is not None:
+                    # HandleCupDetector 的 cup 仅位置 (无动态 euler), 只用位置门限
+                    cup_stabilizer_buffer.append(np.array(c["pos_cam"]))
+                    if len(cup_stabilizer_buffer) > STABLE_WINDOW:
+                        cup_stabilizer_buffer.pop(0)
+                    if len(cup_stabilizer_buffer) == STABLE_WINDOW:
+                        poses = np.array(cup_stabilizer_buffer)
+                        pos_range = np.ptp(poses, axis=0).max()
+                        if pos_range < POS_THRESH:
+                            c_pos_cam = poses.mean(axis=0)
+                            cup_stable = True
+                            print(f"\n[TEACH] Cup 稳定! pos_cam=({c_pos_cam[0]:.3f},"
+                                  f"{c_pos_cam[1]:.3f},{c_pos_cam[2]:.3f})", flush=True)
 
-                if c_pos is not None and c_rot is not None:
-                    smooth_cpos, smooth_crot = cup_detector._pose_smoother.update(c_pos, c_rot)
-                    if smooth_crot is not None:
-                        c_pos = smooth_cpos
-                        c_rot = smooth_crot
-                        c_euler = rotation_matrix_to_euler_angles(c_rot)
-
-                    if c_euler is not None:
-                        cup_stabilizer_buffer.append((np.array(c_pos), np.array(c_euler)))
-                        if len(cup_stabilizer_buffer) > STABLE_WINDOW:
-                            cup_stabilizer_buffer.pop(0)
-                        if len(cup_stabilizer_buffer) == STABLE_WINDOW:
-                            poses = np.array([p for p, _ in cup_stabilizer_buffer])
-                            angles = np.array([a for _, a in cup_stabilizer_buffer])
-                            pos_range = np.ptp(poses, axis=0).max()
-                            angle_range = np.ptp(angles, axis=0).max()
-                            if pos_range < POS_THRESH and angle_range < ANGLE_THRESH:
-                                c_pos_cam = poses.mean(axis=0)
-                                c_euler_cam = angles.mean(axis=0)
-                                cup_stable = True
-                                print(f"\n[TEACH] Cup 稳定! pos_cam=({c_pos_cam[0]:.3f},{c_pos_cam[1]:.3f},{c_pos_cam[2]:.3f}) "
-                                      f"euler=({c_euler_cam[0]:.1f},{c_euler_cam[1]:.1f},{c_euler_cam[2]:.1f})", flush=True)
-                else:
-                    cup_detector._pose_smoother.reset()
-
-                if c_bbox is not None:
-                    cup_detector.visualize_cup(display_img, c_bbox, c_pos, c_rot, c_euler)
-
+            display_img = cup_detector.visualize(color_image)
             cv2.putText(display_img, f"Cup stabilizing... ({len(cup_stabilizer_buffer)}/{STABLE_WINDOW})",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             cv2.imshow("P3 Teach - Cup Detection", display_img)
@@ -231,7 +224,7 @@ def main():
             break
 
         # ---- 计算 Cup P1 法兰在基系的位置 (含灵巧手补偿) ----
-        cup_p1_base = compute_cup_base(c_pos_cam, c_euler_cam, T_cam2ee, HOME_XYZ, HOME_ABC, t_cup_effective)
+        cup_p1_base = compute_cup_base(c_pos_cam, T_cam2ee, HOME_XYZ, HOME_ABC, t_cup_effective)
         teach_count += 1
         print(f"\n{'='*50}")
         print(f"[TEACH] 第 {teach_count} 次示教")
@@ -244,6 +237,8 @@ def main():
         print("示例: [500.0,200.0,400.0,-30.0,10.0,45.0]")
 
         p3_input = input("输入 P3 位姿: ").strip().strip("[]")
+        # 剥离 ANSI 转义序列 (终端方向键误按会混入 ^[[D 等, 导致 float 解析失败丢示教)
+        p3_input = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", p3_input)
         parts = p3_input.split(",")
         if len(parts) != 6:
             print(f"[ERROR] 格式错误, 需要 6 个数值, 收到 {len(parts)} 个")
@@ -305,8 +300,8 @@ def main():
     # 清理
     cv2.destroyAllWindows()
     try:
-        cup_detector.pipeline.stop()
-        print("[INFO] RealSense 管道已停止")
+        cup_detector.close()
+        print("[INFO] HandleCupDetector 已关闭")
     except Exception:
         pass
     print("[INFO] 示教工具退出")

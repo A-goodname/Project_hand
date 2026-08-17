@@ -9,7 +9,25 @@
 - [x] 流程: R0 延后到稳定检测后 (首次必输/回车复用) + 示教阶段窗口关闭 (下次迭代重开)
 - [x] 欧拉约定验证: A/B/C=绕基 X/Y/Z (Rz(C)Ry(B)Rx(A)), 绕竖直轴只改 C — 与用户实机观察一致
 - [x] 实机示教跑通: 数据落盘 logs/teach_handle_p1_*.log (时间戳/相机系/极差/偏置/汇总统计, 不存 memory-bank)
-- [ ] 实机示教 ≥3 次 (水壶正对不同位置): t_offset/abc_offset 方差验收 (位置<5mm/角度<5°)
+- [x] 实机示教验收 (2026-08-17, HSV 链正对 4 位置): t_offset 方差 2.0/1.7/2.0mm ✓, abc_offset 0.2/2.5/2.0° ✓ (分析: logs/teach-p1-hsv-analysis-2026-08-17.md)
+
+### P3 修正 + teach_p3 换源 (2026-08-17)
+- [x] data_sm P3 姿态: 完整固定 ABC (p3_teach_r_abc, 与 P1 姿态不要求一致 — 用户约定; 曾试 AC 继承 P1 合成已回退)
+- [x] estun_config.yaml 新增 home_pose (新 Home, 与示教器 CRP 同步)
+- [x] teach_p3 检测器换 HandleCupDetector (与 data_sm 同源) + Home config 化 + 位置稳定 (输出格式未动)
+- [x] 排坑: 方向键 ANSI 转义混入 input 丢示教 → teach_p3/teach_p1 加剥离
+- [x] 重标 P3: 3 次示教 (剔除 cup z 异常次) → t_offset (0.0686,-0.0094,0.2536) + r_abc (-93.3,30.5,-5.3) → 已写 config left.30
+- [x] t_offset 判定: P1 不用重标 (用户定案, handle_teach 保持 8-17 值)
+- [x] data_sm 完整流程实机验证: P1/P2/P3/P4 全部正常 (抓壶→倒水→放回→Home 完美运行, 2026-08-17)
+- [x] CRP 更新: data_sm-Down-638 → doc/estun_handle_data_sm.crp (38 widgets, 新增 H_P1 放回步骤, 旧版 .bak 备份)
+
+### data_sm 接入 handle_teach (2026-08-17)
+- [x] estun_config.yaml 新增 handle_teach 段 (参考 8-17 log: p1_offset/p1_abc, enabled: false)
+- [x] data_sm `_load_configs` 加载 handle_teach + enabled 时 p1_abc 覆盖固定 ABC
+- [x] Phase B P1/P2 位置双链切换 (enabled → P1=detect_base+t_offset 基系直接加 / P2=P1+R_base_fix@pre; 旧链对照保留)
+- [x] 离线数学验证: log 4 次回放 P1 误差 0.7-3.2mm / P2 推导恒等 / 旋转恒等 R_ee_base@R_grasp_ee==R_base_fix
+- [ ] 实机只读跑: [Handle STABLE]/[Cup STABLE] 输出 + [TEACH] P1 落点对比 (正对场景)
+- [ ] handle_teach.enabled: true → 完整流程低速验证 (CRP estun_handle_data_sm.crp: 抓→DCp1→倒水→放回→Home)
 
 ### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
 - [x] `_get_anchor_depth` 固定 seed (确定性采样) — 实测 C 44°→3.9°、B 12°→2.2°、A 14°→8.9° (mask 稳定但姿态飘的根因)

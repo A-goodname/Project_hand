@@ -195,6 +195,9 @@ class HandleDataSM:
         self._handle_target_t_offset = None
         self._handle_target_r_offset = None
         self._handle_fixed_abc = None
+        # handle_teach (P1 示教偏置, 基系直接加)
+        self._handle_teach_enabled = False
+        self._handle_teach_t_offset = None
         # Cup (仅用于计算 Handle P3 倒水点)
         self._cup_handle_side = "back"
         self._cup_t_offset = None
@@ -388,9 +391,31 @@ class HandleDataSM:
         self._cup_height = float(oc.get("cup_height", 0.100))
 
         # ================================================================
+        #  handle_teach (P1 示教偏置, 参考 logs/teach_handle_p1_*.log)
+        #  语义: P1_base = detect_base + t_offset (基系直接加, 含 TCP 偏移)
+        #  注意: 与 t_handle_effective ee 系补偿链不能混用 — enabled 二选一
+        # ================================================================
+        ht = estun.get("handle_teach", {})
+        self._handle_teach_enabled = bool(ht.get("enabled", False))
+        self._handle_teach_t_offset = (
+            np.array(ht.get("p1_offset", [0.0, 0.0, 0.0]), dtype=float)
+            if ht else np.zeros(3))
+        if self._handle_teach_enabled:
+            print(f"[INFO] handle_teach 启用: P1 = detect_base + "
+                  f"({self._handle_teach_t_offset[0]:.4f},"
+                  f"{self._handle_teach_t_offset[1]:.4f},"
+                  f"{self._handle_teach_t_offset[2]:.4f}) m (基系直接加)")
+
+        # ================================================================
         #  固定 ABC (从 Orchestrator config, 与 state_machine 完全一致)
+        #  handle_teach 启用且含 p1_abc 时, 用示教 ABC 覆盖 (参考示教 log)
         # ================================================================
         _h_abc = oc.get("handle_euler", [-90, 89, -90])
+        if self._handle_teach_enabled:
+            _teach_abc = ht.get("p1_abc")
+            if _teach_abc:
+                _h_abc = _teach_abc
+                print(f"[INFO] handle_teach: 固定 ABC 覆盖为 {tuple(_h_abc)} (示教 log p1_abc)")
         self._handle_fixed_abc = tuple(_h_abc)
         _cup_key = "cup_euler_left" if self._cup_handle_side == "left" else "cup_euler_back"
         _c_abc = oc.get(_cup_key, [-90, 89, -110])
@@ -658,20 +683,37 @@ class HandleDataSM:
 
                 # ============================================================
                 #  Handle P1 / P2 (固定 ABC, 移植自 state_machine)
+                #  位置双链 (二选一, 不能混用):
+                #    handle_teach 启用 → P1 = detect_base + t_offset
+                #      (基系直接加, 含 TCP 偏移语义, 不经过 t_handle_effective)
+                #    handle_teach 关闭 → 旧链 (ee 系减 t_eff + 固定 ABC) 对照
                 # ============================================================
-                h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
-
                 # 固定 ABC 直接构造旋转矩阵 (基系)
                 R_base_fix = euler_to_rotation_matrix(*self._handle_fixed_abc, order="zyx")
                 R_grasp_ee = R_ee_base.T @ R_base_fix
 
-                # Handle P1
-                pos_base_1 = transform_pose_to_base(h_pos_ee_compensated, robot_xyz, robot_ABC)
-                A1, B1, C1 = self._handle_fixed_abc
+                if self._handle_teach_enabled:
+                    # P1 = detect_base + t_offset (基系直接加)
+                    detect_base = transform_pose_to_base(
+                        np.array(mean_pos_ee), robot_xyz, robot_ABC)
+                    pos_base_1 = detect_base + self._handle_teach_t_offset
+                    # P2 = P1 + R_base_fix @ pre_offset
+                    # (推导: P2_base = P1_base + R_ee_base@R_grasp_ee@pre
+                    #        = P1_base + R_base_fix@pre)
+                    pos_base_2 = pos_base_1 + R_base_fix @ self._handle_pre_t_offset
+                    print(f"[TEACH] P1 = detect_base + t_offset = ({pos_base_1[0]:.4f},"
+                          f"{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m", flush=True)
+                else:
+                    # 旧链: ee 系减 t_handle_effective + 固定 ABC
+                    h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
+                    # Handle P1
+                    pos_base_1 = transform_pose_to_base(
+                        h_pos_ee_compensated, robot_xyz, robot_ABC)
+                    # Handle P2
+                    pos_ee_pre = h_pos_ee_compensated + R_grasp_ee @ self._handle_pre_t_offset
+                    pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
 
-                # Handle P2
-                pos_ee_pre = h_pos_ee_compensated + R_grasp_ee @ self._handle_pre_t_offset
-                pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
+                A1, B1, C1 = self._handle_fixed_abc
                 A2, B2, C2 = self._handle_fixed_abc
 
                 R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(
@@ -694,10 +736,13 @@ class HandleDataSM:
                 # ============================================================
                 if self._p3_teach_enable:
                     pos_base_3 = tuple(np.array(c_pos_base_1) + self._p3_teach_t_offset)
+                    # P3 姿态: 完整固定 ABC (p3_teach_r_abc, 示教值)
+                    # 与 P1/P2 姿态不要求一致 (用户约定 2026-08-17) — 逆解失败
+                    # 根因是旧 Home 导致 P3 位置不可达, 重标后姿态直接用示教值
                     A3, B3, C3 = tuple(self._p3_teach_r_abc)
                     print(f"[POUR] 示教偏移: "
                           f"t=({self._p3_teach_t_offset[0]:.4f},{self._p3_teach_t_offset[1]:.4f},{self._p3_teach_t_offset[2]:.4f}) "
-                          f"abc=({self._p3_teach_r_abc[0]:.1f},{self._p3_teach_r_abc[1]:.1f},{self._p3_teach_r_abc[2]:.1f})")
+                          f"abc=({A3:.1f},{B3:.1f},{C3:.1f})")
                 else:
                     _tcp_offset_base = R_ee_base @ self._handle_t_tcp_fixed
                     _tcp_base = np.array(c_pos_base_1) + _tcp_offset_base
