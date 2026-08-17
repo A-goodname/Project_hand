@@ -198,6 +198,9 @@ class EpisodeRecorder:
             json.dump({
                 "episode_id": self.episode_id,
                 "scene_batch_id": self.scene_batch_id,
+                "python_authorization_enabled": False,
+                # 最终裁决 (2026-08-17): ESTUN 控制器唯一执行/停止权威,
+                # Python 不发送实时运动授权/ACK/ticket, 仅记录.
                 "outcome": ("SUCCESS" if seq_complete
                             else "ABORTED"),
                 "automatic_motion_started": seq_complete,
