@@ -141,11 +141,18 @@ class WristStreamRecorder:
             self._writer = cv2.VideoWriter(
                 os.path.join(raw, "wrist_rgb.mp4"),
                 cv2.VideoWriter_fourcc(*"mp4v"), self._fps, (w, h))
+            print(f"[D2-WRIST] 开始记录: {w}x{h}, fps={self._fps}, "
+                  f"depth_skip={self._depth_skip}")
         self._writer.write(color)
         self._ts_rgb.append(_ts_row(frame_idx))
         if frame_idx % self._depth_skip == 0:
-            cv2.imwrite(os.path.join(raw, f"wrist_depth_{self._depth_count:06d}.png"),
-                        depth, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+            ok = cv2.imwrite(
+                os.path.join(raw, f"wrist_depth_{self._depth_count:06d}.png"),
+                depth, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+            if not ok:
+                print(f"[D2-WRIST] 警告: imwrite 失败 frame={frame_idx} "
+                      f"dtype={getattr(depth, 'dtype', None)} "
+                      f"shape={getattr(depth, 'shape', None)}")
             self._ts_depth.append(_ts_row(frame_idx))
             self._depth_count += 1
 
