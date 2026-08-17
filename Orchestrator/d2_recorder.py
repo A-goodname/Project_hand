@@ -90,6 +90,42 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
+# ---- artifact 类型 / media 类型映射 (D2 §5, manifest 用; backfill 复用) ----
+
+_ARTIFACT_BY_FILENAME = {
+    "robot_state.jsonl": "ROBOT_STATE",
+    "state_transition.jsonl": "STATE_TRANSITION",
+    "action_receipt.jsonl": "ACTION_RECEIPT",
+    "hand_state.jsonl": "HAND_STATE",
+    "force_torque.jsonl": "FORCE_TORQUE",
+    "expert_action.jsonl": "EXPERT_ACTION",
+    "scene_rgb.mp4": "SCENE_RGB",
+    "wrist_rgb.mp4": "WRIST_RGB",
+    "wrist_depth_meta.json": "WRIST_DEPTH_META",
+    "scene_rgb_timestamps.jsonl": "SCENE_RGB_TIMESTAMPS",
+    "wrist_rgb_timestamps.jsonl": "WRIST_RGB_TIMESTAMPS",
+    "wrist_depth_timestamps.jsonl": "WRIST_DEPTH_TIMESTAMPS",
+}
+
+_MEDIA_TYPE_BY_EXT = {
+    ".jsonl": "application/jsonl",
+    ".json": "application/json",
+    ".mp4": "video/mp4",
+    ".png": "image/png",
+}
+
+
+def _artifact_type(filename):
+    if filename.startswith("wrist_depth_") and filename.endswith(".png"):
+        return "WRIST_DEPTH"
+    return _ARTIFACT_BY_FILENAME.get(filename, "RAW_PLACEHOLDER")
+
+
+def _media_type(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    return _MEDIA_TYPE_BY_EXT.get(ext, "application/octet-stream")
+
+
 class EpisodeRecorder:
     """单 episode 记录器: 位姿/转换/回执 JSONL + 会话结束双 manifest."""
 
@@ -191,13 +227,9 @@ class EpisodeRecorder:
             for n in sorted(names):
                 p = os.path.join(root, n)
                 files.append({
-                    "artifact": ("ROBOT_STATE" if n == "robot_state.jsonl"
-                                 else "STATE_TRANSITION" if n == "state_transition.jsonl"
-                                 else "ACTION_RECEIPT" if n == "action_receipt.jsonl"
-                                 else "RAW_PLACEHOLDER"),
+                    "artifact": _artifact_type(n),
                     "relpath": os.path.relpath(p, self._ep_dir),
-                    "media_type": ("application/jsonl" if n.endswith(".jsonl")
-                                   else "inode/directory"),
+                    "media_type": _media_type(n),
                     "sha256": _sha256_file(p),
                     "bytes": os.stat(p).st_size,
                     "clock_id": CLOCK_ID,
