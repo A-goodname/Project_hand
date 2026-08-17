@@ -231,6 +231,16 @@ class DataSmSessionShutdownTest(unittest.TestCase):
         sm = HandleDataSM()
         sm._join_session(timeout=0.1)           # 无会话线程 → 不抛异常
 
+    def test_exit_signal_sets_stop_event_idempotent(self):
+        """回归 (2026-08-17): 信号 handler 幂等置位, 二次触发不重复打印/不抛
+        (防二次 Ctrl+C 在 finally 清理期间杀进程丢 manifest)."""
+        sm = HandleDataSM()
+        sm._on_exit_signal(2, None)             # 首次 SIGINT
+        self.assertTrue(sm._stop_event.is_set())
+        sm._on_exit_signal(2, None)             # 二次触发 (幂等)
+        sm._on_exit_signal(1, None)             # SIGHUP 同样安全
+        self.assertTrue(sm._stop_event.is_set())
+
 
 class DataSmDispatchTest(unittest.TestCase):
     """data_sm _dispatch 集成: 位姿事件 + 命令混合分发 (免硬件)."""

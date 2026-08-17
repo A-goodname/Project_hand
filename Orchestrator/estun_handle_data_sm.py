@@ -252,7 +252,27 @@ class HandleDataSM:
         self._init_detector()
         self._init_stabilizer_and_calib()
         self._init_tcp()
+        self._install_signal_handlers()
         print("[HandleDataSM] 状态机已启动, 等待机器人连接...")
+
+    # ---- 退出信号接管 (2026-08-17) ----
+    # 默认 SIGINT 会抛 KeyboardInterrupt: 若二次 Ctrl+C 落在 finally 清理期间,
+    # 异常未捕获直接杀进程 → daemon 会话线程被斩, recorder.close() 丢失
+    # (session_end + 双 manifest). 接管信号后二次触发幂等置位, 主循环自然
+    # 退出并走 finally 的 _join_session 收尾. SIGHUP 覆盖终端关闭场景.
+
+    def _install_signal_handlers(self):
+        import signal  # noqa: PLC0415
+
+        signal.signal(signal.SIGINT, self._on_exit_signal)
+        signal.signal(signal.SIGTERM, self._on_exit_signal)
+        signal.signal(signal.SIGHUP, self._on_exit_signal)
+
+    def _on_exit_signal(self, signum, _frame):
+        if not self._stop_event.is_set():
+            print(f"\n[INFO] 信号 {signum}: 置位退出, 等待会话收尾...")
+            self._stop_event.set()
+        # 幂等: 主线程从 handler 返回后主循环 while 检查退出 → finally 收尾
 
     def run(self):
         """主循环: 帧获取 → 检测 → 可视化 → accept TCP."""
@@ -297,17 +317,19 @@ class HandleDataSM:
             import traceback
             traceback.print_exc()
         finally:
-            self.stop()
-            # 会话线程为 daemon, 主线程退出即杀进程 → 其 finally 不执行,
-            # recorder.close() (session_end + 双 manifest) 会丢失 (修复 2026-08-17).
-            # _phase_c 每 2s 轮询 _stop_event, 有界等待其收尾后再退出.
+            # 顺序: 先置位 (快) → join 会话收尾 (写 manifest) → 再慢清理.
+            # join 前置, 避免 stop() 清 D435i/串口耗时期间二次 Ctrl+C 杀进程.
+            self._stop_event.set()
             self._join_session()
+            self.stop()
 
     def _join_session(self, timeout=8.0):
         """等待当前 TCP 会话线程收尾, 保证 recorder.close() 完成再退出进程."""
         t, self._session_thread = self._session_thread, None
         if t is not None:
             t.join(timeout=timeout)
+            print(f"[INFO] 会话线程收尾: alive={t.is_alive()} "
+                  f"(false = recorder.close() 已执行)")
 
     def stop(self):
         """清理所有资源."""
