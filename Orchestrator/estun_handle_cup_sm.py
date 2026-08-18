@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-单相机 Handle+Cup 状态机 (Camera A, 旧 D435i)
-==============================================
+双相机 Handle+Cup 状态机 (Camera A: D435i + Camera B: UGREEN)
+=============================================================
 从 Orchestrator/state_machine.py 移植核心逻辑 (检测器 / 位姿计算 / 固定 ABC),
-仅保留 estun_handle_cup_run.py 的运动流程 (Phase A-C 协议).
+仅保留 estun_handle_cup_run.py 的运动流程 (Phase A-D 协议).
 
-检测器:     HandleCupDetector (YOLO kettle + 白色把手HSV + 红色胶带 + YOLO cup + 深度反投影)
+Camera A:   HandleCupDetector (YOLO kettle + HSV + YOLO cup + 深度反投影)
+Camera B:   PersonDetector (人就位) + HandInCupDetector (手在杯判定)
 位姿计算:   全部固定 ABC (Orchestrator/config.yaml), 与 state_machine 完全一致
 运动流程:   Phase A(接收位姿) → Phase B(计算+发送Handle) → Phase C(指令循环+CUP回复)
-           Cup: Home → P2(预抓取) → P1(抓杯) → P3(Z轴抬起) → P1(放回) → P2 → Home
+            → Phase D(READY→HandInCup→CONTINUE/ABORT)
+           Handle: Home → P2 → P1 → DCp1 → P3 → DCp1 → P1 → RESET → P2 → Home
+           Cup: P2 → P1 → GRIP → P3 → P1 → RELEASE → P2 → Home
 
-仅用 Camera A, 无 Camera B / Phase 0 / Phase D.
+传统路线 Camera B: usb-0:2 (非 VLA 的 usb-0:4.2).
 
 使用方法:
   python Orchestrator/estun_handle_cup_sm.py
@@ -33,6 +36,9 @@ if _project_root not in sys.path:
 
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles, load_camera_serial
 from Orchestrator.handle_cup_detector import HandleCupDetector
+from EyeToHand.camera import UGreenCamera
+from EyeToHand.person_detector import PersonDetector
+from EyeToHand.hand_in_cup import HandInCupDetector
 from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
@@ -187,6 +193,9 @@ class HandleCupSM:
         self._handle_target_t_offset = None
         self._handle_target_r_offset = None
         self._handle_fixed_abc = None
+        # handle_teach (P1 示教偏置, 基系直接加)
+        self._handle_teach_enabled = False
+        self._handle_teach_t_offset = None
         # Cup
         self._cup_handle_side = "back"
         self._cup_t_offset = None
@@ -197,6 +206,11 @@ class HandleCupSM:
         self._cup_target_r_offset = None
         self._cup_fixed_abc = None
         self._cup_lift_z = 0.05
+        # cup_teach (Cup P1 示教偏置 + P3 固定值)
+        self._cup_teach_enabled = False
+        self._cup_teach_p1_offset = None
+        self._cup_teach_p3_xyz = None    # (m)
+        self._cup_teach_p3_abc = None    # (deg)
         # P3 teach / pour
         self._p3_teach_enable = True
         self._p3_teach_t_offset = None
@@ -217,6 +231,16 @@ class HandleCupSM:
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
 
+        # ---- Camera B (传统路线: usb-0:2) + Phase D ----
+        self._camera_b = None           # UGreenCamera
+        self._camera_b_path = "usb-0:2"
+        self._person_detector = None
+        self._hand_in_cup_detector = None
+        self._is_person_seated = False  # 人就位 (PersonDetector)
+        self._hand_on_cup = None        # True/False/None (HandInCupDetector, None=未启动)
+        self._hand_in_cup_lock = threading.Lock()
+        self._camera_b_thread = None
+
     # ================================================================
     #  生命周期
     # ================================================================
@@ -227,6 +251,7 @@ class HandleCupSM:
         self._init_hand()
         self._init_detector()
         self._init_stabilizer_and_calib()
+        self._init_camera_b()
         self._init_tcp()
         print("[HandleCupSM] 状态机已启动, 等待机器人连接...")
 
@@ -289,6 +314,13 @@ class HandleCupSM:
                 print("[INFO] Camera A pipeline 已停止")
             except Exception as e:
                 print(f"[WARN] 停止 pipeline 失败: {e}")
+
+        if self._camera_b is not None:
+            try:
+                self._camera_b.release()
+                print("[INFO] Camera B 已关闭")
+            except Exception as e:
+                print(f"[WARN] Camera B 关闭失败: {e}")
 
         if self._hand_available:
             try:
@@ -381,12 +413,62 @@ class HandleCupSM:
         self._cup_height = float(oc.get("cup_height", 0.100))
 
         # ================================================================
+        #  handle_teach (P1 示教偏置, 参考 logs/teach_handle_p1_*.log)
+        #  语义: P1_base = detect_base + t_offset (基系直接加, 含 TCP 偏移)
+        #  注意: 与 t_handle_effective ee 系补偿链不能混用 — enabled 二选一
+        # ================================================================
+        ht = estun.get("handle_teach", {})
+        self._handle_teach_enabled = bool(ht.get("enabled", False))
+        self._handle_teach_t_offset = (
+            np.array(ht.get("p1_offset", [0.0, 0.0, 0.0]), dtype=float)
+            if ht else np.zeros(3))
+        if self._handle_teach_enabled:
+            print(f"[INFO] handle_teach 启用: P1 = detect_base + "
+                  f"({self._handle_teach_t_offset[0]:.4f},"
+                  f"{self._handle_teach_t_offset[1]:.4f},"
+                  f"{self._handle_teach_t_offset[2]:.4f}) m (基系直接加)")
+
+        # ================================================================
+        #  cup_teach (Cup P1 示教偏置 + P3 固定值)
+        #  语义: Cup P1_base = detect_cup_base + p1_offset (基系直接加, 含灵巧手补偿)
+        #  注意: detect_cup_base 减 t_cup_effective (与 teach_cup 工具一致)
+        # ================================================================
+        ct = estun.get("cup_teach", {})
+        self._cup_teach_enabled = bool(ct.get("enabled", False))
+        self._cup_teach_p1_offset = (
+            np.array(ct.get("p1_offset", [0.0, 0.0, 0.0]), dtype=float)
+            if ct else np.zeros(3))
+        _p3_raw = ct.get("p3_pose", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if ct else [0]*6
+        self._cup_teach_p3_xyz = np.array(_p3_raw[:3], dtype=float) / 1000.0  # mm → m
+        self._cup_teach_p3_abc = tuple(float(v) for v in _p3_raw[3:6])       # deg
+        if self._cup_teach_enabled:
+            print(f"[INFO] cup_teach 启用: Cup P1 = detect_cup_base + "
+                  f"({self._cup_teach_p1_offset[0]:.4f},"
+                  f"{self._cup_teach_p1_offset[1]:.4f},"
+                  f"{self._cup_teach_p1_offset[2]:.4f}) m (基系直接加)")
+            print(f"[INFO] cup_teach P3 固定: xyz=({self._cup_teach_p3_xyz[0]:.4f},"
+                  f"{self._cup_teach_p3_xyz[1]:.4f},{self._cup_teach_p3_xyz[2]:.4f}) m "
+                  f"ABC=({self._cup_teach_p3_abc[0]:.1f},{self._cup_teach_p3_abc[1]:.1f},"
+                  f"{self._cup_teach_p3_abc[2]:.1f}) deg")
+
+        # ================================================================
         #  固定 ABC (从 Orchestrator config, 与 state_machine 完全一致)
+        #  handle_teach/cup_teach 启用且含 p1_abc 时, 用示教 ABC 覆盖
         # ================================================================
         _h_abc = oc.get("handle_euler", [-90, 89, -90])
+        if self._handle_teach_enabled:
+            _teach_abc = ht.get("p1_abc")
+            if _teach_abc:
+                _h_abc = _teach_abc
+                print(f"[INFO] handle_teach: 固定 ABC 覆盖为 {tuple(_h_abc)} (示教 log p1_abc)")
         self._handle_fixed_abc = tuple(_h_abc)
         _cup_key = "cup_euler_left" if self._cup_handle_side == "left" else "cup_euler_back"
         _c_abc = oc.get(_cup_key, [-90, 89, -110])
+        if self._cup_teach_enabled:
+            _teach_cabc = ct.get("p1_abc")
+            if _teach_cabc:
+                _c_abc = _teach_cabc
+                print(f"[INFO] cup_teach: 固定 ABC 覆盖为 {tuple(_c_abc)} (示教 log p1_abc)")
         self._cup_fixed_abc = tuple(_c_abc)
         print(f"[INFO] Handle P1 ABC (基系): {self._handle_fixed_abc}")
         print(f"[INFO] Cup   P1 ABC (基系): {self._cup_fixed_abc}")
@@ -479,6 +561,79 @@ class HandleCupSM:
         self._server.bind((self._host, self._port))
         self._server.listen(5)
         print(f"[INFO] TCP 服务器: {self._host}:{self._port}")
+
+    # ================================================================
+    #  Camera B (传统路线: usb-0:2) + PersonDetector + HandInCupDetector
+    # ================================================================
+
+    def _init_camera_b(self):
+        """初始化 Camera B (UGREEN) + 人就位/手在杯检测器, 启动独立线程."""
+        print(f"[INFO] 初始化 Camera B (path={self._camera_b_path})...")
+        try:
+            self._camera_b = UGreenCamera(
+                camera_id=-1,
+                camera_name="UGREEN",
+                camera_path=self._camera_b_path,
+                width=640, height=480, fps=30,
+            )
+            print(f"[INFO] Camera B 已打开 ({self._camera_b_path})")
+        except Exception as e:
+            print(f"[WARN] Camera B 打开失败: {e} — Phase D 将跳过")
+            self._camera_b = None
+            return
+
+        # PersonDetector (start_camera=False: 用已有 Camera B 帧, 不自开相机)
+        try:
+            self._person_detector = PersonDetector(start_camera=False)
+            print("[INFO] PersonDetector 已初始化")
+        except Exception as e:
+            print(f"[WARN] PersonDetector 初始化失败: {e}")
+
+        # HandInCupDetector (从 EyeToHand/config.yaml 内部加载参数)
+        try:
+            self._hand_in_cup_detector = HandInCupDetector(device="cuda")
+            print("[INFO] HandInCupDetector 已初始化 (CUDA)")
+        except Exception as e:
+            print(f"[WARN] HandInCupDetector 初始化失败: {e}")
+
+        # 启动 Camera B 线程
+        self._camera_b_thread = threading.Thread(
+            target=self._camera_b_loop, daemon=True)
+        self._camera_b_thread.start()
+        print("[INFO] Camera B 线程已启动")
+
+    def _camera_b_loop(self):
+        """Camera B 独立线程: 持续读帧 → PersonDetector → HandInCupDetector.
+        注意: cv2.imshow 不能在线程中调用 (Linux Qt 限制), 状态通过 print 输出."""
+        while not self._stop_event.is_set():
+            if self._camera_b is None:
+                time.sleep(0.1)
+                continue
+            try:
+                (frame,) = self._camera_b.read()
+                if frame is None:
+                    time.sleep(0.03)
+                    continue
+
+                # PersonDetector: 人就位检测 (检测到人即可, 每帧)
+                if self._person_detector is not None:
+                    seated = self._person_detector.detect_person_only(frame)
+                    with self._hand_in_cup_lock:
+                        self._is_person_seated = seated
+
+                # HandInCupDetector: 手在杯检测 (仅在 HandInCup 激活时)
+                if self._hand_in_cup_detector is not None:
+                    with self._hand_in_cup_lock:
+                        active = self._hand_on_cup is not None
+                    if active:
+                        self._hand_in_cup_detector.update(frame)
+                        with self._hand_in_cup_lock:
+                            if self._hand_in_cup_detector.is_hand_on_cup:
+                                self._hand_on_cup = True
+
+            except Exception as e:
+                print(f"[WARN] Camera B 线程异常: {e}")
+                time.sleep(0.5)
 
     def _accept_tcp(self):
         if self._server is None:
@@ -660,52 +815,92 @@ class HandleCupSM:
                 cup_pos_cam, cup_euler_cam = cup_pose
 
                 # ============================================================
-                #  Phase 1a: Handle P1 / P2 / P3 (固定 ABC, 移植自 state_machine)
+                #  Handle P1 / P2 (固定 ABC, 移植自 state_machine)
+                #  位置双链 (二选一, 不能混用):
+                #    handle_teach 启用 → P1 = detect_base + t_offset
+                #      (基系直接加, 含 TCP 偏移语义, 不经过 t_handle_effective)
+                #    handle_teach 关闭 → 旧链 (ee 系减 t_eff + 固定 ABC) 对照
                 # ============================================================
-                h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
-
                 # 固定 ABC 直接构造旋转矩阵 (基系)
                 R_base_fix = euler_to_rotation_matrix(*self._handle_fixed_abc, order="zyx")
                 R_grasp_ee = R_ee_base.T @ R_base_fix
 
-                # Handle P1
-                pos_base_1 = transform_pose_to_base(h_pos_ee_compensated, robot_xyz, robot_ABC)
-                A1, B1, C1 = self._handle_fixed_abc
+                if self._handle_teach_enabled:
+                    # P1 = detect_base + t_offset (基系直接加)
+                    detect_base = transform_pose_to_base(
+                        np.array(mean_pos_ee), robot_xyz, robot_ABC)
+                    pos_base_1 = detect_base + self._handle_teach_t_offset
+                    # P2 = P1 + R_base_fix @ pre_offset
+                    # (推导: P2_base = P1_base + R_ee_base@R_grasp_ee@pre
+                    #        = P1_base + R_base_fix@pre)
+                    pos_base_2 = pos_base_1 + R_base_fix @ self._handle_pre_t_offset
+                    print(f"[TEACH] P1 = detect_base + t_offset = ({pos_base_1[0]:.4f},"
+                          f"{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m", flush=True)
+                else:
+                    # 旧链: ee 系减 t_handle_effective + 固定 ABC
+                    h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
+                    # Handle P1
+                    pos_base_1 = transform_pose_to_base(
+                        h_pos_ee_compensated, robot_xyz, robot_ABC)
+                    # Handle P2
+                    pos_ee_pre = h_pos_ee_compensated + R_grasp_ee @ self._handle_pre_t_offset
+                    pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
 
-                # Handle P2
-                pos_ee_pre = h_pos_ee_compensated + R_grasp_ee @ self._handle_pre_t_offset
-                pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
+                A1, B1, C1 = self._handle_fixed_abc
                 A2, B2, C2 = self._handle_fixed_abc
 
                 R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(
                     *self._handle_target_r_offset, order="zyx")
 
                 # ============================================================
-                #  Phase 2: Cup P1 / P2 / P3 (固定 ABC, P3 = Z-up)
-                #  CRP 序列: Home → P2(预抓取) → P1(抓杯) → P3(抬起) → P1(放回) → P2 → Home
+                #  Cup P1 / P2 / P3
+                #  双链 (二选一):
+                #    cup_teach 启用 → P1 = detect_cup_base + p1_offset (基系直接加)
+                #                     P2 = P1 + R_cup_base_fix @ cup_pre_offset
+                #                     P3 = p3_pose (固定值, 不经检测)
+                #    cup_teach 关闭 → 旧链 (ee 系减 t_eff + Z-up P3)
                 # ============================================================
                 c_pos_ee = T_cam2ee[:3, :3] @ np.array(cup_pos_cam) + T_cam2ee[:3, 3]
                 # cup_euler_cam 即 self._cup_fixed_abc (由 _detect 写入)
                 c_R_base_fix = euler_to_rotation_matrix(*cup_euler_cam, order="zyx")
                 c_R_grasp_ee = R_ee_base.T @ c_R_base_fix
-                c_pos_ee_compensated = c_pos_ee - t_cup_effective
 
-                # Cup P1 (基系 XYZ + 固定 ABC)
-                c_pos_base_1 = transform_pose_to_base(c_pos_ee_compensated, robot_xyz, robot_ABC)
-                cA1, cB1, cC1 = cup_euler_cam
-
-                # Cup P2 (预抓取: 末端系 pre_offset → 基系)
-                c_pos_ee_pre = c_pos_ee_compensated + c_R_grasp_ee @ self._cup_pre_t_offset
-                c_pos_base_2 = transform_pose_to_base(c_pos_ee_pre, robot_xyz, robot_ABC)
-                cA2, cB2, cC2 = cA1, cB1, cC1
-
-                # Cup P3 (抬起: 基系 Z 轴向上 cup_lift_z, ABC 同 P1)
-                c_pos_base_3 = (
-                    c_pos_base_1[0],
-                    c_pos_base_1[1],
-                    c_pos_base_1[2] + self._cup_lift_z,
-                )
-                cA3, cB3, cC3 = cA1, cB1, cC1
+                if self._cup_teach_enabled:
+                    # P1 = detect_cup_base + p1_offset (基系直接加)
+                    # detect_cup_base 减 t_cup_effective (与 teach_cup 工具一致)
+                    c_pos_ee_compensated = c_pos_ee - t_cup_effective
+                    c_detect_base = transform_pose_to_base(
+                        c_pos_ee_compensated, robot_xyz, robot_ABC)
+                    c_pos_base_1 = c_detect_base + self._cup_teach_p1_offset
+                    # P2 = P1 + R_cup_base_fix @ cup_pre_offset
+                    c_pos_base_2 = c_pos_base_1 + c_R_base_fix @ self._cup_pre_t_offset
+                    cA1, cB1, cC1 = cup_euler_cam
+                    cA2, cB2, cC2 = cA1, cB1, cC1
+                    # P3 = p3_pose (示教固定值)
+                    c_pos_base_3 = tuple(self._cup_teach_p3_xyz)
+                    cA3, cB3, cC3 = self._cup_teach_p3_abc
+                    print(f"[TEACH] Cup P1 = detect_cup_base + p1_offset = "
+                          f"({c_pos_base_1[0]:.4f},{c_pos_base_1[1]:.4f},"
+                          f"{c_pos_base_1[2]:.4f}) m", flush=True)
+                else:
+                    # 旧链: ee 系减 t_cup_effective + Z-up P3
+                    c_pos_ee_compensated = c_pos_ee - t_cup_effective
+                    # Cup P1 (基系 XYZ + 固定 ABC)
+                    c_pos_base_1 = transform_pose_to_base(
+                        c_pos_ee_compensated, robot_xyz, robot_ABC)
+                    cA1, cB1, cC1 = cup_euler_cam
+                    # Cup P2 (预抓取: 末端系 pre_offset → 基系)
+                    c_pos_ee_pre = c_pos_ee_compensated + c_R_grasp_ee @ self._cup_pre_t_offset
+                    c_pos_base_2 = transform_pose_to_base(
+                        c_pos_ee_pre, robot_xyz, robot_ABC)
+                    cA2, cB2, cC2 = cA1, cB1, cC1
+                    # Cup P3 (抬起: 基系 Z 轴向上 cup_lift_z, ABC 同 P1)
+                    c_pos_base_3 = (
+                        c_pos_base_1[0],
+                        c_pos_base_1[1],
+                        c_pos_base_1[2] + self._cup_lift_z,
+                    )
+                    cA3, cB3, cC3 = cA1, cB1, cC1
 
                 cup_p1_base = c_pos_base_1  # 保存供 ABORT 使用 (预留)
 
@@ -771,7 +966,7 @@ class HandleCupSM:
             #  运动流程: PREGRIP / GRIPDONE / RESET / CUP / RELEASE / GRIP
             #  CUP 指令时回复 Cup P1/P2/P3
             # ================================================================
-            self._phase_c(conn, cup_pose_data)
+            self._phase_c(conn, cup_pose_data, robot_xyz, robot_ABC)
 
         except Exception as e:
             print(f"[ERROR] Session 异常: {e}")
@@ -819,11 +1014,17 @@ class HandleCupSM:
     #  Phase C: 指令循环 (移植自 estun_handle_cup_run)
     # ================================================================
 
-    def _phase_c(self, conn, cup_pose_data):
-        """Phase C: PREGRIP / GRIPDONE / RESET / CUP / RELEASE / GRIP.
-        CUP 指令时回复 Cup P1/P2/P3, SocketClose 退出."""
+    def _phase_c(self, conn, cup_pose_data, robot_xyz, robot_ABC):
+        """Phase C + D: PREGRIP / GRIPDONE / RESET / CUP / RELEASE / GRIP / READY.
+        CUP 指令时回复 Cup P1/P2/P3.
+        READY → HandInCup 判定 → RELEASE → CONTINUE/ABORT (Phase D)."""
         conn.settimeout(2.0)
         print("[INFO] Phase C: 等待机器人指令...")
+
+        hand_judged = False     # Phase D 第一次 RELEASE 已处理
+        abort_mode = False      # TRUE=CONTINUE, FALSE→ABORT 放回模式
+        _hic_timeout = 25.0     # HandInCup 超时 (s)
+        _hic_start = 0.0
 
         try:
             while not self._stop_event.is_set():
@@ -837,7 +1038,7 @@ class HandleCupSM:
                     break
 
                 cmd = data.decode("utf-8").strip()
-                print(f"[RECV] {cmd}")
+                print(f"[RECV] {cmd} (len={len(cmd)})")
 
                 if cmd == "PREGRIP":
                     if self._hand_available:
@@ -854,11 +1055,6 @@ class HandleCupSM:
                         hand_reset()
                     print("[INFO] RESET")
 
-                elif cmd == "RELEASE":
-                    if self._hand_available:
-                        release_object()
-                    print("[INFO] RELEASE (PAPER)")
-
                 elif cmd == "GRIP":
                     if self._hand_available:
                         grip_object()
@@ -874,6 +1070,83 @@ class HandleCupSM:
                             break
                     else:
                         print("[WARN] CUP: cup_pose_data 为 None, 忽略")
+
+                elif cmd == "READY":
+                    # Phase D: 人就位检查 → 启动 HandInCup
+                    with self._hand_in_cup_lock:
+                        seated = self._is_person_seated
+                    if not seated:
+                        print("[INFO] READY: 人未就位 → HandInCup=false")
+                        with self._hand_in_cup_lock:
+                            self._hand_on_cup = False
+                    else:
+                        print(f"[INFO] READY: 人就位 → 启动 HandInCup (≤{_hic_timeout:.0f}s)")
+                        with self._hand_in_cup_lock:
+                            self._hand_on_cup = None  # 激活检测
+                        if self._hand_in_cup_detector is not None:
+                            self._hand_in_cup_detector.reset()
+                        _hic_start = time.time()
+                        # 等待 HandInCup 结果
+                        while not self._stop_event.is_set():
+                            with self._hand_in_cup_lock:
+                                if self._hand_on_cup is True:
+                                    print("[INFO] HandInCup: TRUE")
+                                    break
+                            if time.time() - _hic_start > _hic_timeout:
+                                with self._hand_in_cup_lock:
+                                    self._hand_on_cup = False
+                                print(f"[INFO] HandInCup: 超时 → FALSE")
+                                break
+                            time.sleep(0.05)
+
+                elif cmd == "RELEASE":
+                    with self._hand_in_cup_lock:
+                        hic = self._hand_on_cup
+                    if abort_mode:
+                        # ---- ABORT 路径第二次 RELEASE (放回后松杯) ----
+                        if self._hand_available:
+                            release_object()
+                        print("[INFO] RELEASE (放回后松杯)")
+                    elif hic is None:
+                        # ---- Phase C: 松把手 (READY 之前, HandInCup 未启动) ----
+                        if self._hand_available:
+                            release_object()
+                        print("[INFO] RELEASE (松把手)")
+                    elif not hand_judged:
+                        # ---- Phase D 第一次 RELEASE: Hand-in-cup 判定 ----
+                        hand_ok = hic
+                        print(f"[INFO] Hand-in-cup 判定: {'TRUE' if hand_ok else 'FALSE'}")
+                        hand_judged = True
+
+                        if hand_ok:
+                            # TRUE: 松手 → CONTINUE
+                            if self._hand_available:
+                                release_object()
+                            print("[INFO] RELEASE (松杯)")
+                            try:
+                                sig = f"<{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}>"
+                                conn.sendall(sig.encode("utf-8"))
+                                print(f"[SEND] CONTINUE ({sig})")
+                            except Exception as e:
+                                print(f"[WARN] 发送 CONTINUE 失败: {e}")
+                                break
+                        else:
+                            # FALSE: 不松手 → ABORT
+                            print("[INFO] 无人接杯 → ABORT")
+                            abort_mode = True
+                            try:
+                                sig = f"[{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}]"
+                                conn.sendall(sig.encode("utf-8"))
+                                print(f"[SEND] ABORT ({sig})")
+                            except Exception as e:
+                                print(f"[WARN] 发送 ABORT 失败: {e}")
+                                break
+                    else:
+                        # ---- ABORT 路径第二次 RELEASE (放回后松杯) ----
+                        if abort_mode:
+                            if self._hand_available:
+                                release_object()
+                            print("[INFO] RELEASE (放回后松杯)")
 
                 else:
                     print(f"[INFO] 忽略: {cmd}")

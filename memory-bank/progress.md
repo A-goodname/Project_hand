@@ -1,5 +1,20 @@
 # Progress — Project_hand
 
+### Cup 阶段移植 + Camera B + Phase D (2026-08-18)
+- [x] estun_teach_cup.py 新建 (Cup P1 示教工具, 镜像 teach_handle_p1)
+- [x] cup_teach 示教验收: t_offset (-0.0226, 0.0021, -0.0078) m, 方差 <5mm ✓
+- [x] estun_config.yaml 新增 cup_teach 段 (p1_offset + p1_abc + p3_pose)
+- [x] estun_handle_cup_sm.py handle_teach + cup_teach 双链 (与 data_sm 对齐)
+- [x] Camera B (usb-0:2) 接入 + PersonDetector + HandInCupDetector
+- [x] camera.py path+name 联合匹配修复 (防 D435i 误匹配)
+- [x] EyeToHand/config.yaml camera_path + cup_roi_fallback 重标
+- [x] Phase D py 逻辑 (READY/RELEASE/CONTINUE/ABORT, 镜像 state_machine.py)
+- [x] CRP Phase D blocks 添加 (TranStrToCpos + If 分支 + sudu2 + 新 points)
+- [x] Phase A-C 实机验证通过 (Handle→倒水→Cup 抓取→递送)
+- [ ] **Phase D 失败**: CRP 到 C_P3 后停止运动, 未发送 READY, 连接关闭 — 根因待查
+- [x] P3 X+1cm 微调 (0.0686 → 0.0786 m)
+- [x] doc 清理 (删除旧 session-barrier 文件, 更新 CRP)
+
 ### P1 示教工具 6D 偏置 (2026-08-16)
 - [x] 稳定窗口收集姿态 (euler_cam, 只收 dynamic 帧) + 基系 6D 预测 (`transform_pose_to_base_6d`)
 - [x] 偏置含角度: abc_offset = unwrap(P1_ABC - detect_ABC); yaml/log 输出补姿态

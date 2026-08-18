@@ -4,11 +4,29 @@
 
 ## 当前焦点
 
-**多视角朝向示教（本地主线）** — 正对场景完整流程已通过实机验证（data_sm + handle_teach + CRP，2026-08-17，抓壶→倒水→放回→Home 全过）；handle_teach.enabled: true 实机低速验证完成。**当前目标：扩展到多视角（水壶绕竖直轴旋转 ±30°/±60° 等朝向）示教**。核心难点：**旋转敏感性检测** — 2D 图像方向对绕竖直轴旋转不敏感（±30° → euler C 仅 ~3°），需额外信号区分朝向。**方案 A（宽高比法）验证中**：r = 短轴/长轴 = r0·cosθ，r0 = 0.274 已标定（±0.001），天然有 ±θ 歧义；待验证平移不变性 + 旋转响应，并解决 ± 歧义（候选补充信号：贴纸质心偏移 sinθ / D435i 深度梯度 / 壶嘴参考点 / 贴纸四角 PnP）。state_machine teach 模式（Step 3）仍暂停未实施。
+**传统路线 Cup 阶段移植** — `estun_handle_cup_sm.py` + CRP 移植 Handle+Cup 全流程。Phase A-C（Handle 抓取→倒水→Cup 抓取→递送）已成功实机运行；**Phase D（READY→HandInCup→CONTINUE/ABORT）失败** — CRP 到 C_P3 后 ~2s 自动停止运动，未发送 READY 到 Python，连接关闭。根因待查（CRP SocketSendStr/SocketReadStr 配置或时序问题）。
 
-训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。交接文档见 `/data/VLA/VLA-BD/docs/handoff-vla-collaboration-2026-08-15.md` + `/data/VLA/Project/collab-line/`（不随本仓库）。
+**多视角朝向示教（本地主线）** — 正对场景完整流程已通过实机验证（data_sm + handle_teach + CRP，2026-08-17，抓壶→倒水→放回→Home 全过）；handle_teach.enabled: true 实机低速验证完成。方案 A（宽高比法）验证中，待验证平移不变性 + 旋转响应 + ±歧义解决。
+
+训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。
 
 ## 最近变更
+
+### Cup 阶段移植 + Camera B + Phase D (2026-08-18)
+
+1. **estun_teach_cup.py 新建**: Cup P1 抓杯点示教工具 (镜像 estun_teach_handle_p1.py), 检测水杯基系位置 + 人工示教 → t_offset (基系直接加); 3 次示教验收: t_offset (-0.0226, 0.0021, -0.0078) m, 方差 (3.5/4.2/3.1)mm ✓
+2. **estun_config.yaml 新增 cup_teach 段**: enabled: true, p1_offset + p1_abc + p3_pose (示教固定值 [-553.2, -11.1, 479.8, -91.9, 88.9, 66.0] mm/deg)
+3. **estun_handle_cup_sm.py 修改**:
+   - handle_teach + cup_teach 双链 (与 data_sm 对齐)
+   - Camera B (usb-0:2, 传统路线) + PersonDetector (detect_person_only) + HandInCupDetector (update + is_hand_on_cup)
+   - Phase D READY/RELEASE/CONTINUE/ABORT 逻辑 (镜像 state_machine.py)
+   - camera.py path+name 联合匹配修复 (防 D435i 同控制器误匹配)
+4. **EyeToHand/config.yaml**: camera_path 改 usb-0:2, cup_roi_fallback 重标 (327,133)→(394,210)
+5. **CRP Phase D 添加**: 从参考 CRP 克隆 blocks (TranStrToCpos + If 分支), 新增 points (DummyCpos, C_P4, DCp2, C_P5, DCp3), sudu2 SPEED 变量; 用户手动调整 READY/RELEASE 发送 + Wait 时序
+6. **Phase A-C 实机验证通过**: Handle 抓取→倒水→放回→Cup 抓取→递送 (C_P3) 全流程正常
+7. **Phase D 失败**: CRP 到 C_P3 后 ~2s 自动停止运动 (无报错), 未发送 READY 到 Python, 连接关闭。If 分支未进入 (strflag_cont/abort 保持初始值 1)。根因待查: CRP SocketSendStr READY 是否实际发送 / SocketReadStr 时序 / TranStrToCpos 解析
+8. **P3 X+1cm 微调**: handle_grasp.p3_teach_offset.left.30.t_offset X: 0.0686 → 0.0786 m
+9. **doc 清理**: 删除旧 session-barrier 文件 (7 个), 更新 data_sm/cup_sm CRP 为最新版
 
 ### 旋转敏感性验证 + 宽高比法方案 A (2026-08-17)
 

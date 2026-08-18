@@ -75,7 +75,7 @@ estun:
           t_offset: [-0.0171, -0.0750, 0.2493]
           r_abc: [-90.0, 20.3, -90.0]
         30:
-          t_offset: [0.0686, -0.0094, 0.2536]   # 2026-08-17 重标 (新 Home + HandleCupDetector 同源, 剔除 cup 深度异常次)
+          t_offset: [0.0786, -0.0094, 0.2536]   # 2026-08-17 重标, 08-18 X+1cm (基系)
           r_abc: [-93.3, 30.5, -5.3]            # 示教固定 ABC (与 P1 不要求一致, 2026-08-17)
     pre_offset:
       t_offset: [0, -0.10, -0.05]      # 末端系下预抓取平移偏移 (x, y, z) m
@@ -94,6 +94,16 @@ estun:
     p1_abc: [-115.2, 85.0, -21.1]          # 示教 ABC (deg; enabled 时覆盖 config.yaml handle_euler)
     p2_offset: [0.0, 0.0, 0.0]             # 未示教 P2 → 运行时 P2 = P1 + R_base_fix @ pre_offset
     grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
+
+  # --- 水杯抓取示教偏置 (基系直接加, 参考 logs/teach_cup_20260818_130002.log) ---
+  # 运行时: Cup P1_base = detect_cup_base + p1_offset (含灵巧手补偿语义)
+  # Cup P3 为示教固定值 (不基于检测), P2 = P1 + p2_offset
+  cup_teach:
+    enabled: true
+    p1_offset: [-0.0226, 0.0021, -0.0078]  # 基系: Cup P1 = detect_cup_base + p1_offset (m)
+    p1_abc: [-93.5, 88.9, -3.3]            # 示教 ABC (deg, 固定抓取姿态, cup 无动态 euler)
+    p2_offset: [0.0, 0.0, 0.0]             # 未示教 P2 → 运行时 P2 = Cup P1 + p2_offset
+    p3_pose: [-553.204, -11.067, 479.813, -91.858, 88.943, 66.035]  # 固定 P3 (mm/deg)
 
   handle_detection:
     fine_tune_mode: true           # Demo 微调模式: true 时输出位姿后等待手动调整求新偏移

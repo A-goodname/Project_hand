@@ -106,10 +106,13 @@ def find_camera_id(keywords: Optional[List[str]] = None,
             return None
 
         # 1) USB 物理路径匹配 (优先: 同名设备唯一区分手段)
+        #    同时提供 path + name 时, 两者都匹配才命中 (防 D435i 等同控制器误匹配)
         if path_keyword:
-            for idx, _name, id_path in devices:
+            for idx, name, id_path in devices:
                 if path_keyword.lower() in id_path.lower():
-                    print(f"[CameraFinder] 路径匹配 \"{path_keyword}\" → [{idx}]")
+                    if keywords and not any(k.lower() in name.lower() for k in keywords):
+                        continue  # path 匹配但 name 不匹配, 跳过
+                    print(f"[CameraFinder] 路径匹配 \"{path_keyword}\" → [{idx}] {name}")
                     return idx
             print(f"[CameraFinder] 无设备匹配路径 \"{path_keyword}\", 回退名称匹配")
 

@@ -24,8 +24,49 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# 复用青色参数与 analyze_roi (模块级只定义, 安全 import)
-from Orchestrator.test_tag_points import analyze_roi
+# 青色贴纸 HSV 参数 (与 test_tag_points.py 同步)
+HUE_LOW, HUE_HIGH = 40, 110
+SAT_MIN = 50
+VAL_MIN = 50
+
+
+def analyze_roi(color_img, roi, save_dir):
+    """圈定区域 HSV 统计 + 保存原图 (排 HSV 参数用)."""
+    x0, y0, x1, y1 = roi
+    crop = color_img[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    h = hsv[..., 0].astype(int)
+    s = hsv[..., 1].astype(int)
+    v = hsv[..., 2].astype(int)
+    cyan = (h >= HUE_LOW) & (h <= HUE_HIGH) & (s >= SAT_MIN) & (v >= VAL_MIN)
+    n_total = h.size
+    n_cyan = int(cyan.sum())
+    print(f"[MARK] ROI=({x0},{y0})-({x1},{y1}) {x1-x0}x{y1-y0}px")
+    print(f"[MARK] 现参数青色像素: {n_cyan}/{n_total} ({n_cyan/n_total*100:.1f}%)")
+    hist_h, edges = np.histogram(h, bins=10, range=(0, 180))
+    print("[MARK] H 直方图(0-180,每桶18deg): " + " ".join(
+        f"{int(e)}-{int(e2)}:{c}" for e, e2, c in zip(edges[:-1], edges[1:], hist_h)))
+    if n_cyan:
+        print(f"[MARK] 青色区 H: {h[cyan].min()}-{h[cyan].max()} "
+              f"(median {np.median(h[cyan]):.0f})")
+        print(f"[MARK] 青色区 S: {s[cyan].min()}-{s[cyan].max()} "
+              f"(median {np.median(s[cyan]):.0f})")
+        print(f"[MARK] 青色区 V: {v[cyan].min()}-{v[cyan].max()} "
+              f"(median {np.median(v[cyan]):.0f})")
+    else:
+        cand = (h >= HUE_LOW) & (h <= HUE_HIGH)
+        if cand.any():
+            print(f"[MARK] 无青色像素; H 在 [{HUE_LOW},{HUE_HIGH}] 的像素 "
+                  f"{int(cand.sum())} 个 (S median {np.median(s[cand]):.0f}, "
+                  f"V median {np.median(v[cand]):.0f})")
+        else:
+            print(f"[MARK] H 无落在 [{HUE_LOW},{HUE_HIGH}] 的像素")
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    cv2.imwrite(os.path.join(save_dir, f"roi_orig_{ts}.png"), crop)
+    annot = color_img.copy()
+    cv2.rectangle(annot, (x0, y0), (x1, y1), (0, 255, 0), 2)
+    cv2.imwrite(os.path.join(save_dir, f"roi_annot_{ts}.png"), annot)
+    print(f"[MARK] saved: roi_orig_{ts}.png + roi_annot_{ts}.png")
 
 
 def grab_frame(serial):
