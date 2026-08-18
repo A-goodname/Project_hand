@@ -4,11 +4,19 @@
 
 ## 当前焦点
 
-**data_sm 接入 handle_teach（本地主线）** — 正对示教验收全过后（8-17 log: t_offset 方差 2mm/abc_offset 2.5°），把示教偏置接入运行时完整流程（抓壶→倒水→放回→Home），落点 = `estun_handle_data_sm.py`（无 Cup 阶段 + cup 检测定 P3，CRP `estun_handle_data_sm.crp` 现成）。代码+离线数学验证完成（log 回放 P1 误差 0.7-3.2mm）。**下一步:实机只读跑 data_sm 看 Handle/Cup STABLE → P1 落点对比（正对场景）→ 通过后 `handle_teach.enabled: true` 完整流程低速验证**。旧焦点（实机示教 P1 正对验收）已完成；state_machine teach 模式（Step 3）仍暂停未实施。
+**多视角朝向示教（本地主线）** — 正对场景完整流程已通过实机验证（data_sm + handle_teach + CRP，2026-08-17，抓壶→倒水→放回→Home 全过）；handle_teach.enabled: true 实机低速验证完成。**当前目标：扩展到多视角（水壶绕竖直轴旋转 ±30°/±60° 等朝向）示教**。核心难点：**旋转敏感性检测** — 2D 图像方向对绕竖直轴旋转不敏感（±30° → euler C 仅 ~3°），需额外信号区分朝向。**方案 A（宽高比法）验证中**：r = 短轴/长轴 = r0·cosθ，r0 = 0.274 已标定（±0.001），天然有 ±θ 歧义；待验证平移不变性 + 旋转响应，并解决 ± 歧义（候选补充信号：贴纸质心偏移 sinθ / D435i 深度梯度 / 壶嘴参考点 / 贴纸四角 PnP）。state_machine teach 模式（Step 3）仍暂停未实施。
 
-训练侧线（并行）：**P2/P1 双确认协议适配（对方 D0 门禁）** — 审计 132051c 后要求：标定失败阻止启动、PREGRIP≠位姿确认、P2 后腕部重观测 + GRASP_AUTH/GRIP_AUTH 一次性双确认。协作线交接见 `/data/VLA/VLA-BD/docs/handoff-vla-collaboration-2026-08-15.md` + `/data/VLA/Project/collab-line/`（不随本仓库）；D1-B 阻断项离线修复中（`/data/VLA/VLA-BD/docs/d1-a-return-audit-and-d1-b-blockers-2026-08-15.md`）。
+训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。交接文档见 `/data/VLA/VLA-BD/docs/handoff-vla-collaboration-2026-08-15.md` + `/data/VLA/Project/collab-line/`（不随本仓库）。
 
 ## 最近变更
+
+### 旋转敏感性验证 + 宽高比法方案 A (2026-08-17)
+
+1. **P1 示教 (HSV 链, 正对 4 位置) 验收全过**: t_offset 方差 2.0/1.7/2.0mm, abc_offset 0.2/2.5/2.0°; euler_cam A/B 恒定 (180,0) 仅 C 随位置变 (几何效应); 相对旧 SAM 链 A 漂 32°→0.2°; 已发训练侧 `logs/teach-p1-hsv-analysis-2026-08-17.md` + log (sha256 校验过)
+2. **旋转实验 (关键发现)**: 水壶绕竖直轴 ±30°, fitEllipse 长短轴姿态 euler C 仅反映 ~3° — **2D 图像方向对绕竖直轴旋转不敏感** (旋转轴 ∥ 图像竖直, 数学必然); 单纯图像姿态无法区分朝向
+3. **3D 点云 PCA 尝试 → 回退**: 旋转敏感但噪声大 (法线 λ3 由深度噪声主导, B 分量波动 6-14°); 方向语义 (grasp_direction: Z 朝相机/Y 指向图像下上边界) 随回退未保留 — **后续重做姿态时需补回**
+4. **方案 A (宽高比法, 进行中)**: r = 短轴/长轴 = r0·cosθ (贴纸标准矩形, 旋转投影宽度收缩), θ = arccos(r/r0); 已实现于 `Orchestrator/test_tag_points.py` (ratio/theta 输出 + `c` 键标定 r0), 检测器未动; **r0 = 0.274 已标定 (±0.001, θ 精度预期 0.2-0.5°)**
+5. **待验证**: ratio 平移不变 (不同位置正对) + ±30/±60° 旋转响应 + 顺逆对称; ±歧义未解决 (转动历史 / bbox 侧向偏移消歧备选)
 
 ### P3 修正 + teach_p3 换源 (2026-08-17)
 
@@ -252,15 +260,9 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | **data_sm handle_teach 实机验证** | `conda run -n Proj python Orchestrator/estun_handle_data_sm.py`（只读，不连机器人）：①确认 [Handle STABLE]/[Cup STABLE] 输出 ②机器人连上后 Phase B 发送前看 [TEACH] 打印 P1，与示教 log P1 对比（正对场景）③落点 OK → `estun_config.yaml` `handle_teach.enabled: true`（固定 ABC 变 log p1_abc）④完整流程低速验证（CRP `doc/estun_handle_data_sm.crp`，DCp1 回退避碰 + 放回 + Home） |
-| 🟡 | A 角残余 8.9° | 壶身轴 λ1/λ2=1.14 深度噪声放大——可选 `rot_smooth_alpha` 调低（0.4→0.25）或壶身轴与图像竖直混合（HSV 链已消除，留存参考） |
-| 🟡 | 多朝向示教 | 正对完成后：水壶旋转至其他朝向示教多位置 → abc_offset/detect_C 变化曲线（HSV 链 C 系统偏差验证） |
-| 🔴 | Linux 实机验证: UGREEN | V4L2 720P MJPG 打开 + PersonDetector 全链路跑通 |
-| 🔴 | Linux 实机验证: 机械臂链路 | estun_config.yaml 按 Linux 调整 (IP/串口 COM5 → /dev/ttyUSB*) |
-| 🔴 | 豆包 API Key 申请 | 火山引擎控制台 → API Key 管理,写入 .local.json 的 doubao.api_key |
-| 🔴 | 实机阶段 1 | 无手纯对话: ASR 正确性 + TTS 流式出声 + 首包延迟记录 |
-| 🔴 | 实机阶段 2 | 空载: 单手势/速度三档/序列/自定义多手势/越界拒绝 |
-| 🟡 | 实机阶段 3 | 握手压力检测、stop 急停、抢话打断、断网重连、音色选择(4 选 1) |
-| 🟡 | 延迟对比 | 同句指令 MiMo vs 豆包各 5 次,结果写回附录 C |
-| 🟡 | CRP 实机导入测试 | estun_handle_sm.crp + estun_handle_cup_sm.crp(此前遗留) |
-| 🟡 | 单相机 SM 实机联调 | estun_handle_sm.py + estun_handle_cup_sm.py(此前遗留) |
+| 🔴 | **旋转敏感性检测方案选型** | 方案 A（宽高比 r=r0·cosθ）已有 r0 标定，待验证平移不变 + ±30/±60° 响应 + 顺逆对称；**±歧义待解决**（候选补充信号：贴纸质心偏移 sinθ / D435i 深度梯度 / 壶嘴参考点 / 贴纸四角 PnP）；选定方案后实现并验证 |
+| 🟡 | 多朝向示教 | 旋转检测方案就绪后：水壶旋转至各朝向（±30°/±60°等）示教多位置 → abc_offset/detect_C 随朝向变化曲线验证 |
+| 🟡 | CRP 实机导入测试 | estun_handle_sm.crp + estun_handle_cup_sm.crp（此前遗留） |
+| 🟡 | 单相机 SM 实机联调 | estun_handle_sm.py + estun_handle_cup_sm.py（此前遗留） |
+| 🟡 | 豆包实机联调（阶段 1/2/3） | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色 |
+| 🟡 | MiMo vs 豆包延迟对比 | 各 5 次，结果写回附录 C |

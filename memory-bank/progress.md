@@ -21,13 +21,13 @@
 - [x] data_sm 完整流程实机验证: P1/P2/P3/P4 全部正常 (抓壶→倒水→放回→Home 完美运行, 2026-08-17)
 - [x] CRP 更新: data_sm-Down-638 → doc/estun_handle_data_sm.crp (38 widgets, 新增 H_P1 放回步骤, 旧版 .bak 备份)
 
-### data_sm 接入 handle_teach (2026-08-17)
+### data_sm 接入 handle_teach (2026-08-17, 完成)
 - [x] estun_config.yaml 新增 handle_teach 段 (参考 8-17 log: p1_offset/p1_abc, enabled: false)
 - [x] data_sm `_load_configs` 加载 handle_teach + enabled 时 p1_abc 覆盖固定 ABC
 - [x] Phase B P1/P2 位置双链切换 (enabled → P1=detect_base+t_offset 基系直接加 / P2=P1+R_base_fix@pre; 旧链对照保留)
 - [x] 离线数学验证: log 4 次回放 P1 误差 0.7-3.2mm / P2 推导恒等 / 旋转恒等 R_ee_base@R_grasp_ee==R_base_fix
-- [ ] 实机只读跑: [Handle STABLE]/[Cup STABLE] 输出 + [TEACH] P1 落点对比 (正对场景)
-- [ ] handle_teach.enabled: true → 完整流程低速验证 (CRP estun_handle_data_sm.crp: 抓→DCp1→倒水→放回→Home)
+- [x] 实机只读跑: [Handle STABLE]/[Cup STABLE] 输出 + [TEACH] P1 落点对比 (正对场景) ✅
+- [x] handle_teach.enabled: true → 完整流程低速验证通过 (2026-08-17, 抓→DCp1→倒水→放回→Home 全过)
 
 ### 波动根因修复: anchor 固定 seed + 系列回退 (2026-08-15)
 - [x] `_get_anchor_depth` 固定 seed (确定性采样) — 实测 C 44°→3.9°、B 12°→2.2°、A 14°→8.9° (mask 稳定但姿态飘的根因)
@@ -66,12 +66,17 @@
 - [ ] 实机示教: 采集 ≥3 点位, 方差 <5mm, 输出 yaml 片段 (Step 2)
 - [ ] **Step 3 (state_machine teach 模式) 暂停** — 用户指示, 待实机验证 Step 1/2 后恢复
 
-### Handle 检测 HSV 化: SAM 链 → 青色贴纸链 (2026-08-17)
+### Handle 检测 HSV 化: SAM 链 → 青色贴纸链 (2026-08-17, 正对流程完成)
 - [x] 新链: YOLO bbox → 右 30% HSV → 最大域 → 质心=中心 + 长短轴=6D 姿态 (X=短轴/Y=长轴/Z=X×Y)
 - [x] 深度排坑: color_to_depth_pixel 坐标映射 (FOV 不同) + 质心邻域/区域内中位数 (不取背景)
 - [x] HSV 参数标定: H 40-110 (贴纸青绿渐变 36-105), S/V ≥50
 - [x] 移除 SAM 加载; 单测 31 例全过; 实机验证 (test_tag_points.py): 中心 ±0.2px / euler 0.1-0.2° / 深度 0.63m
-- [ ] 实机复测: 完整 HandleCupDetector HSV 链 (detect 输出 pos/euler/consume 链)
+- [x] P1 示教 (HSV 链, 正对 4 位置) 验收全过 (t_offset 2mm / abc_offset 2.5°) + 分析发训练侧 (teach-p1-hsv-analysis-2026-08-17.md)
+- [x] 旋转实验: 2D fitEllipse 对绕竖直轴旋转不敏感 (±30° → C 仅 ~3°); 3D 点云 PCA 尝试 (法线噪声大) 已回退 — **A 角残余 8.9° 为旧点云 PCA 链问题，HSV 链不涉及**
+- [x] 方案 A 宽高比法 (test_tag_points.py): ratio/theta 输出 + c 键标定 r0; r0=0.274 已标定 (±0.001)
+- [ ] 方案 A 验证: 平移不变 + ±30/±60° 旋转响应 + 顺逆对称
+- [ ] **旋转检测方案选型**: ±歧义解决（候选：贴纸质心偏移 sinθ / D435i 深度梯度 / 壶嘴参考点 / 贴纸四角 PnP）→ 选定后实现并集成进检测器
+- [ ] 多朝向示教: 旋转检测方案就绪后，各朝向（±30°/±60°等）示教 → abc_offset/detect_C 变化曲线验证
 
 ### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
 - [x] `handle_cup_detector.py` 重构: YOLO kettle → SAM → 后处理 → scanline v2 → PCA 6D → 完整动态 euler_cam
@@ -210,16 +215,12 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 Linux 实机验证: UGREEN | V4L2 720P MJPG + PersonDetector 全链路 |
-| 🔴 Linux 实机验证: 机械臂链路 | estun_config.yaml IP/串口 (COM5 → /dev/ttyUSB*) |
-| 🔴 豆包 API Key 申请 | 火山引擎控制台 → 写入 .local.json doubao.api_key |
-| 🔴 豆包实机联调 (1/2/3) | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色 |
-| 🟡 MiMo vs 豆包延迟对比 | 各 5 次, 写回附录 C |
-| 🔴 CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` |
-| 🔴 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` |
-| 🔴 语音控制实机联调 (MiMo) | 连 OmniHand 完整链路测试 (豆包上线后可跳过) |
-| 🟡 完整语音控制接入 | voice_control.py + CRP GOTO |
-| 🟡 HandInCup 优化 | 调参 + 遮挡 |
+| 🔴 **旋转敏感性检测方案选型 + 实现** | 方案 A（宽高比）验证 + ±歧义补充信号选型 → 集成进检测器 |
+| 🟡 多朝向示教 | 旋转检测就绪后，各朝向（±30°/±60°等）示教 → abc_offset 变化曲线 |
+| 🟡 CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` |
+| 🟡 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` |
+| 🟡 豆包实机联调 (1/2/3) | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色 |
+| 🟡 MiMo vs 豆包延迟对比 | 各 5 次，写回附录 C |
 | 🟡 加水实测 | 完整流程 |
 | 🟡 抓取姿态微调 | 末端 + 手势 |
 | 🟢 RPS 手势集成到 Orchestrator | 4 阶段调度 |
