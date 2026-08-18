@@ -6,11 +6,22 @@
 
 **传统路线 Cup 阶段移植** — `estun_handle_cup_sm.py` + CRP 移植 Handle+Cup 全流程。Phase A-C（Handle 抓取→倒水→Cup 抓取→递送）已成功实机运行；**Phase D（READY→HandInCup→CONTINUE/ABORT）失败** — CRP 到 C_P3 后 ~2s 自动停止运动，未发送 READY 到 Python，连接关闭。根因待查（CRP SocketSendStr/SocketReadStr 配置或时序问题）。
 
-**多视角朝向示教（本地主线）** — 正对场景完整流程已通过实机验证（data_sm + handle_teach + CRP，2026-08-17，抓壶→倒水→放回→Home 全过）；handle_teach.enabled: true 实机低速验证完成。**方案 A（宽高比法）模型 25 点定版**（2026-08-18）：工作范围 [-30°,+30°]，`ratio = 0.1147 + 0.1642·cosθ + 0.1027·sinθ - 0.0725·(d-0.63)`（25 点拟合，R²=0.9911，LOOCV=0.0036，角MAE=2.60°/max=11.48°；与旧 18 点质量持平，加 u/v 特征无实质提升，cos+sin+dd 已最优）。**判档 = 档内位置拟合** r̂_a(u,d)（per-band，LOOCV 88%，错误全在 15° 档相邻混淆，**0↔30 零混淆**）。**0 vs +45 单独门限**：`u≥530 且 ratio≥0.2925` 判 +45°（margin +0.0129，4/4+11/11 全对）；u<530 不认 45（u490 两点 ratio 落入 0° 档物理不可分，实际摆位不出现）。**抓取姿态规律**：绕竖直轴旋转只改 C（`C=C0-θ`，误差<0.2°），A/B 恒定。下一步：旋转检测集成进 handle_cup_detector.py。
+**多视角朝向示教（本地主线）** — 正对场景完整流程已通过实机验证（data_sm + handle_teach + CRP，2026-08-17，抓壶→倒水→放回→Home 全过）；handle_teach.enabled: true 实机低速验证完成。**方案 A（宽高比法）旋转检测已集成进 handle_cup_detector.py**（2026-08-18）：判档规则 = 用户定的 6 档固定抓取 `+45/+30/+15/0/-15/-30`（无 -45），`[-10,10]=0, (10,20]=15, [20,40]=30, >40→45, <-40 不可达`。实现：正半侧 (θ>10) 用 **per-band 位置模型 r̂_a(u,d) 最近邻**（45/30/15 三档，规避 30° 端 θ 反解放大 + 45° 反解失效），负半侧用反解 θ 区间（负侧无 per-band 数据，反解已证可靠）；**45 档需 u≥530 门限**（u<530 与 0° 物理不可分）。模型系数/门限写入 `Orchestrator/config.yaml handle_rotation` 段。**判档正确性**：标定 29 点离线验证 28/29 判对、29/29 可接受（pos45→30 为用户明确可接受，无 45→15）。**抓取姿态规律**：绕竖直轴旋转只改 C（`C=C0-θ`，误差<0.2°），A/B 恒定。下一步：实机验证检测器 band 输出 → C 补偿接入抓取姿态。
 
 训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。
 
 ## 最近变更
+
+### 旋转检测集成进检测器 (2026-08-18)
+
+1. **用户定档位规则**: 6 档固定抓取 `+45/+30/+15/0/-15/-30` (无 -45); `[-10,10]=0, (10,20]=15, [20,40]=30, >40→45, <-40 不可达`; 硬约束 **45→30 可接受, 45→15 不可接受**
+2. **实现策略 (正负分离)**: 正半侧 (θ>10) 用 per-band 位置模型 r̂_a(u,d) 最近邻判 45/30/15 (45 需 u≥530 门限) — 规避 30° 端 dr/dθ→0 反解放大 (pos30_4 曾错 -10°) + 45° 档全局反解失效 (pos45_1/2 ratio 超 A 被 clip 到 32°); 负半侧用反解 θ 区间 (负侧无 per-band 数据, 反解 -30 档 5/5 可靠)
+3. **判定验证 (标定 29 点)**: 28/29 判对 + 29/29 可接受; 唯一非判对 = pos45→30 (用户明确可接受); **无 45→15/45→0**; 30° 档 5/5, 15° 档 4/4, 0° 档 11/11, -30° 档 5/5
+4. **接入文件**:
+   - `Orchestrator/config.yaml`: 新增 `handle_rotation` 段 (enabled + global_model 系数 + band_coeffs 45/30/15/0 + angle45_gate.u_min=530)
+   - `Orchestrator/handle_cup_detector.py`: `__init__` 加载 handle_rotation; 新方法 `_solve_theta` (θ=φ-arccos(...), 负分支, clip ±1) + `_classify_rotation` (返回 (band, theta_deg)); detect() 在 HSV 成功时算 ratio→θ→band, handle_result 新增 ratio/theta_deg/band 键; visualize + run() 终端输出 band; 失败分支重置
+5. **离线验证**: py_compile + 几何测试 4/4 + rot_math 15/15 + state_machine_dynamic 8/8 + site_gate 5/5 全过
+6. **待办**: 实机跑检测器验证 band 显示 → C 补偿 (C=C0-θ) 接入 estun_handle_data_sm.py 抓取姿态
 
 ### JSON 更新 + 25 点重拟合 + 0/45 单独区分 (2026-08-18)
 
@@ -307,7 +318,8 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | **旋转检测集成进检测器** | 档内位置拟合判档 r̂_a(u,d)（JSON band_coeffs 已备）+ 0/45 门限（u≥530 且 ratio≥0.2925）+ 姿态 C 补偿（C=C0-θ）接入 handle_cup_detector.py |
+| 🔴 | **实机验证 band 输出** | 跑 handle_cup_detector.py 独立测试, 各朝向观察 ROT band/th 显示符合预期 (尤其 +45 需 u≥530) |
+| 🔴 | **C 补偿接入抓取** | θ/band 已由检测器输出, C=C0-θ 接入 estun_handle_data_sm.py P1 姿态 (A/B 恒定) |
 | 🟡 | 15° 档补数据 | 15° 档 LOOCV 仅 2/4（带宽 0.013<间隙 0.0086-0.0093）；补 3-5 位置或并入相邻档 |
 | 🟡 | 多朝向示教 | 旋转检测就绪后：各朝向实机抓取验证 → 位置/姿态落点对比 |
 | 🟡 | CRP 实机导入测试 | estun_handle_sm.crp + estun_handle_cup_sm.crp（此前遗留） |

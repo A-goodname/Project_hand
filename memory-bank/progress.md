@@ -106,7 +106,8 @@
   - 0° 档 9 点位置线性拟合 R²=0.32 (仅 1/3 展宽是位置, 余为噪声/角度不精确); 30° 档位置敏感度是 0° 档 2 倍
   - **判档方案改为档内位置拟合**: 每档 a∈{0,±15,±30,±45} 拟合 r̂_a(u,d), 判档 argmin|r−r̂_a| (距离>阈值→无法识别)
   - 待补示教: +15(1→3-5位置), +30(3→+2-3), +45(重采3-5, 位置关系显著), -15(0→3-5), -30(可选)
-- [ ] **旋转检测集成**: 判档逻辑 (档内位置拟合 r̂_a(u,d)) 集成进 handle_cup_detector.py + 姿态 C 补偿
+- [x] **旋转检测集成进 handle_cup_detector.py** (2026-08-18): 用户定 6 档规则 (+45/+30/+15/0/-15/-30), 正半侧 per-band r̂_a(u,d) 最近邻 (45 需 u≥530), 负半侧反解 θ 区间; config.yaml handle_rotation 段; handle_result 新增 ratio/theta_deg/band; 离线验证 28/29 判对 + 29/29 可接受 (45→30 可接受, 无 45→15)
+- [ ] 实机验证 band 输出 + C 补偿 (C=C0-θ) 接入 estun_handle_data_sm.py P1 姿态
 - [ ] 多朝向示教: 旋转检测就绪后，各朝向（±30°/±60°等）示教 → abc_offset/detect_C 变化曲线验证
 
 ### Handle 检测回退 yolo+sam + 动态姿态 (2026-08-15)
@@ -246,7 +247,7 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 **旋转检测集成进检测器** | 方案 A 25 点模型 [-30,30] (cos+sin+dd) + 档内位置判档 r̂_a(u,d) + 0/45 门限 (u≥530 & ratio≥0.2925) + C 补偿 (C=C0-θ) → handle_cup_detector 集成 |
+| 🔴 **实机验证 band + C 补偿接入** | 检测器已输出 ratio/theta/band (2026-08-18); 实机验证各朝向 → C=C0-θ 接入 estun_handle_data_sm.py P1 |
 | 🟡 多朝向示教 | 旋转检测就绪后，各朝向（±30°/±60°等）示教 → abc_offset 变化曲线 |
 | 🟡 CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` |
 | 🟡 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` |

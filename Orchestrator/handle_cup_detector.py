@@ -646,6 +646,21 @@ class HandleCupDetector:
         self._scan_cfg = _c.get("scanline", {})
         self._grasp_direction = _c.get("grasp_direction", "right")  # 姿态 Y 符号规则
 
+        # ---- 旋转角度判定 (方案A宽高比法, 2026-08-18) ----
+        _rot = _c.get("handle_rotation", {})
+        self._rot_enabled = bool(_rot.get("enabled", False))
+        _gm = _rot.get("global_model", {})
+        self._rot_c0 = float(_gm.get("c0", 0.1147))
+        self._rot_c1 = float(_gm.get("c1_cos", 0.1642))
+        self._rot_c2 = float(_gm.get("c2_sin", 0.1027))
+        self._rot_c3 = float(_gm.get("c3_dd", -0.0725))
+        self._rot_dref = float(_gm.get("d_ref", 0.63))
+        _bc = _rot.get("band_coeffs", {})
+        self._rot_band = {
+            int(a): (float(v.get("b0", 0)), float(v.get("b1", 0)), float(v.get("b2", 0)))
+            for a, v in _bc.items()}
+        self._rot_u45 = float(_rot.get("angle45_gate", {}).get("u_min", 530.0))
+
         # ---- 把手中心模式: mask_center (点云重心) | edge_offset (边界偏移法) ----
         self._pos_mode = _c.get("handle_pos_mode", "edge_offset")
         _eo = _c.get("edge_offset", {})
@@ -699,6 +714,9 @@ class HandleCupDetector:
         self._last_body_mask = None    # bool mask
         self._last_handle_rot = None   # 3x3 旋转矩阵
         self._last_handle_euler = None # 动态 euler (相机系 ZYX deg)
+        self._last_handle_ratio = None # 方案A: 贴纸短/长轴比
+        self._last_handle_theta = None # 方案A: 反解连续角度 θ (deg)
+        self._last_handle_band = None  # 方案A: 旋转档位 (45/30/15/0/-15/-30/None)
 
         # ---- 姿态稳定状态 (180° 翻转修复) ----
         self._prev_rot = None     # 上一帧旋转矩阵 (Y 翻转锚定)
@@ -1213,6 +1231,71 @@ class HandleCupDetector:
         print(f"[DEBUG] 样本已保存: {self._debug_dir}/{tag}_*")
 
     # ------------------------------------------------------------
+    #  旋转角度判定 (方案A宽高比法)
+    # ------------------------------------------------------------
+
+    def _solve_theta(self, ratio, d):
+        """全局模型反解连续角度 θ (deg).
+
+        ratio = c0 + c1·cosθ + c2·sinθ + c3·(d-d_ref)
+        θ = φ - arccos((ratio - c0 - c3·(d-d_ref)) / A),  φ=atan2(c2,c1), A=√(c1²+c2²).
+        工作范围 [-30,+30] 内用负分支 (θ<φ). 超出 clip 到 ±32° (45° 档不靠反解).
+        """
+        phi = math.atan2(self._rot_c2, self._rot_c1)
+        amp = math.hypot(self._rot_c1, self._rot_c2)
+        if amp < 1e-9:
+            return 0.0
+        x = (ratio - self._rot_c0 - self._rot_c3 * (d - self._rot_dref)) / amp
+        x = max(-1.0, min(1.0, x))
+        return math.degrees(phi - math.acos(x))
+
+    def _classify_rotation(self, ratio, u, d):
+        """旋转档位判定 (用户规则 2026-08-18).
+
+        7 档固定抓取: +45/+30/+15/0/-15/-30 (无 -45).
+        [-10,10]=0, (10,20]=15, [20,40]=30, >40→45, <-40 不可达.
+
+        实现: 正半侧 (θ>10) 用 per-band 位置模型 r̂_a(u,d) 最近邻
+              (规避 30° 端 θ 反解放大 + 45° 档反解失效);
+              负半侧用反解 θ 区间 (负侧无 per-band 数据, 反解已证可靠).
+        45 档需 u>=530 门限 (u<530 与 0° 物理不可分).
+
+        Returns:
+            (band, theta_deg): band ∈ {45,30,15,0,-15,-30,None}; None=不可达.
+        """
+        if not self._rot_enabled or ratio is None or d is None:
+            return None, None
+        theta = self._solve_theta(ratio, d)
+
+        # 正半侧: per-band 位置判档
+        if theta > 10.0:
+            b45 = self._rot_band.get(45)
+            b30 = self._rot_band.get(30)
+            b15 = self._rot_band.get(15)
+            if b45 is not None and b30 is not None and b15 is not None:
+                def _rhat(b, uu, dd):
+                    return b[0] + b[1] * uu + b[2] * dd
+                if u >= self._rot_u45:
+                    d45 = abs(ratio - _rhat(b45, u, d))
+                    d30 = abs(ratio - _rhat(b30, u, d))
+                    d15 = abs(ratio - _rhat(b15, u, d))
+                    if d45 < d30 and d45 < d15:
+                        return 45, theta
+                d30 = abs(ratio - _rhat(b30, u, d))
+                d15 = abs(ratio - _rhat(b15, u, d))
+                return (30 if d30 <= d15 else 15), theta
+            return (30 if theta <= 40 else 45), theta
+
+        # 负半侧: 反解 θ 区间
+        if theta < -40.0:
+            return None, theta       # 不可达
+        if theta < -20.0:
+            return -30, theta
+        if theta < -10.0:
+            return -15, theta
+        return 0, theta
+
+    # ------------------------------------------------------------
     #  主检测接口
     # ------------------------------------------------------------
 
@@ -1237,6 +1320,8 @@ class HandleCupDetector:
             "rot_cam": None, "quat_cam": None, "source": "fallback",
             "kettle_bbox": None, "red_center": None,
             "white_roi": None, "red_contour": None,
+            # 方案A旋转判定 (2026-08-18): ratio/theta/band, 检测失败=均 None
+            "ratio": None, "theta_deg": None, "band": None,
         }
         cup_result = {
             "pos_cam": None, "euler_cam": self._cup_euler,
@@ -1272,6 +1357,17 @@ class HandleCupDetector:
                     pos = _pixel_to_3d(u, v, d, self._color_intr)
                     handle_result["pos_cam"] = pos
                     self._last_handle_pos = pos
+
+                    # ---- 方案A旋转判定: ratio → θ 反解 → 档位 (2026-08-18) ----
+                    if angle is not None and axis1 >= 2 and axis2 >= 2:
+                        ratio = min(axis1, axis2) / max(axis1, axis2)
+                        handle_result["ratio"] = ratio
+                        band, theta = self._classify_rotation(ratio, u, d)
+                        handle_result["theta_deg"] = theta
+                        handle_result["band"] = band
+                        self._last_handle_ratio = ratio
+                        self._last_handle_theta = theta
+                        self._last_handle_band = band
 
                     # ---- 6D 姿态: 贴纸长短轴 → 把手坐标系 → 锚定/EMA → euler ----
                     euler_dyn = None
@@ -1312,11 +1408,17 @@ class HandleCupDetector:
                     self._last_handle_pos = None
                     self._prev_rot = None
                     self._matrix_smoother.reset()
+                    self._last_handle_ratio = None
+                    self._last_handle_theta = None
+                    self._last_handle_band = None
             else:
                 # HSV 失败 (无青色): 姿态状态重置
                 self._last_handle_pos = None
                 self._prev_rot = None
                 self._matrix_smoother.reset()
+                self._last_handle_ratio = None
+                self._last_handle_theta = None
+                self._last_handle_band = None
 
         # === Cup 检测 ===
         cup_bbox = self._detect_cup_bbox(color_image)
@@ -1368,6 +1470,13 @@ class HandleCupDetector:
             e = self._last_handle_euler if self._last_handle_euler is not None else self._handle_euler
             cv2.putText(display, f"H: ({p[0]:.2f},{p[1]:.2f},{p[2]:.2f}) A={e[0]:.0f} B={e[1]:.0f} C={e[2]:.0f}",
                         (10, _y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+            _y_off += 20
+        # ---- 方案A旋转判定 (ratio/θ/band) ----
+        if self._last_handle_ratio is not None:
+            band_str = str(self._last_handle_band) if self._last_handle_band is not None else "N/A"
+            th_str = f"{self._last_handle_theta:.1f}" if getattr(self, "_last_handle_theta", None) is not None else "N/A"
+            cv2.putText(display, f"ROT: ratio={self._last_handle_ratio:.4f} th={th_str} band={band_str}",
+                        (10, _y_off), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
             _y_off += 20
         if self._last_cup_pos is not None:
             p = self._last_cup_pos
@@ -1482,13 +1591,20 @@ class HandleCupDetector:
                     h_info = result["handle"]
                     c_info = result["cup"]
 
-                    # 终端输出 (相机系 3D 位置 + 动态 euler)
+                    # 终端输出 (相机系 3D 位置 + 动态 euler + 方案A旋转判定)
                     if h_info["pos_cam"] is not None:
                         p = h_info["pos_cam"]
                         e = h_info["euler_cam"]
+                        rot_str = ""
+                        if h_info["ratio"] is not None:
+                            b = h_info["band"]
+                            th = h_info["theta_deg"]
+                            b_str = str(b) if b is not None else "N/A"
+                            th_str = f"{th:.1f}" if th is not None else "N/A"
+                            rot_str = f" ratio={h_info['ratio']:.4f} th={th_str} band={b_str}"
                         print(f"[Handle] cam=({p[0]:.3f},{p[1]:.3f},{p[2]:.3f}) "
-                              f"euler=({e[0]:.1f},{e[1]:.1f},{e[2]:.1f}) "
-                              f"[{_t_detect:.0f}ms]")
+                              f"euler=({e[0]:.1f},{e[1]:.1f},{e[2]:.1f})"
+                              f"{rot_str} [{_t_detect:.0f}ms]")
                     else:
                         kettle = "Y" if h_info["kettle_bbox"] is not None else "N"
                         print(f"[Handle] no detection (kettle={kettle}) [{_t_detect:.0f}ms]")

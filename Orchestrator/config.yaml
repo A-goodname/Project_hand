@@ -91,3 +91,24 @@ handle_euler: [-90, 89, -90]
 handle_lift_z: 0.05                                # Handle P3 Z轴抬起高度 (m, 基系)
 cup_euler_back: [-90, 89, -110]
 cup_euler_left: [-90, 89, -90]
+
+# ---- 旋转角度判定 (方案A宽高比法, 2026-08-18) ----
+# 判档: 正半侧 per-band 位置模型 r̂_a(u,d) 最近邻; 负半侧反解 θ 区间
+#   band 规则: [-10,10]=0, (10,20]=15, [20,40]=30, >40→45, <-40 不可达
+#   45 档需 u>=530 门限 (u<530 与 0° 物理不可分, 实际摆位不出现)
+#   θ 反解: θ = φ - arccos((ratio - c0 - c3*(d-d_ref))/A), φ=atan2(c2,c1), A=√(c1²+c2²)
+handle_rotation:
+  enabled: true
+  global_model:
+    c0: 0.1147
+    c1_cos: 0.1642
+    c2_sin: 0.1027
+    c3_dd: -0.0725
+    d_ref: 0.63
+  band_coeffs:            # r̂_a(u,d) = b0 + b1*u + b2*d (u/d 原值, 拟合于 ratio_angle_calibration.json)
+    45: {b0: -0.2943, b1: 0.000764, b2: 0.3086}
+    30: {b0: 0.3139, b1: 0.000160, b2: -0.1493}
+    15: {b0: -0.0084, b1: 0.000442, b2: 0.1018}
+    0:  {b0: 0.3070, b1: 0.000013, b2: -0.0560}
+  angle45_gate: {u_min: 530.0}
+  neg_bands: [-30, -15, 0]   # 负半侧档位 (θ 区间映射), 不参与 per-band 位置拟合
