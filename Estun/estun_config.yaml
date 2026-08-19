@@ -89,7 +89,17 @@ estun:
   # enabled: false 时走旧链 (ee 系减 t_eff + config handle_euler) 做对照
   handle_teach:
     enabled: true                   # P1 落点验证通过后置 true (2026-08-17 实机启用)
-    p1_offset: [0.0330, -0.0834, 0.0022]   # 基系: P1 = detect_base + p1_offset (m)
+    # 按档位 t_offset 表 (2026-08-19): data_sm 按检测 band 查 p1_offsets.<angle>
+    # 0° = 默认/现有 offset (2026-08-17 示教); 其余档位待逐档 teach_P1 --angle <band> --apply 补入
+    p1_offsets:
+      "0":
+        p1_offset: [0.0330, -0.0834, 0.0022]   # 基系: P1 = detect_base + p1_offset (m)
+        abc_offset: [-169.2, 76.2, -19.7]      # 基系: P1_ABC = detect_ABC + abc_offset (deg, 动态姿态链备用)
+        p1_abc: [-115.2, 85.0, -21.1]          # 示教 ABC (deg)
+        p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset
+        p2_abc: [-115.2, 85.0, -21.1]          # 通常 = p1_abc
+        grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
+    p1_offset: [0.0330, -0.0834, 0.0022]   # 基系: P1 = detect_base + p1_offset (m) [= p1_offsets.0, 旧链兼容]
     abc_offset: [-169.2, 76.2, -19.7]      # 基系: P1_ABC = detect_ABC + abc_offset (deg, 动态姿态链备用)
     p1_abc: [-115.2, 85.0, -21.1]          # 示教 ABC (deg; enabled 时覆盖 config.yaml handle_euler)
     p2_offset: [0.0, 0.0, 0.0]             # 未示教 P2 → 运行时 P2 = P1 + R_base_fix @ pre_offset
