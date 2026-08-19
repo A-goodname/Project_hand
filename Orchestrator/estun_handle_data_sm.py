@@ -637,8 +637,7 @@ class HandleDataSM:
     def _resolve_p1_offsets(self, band):
         """band → (p1_offset, p1_abc). 缺档回退 0° → 平铺字段.
 
-        2026-08-19 纯查表: X/Y/Z 用该档 p1_offset, ABC 用该档 p1_abc (C 已含 C=C0-θ).
-        (插值/连续 C 解析式列为后续增强, 见 memory-bank)
+        (查表用; Phase B 在 teach 启用且有 θ 时改用 _interp_p1_offset 插值 X/Y/Z)
         """
         entry = self._p1_offsets.get(str(band)) if self._p1_offsets else None
         if entry is None:
@@ -648,6 +647,30 @@ class HandleDataSM:
         off = np.array(entry.get("p1_offset", self._handle_teach_t_offset), dtype=float)
         abc = tuple(entry.get("p1_abc", self._handle_fixed_abc))
         return off, abc
+
+    def _interp_p1_offset(self, th_deg):
+        """θ 档内线性插值 X/Y/Z (2026-08-19, 消除档边界跳变).
+
+        相邻档中心 (p1_offsets 键) 线性混合; θ 超出 [min,max] 钳到端点档.
+        返回 np.ndarray (3,) offset; 无表/无 θ 时回退平铺.
+        """
+        if not self._p1_offsets:
+            return self._handle_teach_t_offset
+        centers = sorted(int(k) for k in self._p1_offsets)
+        if len(centers) == 0:
+            return self._handle_teach_t_offset
+        if th_deg <= centers[0]:
+            return np.array(self._p1_offsets[str(centers[0])]["p1_offset"], dtype=float)
+        if th_deg >= centers[-1]:
+            return np.array(self._p1_offsets[str(centers[-1])]["p1_offset"], dtype=float)
+        for i in range(len(centers) - 1):
+            lo, hi = centers[i], centers[i + 1]
+            if lo <= th_deg <= hi:
+                Olo = np.array(self._p1_offsets[str(lo)]["p1_offset"], dtype=float)
+                Ohi = np.array(self._p1_offsets[str(hi)]["p1_offset"], dtype=float)
+                t = (th_deg - lo) / (hi - lo) if hi != lo else 0.0
+                return Olo + t * (Ohi - Olo)
+        return self._handle_teach_t_offset
 
     def _detect(self):
         """跳帧检测 Handle+Cup → PoseStabilizer → 更新 last_known_pose.
@@ -813,11 +836,10 @@ class HandleDataSM:
                 cup_pos_cam, cup_euler_cam = cup_pose
 
                 # ============================================================
-                #  Handle P1 / P2 (band 查表 ABC, 2026-08-19)
+                #  Handle P1 / P2 (θ 插值 offset + C 解析式, 2026-08-19)
                 #  位置双链 (二选一, 不能混用):
-                #    handle_teach 启用 → P1 = detect_base + p1_offsets[band].p1_offset
-                #      (基系直接加, 含 TCP 偏移语义, 不经过 t_handle_effective;
-                #       band 由 θ 5 帧中位数判, ABC 用该档 p1_abc, C 已含 C=C0-θ)
+                #    handle_teach 启用 → P1 = detect_base + interp_offset(θ_med)
+                #      (θ 5 帧中位数, X/Y/Z 相邻档线性插值, ABC 的 C 用 C=C0-θ 解析式)
                 #    handle_teach 关闭 → 旧链 (ee 系减 t_eff + 固定 ABC) 对照
                 # ============================================================
                 # 解析 band → offset/abc (teach 启用时; 否则回退固定值)
@@ -826,9 +848,13 @@ class HandleDataSM:
                 _band = 0
                 if self._handle_teach_enabled:
                     _band = self._rot_band if self._rot_band is not None else 0
-                    band_off, band_abc = self._resolve_p1_offsets(_band)
-                    # C 解析式: C = C0 - θ_med (2026-08-19, 平滑姿态补偿, 替代档内 p1_abc.C
-                    #   档中心两者一致, 档边界解析式更准; C0 = 0° 档 p1_abc.C)
+                    # X/Y/Z: 有 θ 用插值 (平滑), 否则查表
+                    if self._rot_band_th is not None:
+                        band_off = self._interp_p1_offset(self._rot_band_th)
+                        _, band_abc = self._resolve_p1_offsets(_band)  # A/B
+                    else:
+                        band_off, band_abc = self._resolve_p1_offsets(_band)
+                    # C 解析式: C = C0 - θ_med (平滑姿态补偿; C0 = 0° 档 p1_abc.C)
                     if self._rot_band_th is not None:
                         _c0 = -21.1
                         if self._p1_offsets:
@@ -859,7 +885,8 @@ class HandleDataSM:
                             print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm > 上限"
                                   f"{_zhi*1000:.1f}mm, 钳到上限", flush=True)
                             pos_base_1[2] = _zhi
-                    print(f"[TEACH] band={_band} P1 = detect_base + p1_offsets[{_band}] = "
+                    _src = ("θ插值" if self._rot_band_th is not None else f"查表[{_band}]")
+                    print(f"[TEACH] band={_band}({_src}) P1 = detect_base + offset = "
                           f"({pos_base_1[0]:.4f},{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m"
                           f" ABC={tuple(round(x,1) for x in band_abc)}", flush=True)
                 else:

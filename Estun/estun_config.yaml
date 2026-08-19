@@ -89,7 +89,7 @@ estun:
   # enabled: false 时走旧链 (ee 系减 t_eff + config handle_euler) 做对照
   handle_teach:
     enabled: true                   # P1 落点验证通过后置 true (2026-08-17 实机启用)
-    p1_z_check: [0.3599, 0.3629]    # P1 Z 有效范围 (m), 超出打印警告 (2026-08-19 实机标定)
+    p1_z_check: [0.360, 0.362]      # P1 Z 有效范围 (m), 超出钳到最近边界 (2026-08-19 实机标定 [360,362]mm)
     # 按档位 t_offset 表 (2026-08-19): data_sm 按检测 band 查 p1_offsets.<angle>
     # 0° = 默认/现有 offset (2026-08-17 示教); 其余档位待逐档 teach_P1 --angle <band> --apply 补入
     p1_offsets:
