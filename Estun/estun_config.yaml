@@ -99,6 +99,34 @@ estun:
         p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset
         p2_abc: [-115.2, 85.0, -21.1]          # 通常 = p1_abc
         grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
+      "30":
+        p1_offset: [-0.0179, -0.0873, -0.0005] # 基系: P1 = detect_base + p1_offset (m) [log 110737, 4次]
+        abc_offset: [-62.6, 100.0, 135.2]      # 基系: P1_ABC = detect_ABC + abc_offset (deg)
+        p1_abc: [-115.3, 85.0, -51.1]          # 示教 ABC (deg; C=-51.1 验证 C=C0-θ, A/B 恒定)
+        p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset
+        p2_abc: [-115.3, 85.0, -51.1]          # 通常 = p1_abc
+        grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
+      "15":
+        p1_offset: [0.0108, -0.0900, 0.0028]   # 基系: P1 = detect_base + p1_offset (m) [log 113226, 4次]
+        abc_offset: [-62.9, 101.4, 151.2]      # 基系: P1_ABC = detect_ABC + abc_offset (deg)
+        p1_abc: [-115.4, 85.0, -36.3]          # 示教 ABC (deg; C=-36.3, ΔC=-15.2°≈-θ)
+        p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset
+        p2_abc: [-115.4, 85.0, -36.3]          # 通常 = p1_abc
+        grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
+      "-30":
+        p1_offset: [0.0829, -0.0476, -0.0050]  # 基系: P1 = detect_base + p1_offset (m) [log 172408, 3次]
+        abc_offset: [-62.5, 101.3, -163.8]     # 基系: P1_ABC = detect_ABC + abc_offset (deg)
+        p1_abc: [-115.2, 85.0, 9.0]            # 示教 ABC (deg; C=+9.0, ΔC=+30.1°=-θ, 与+30对称)
+        p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset
+        p2_abc: [-115.2, 85.0, 9.0]            # 通常 = p1_abc
+        grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
+      "-15":
+        p1_offset: [0.0670, -0.0683, -0.0008]  # 基系: P1 = detect_base + p1_offset (m) [log 174102, 3次; 预测X58/Y-65/C-6.1, 实测X67/Y-68/C-6.2]
+        abc_offset: [-62.5, 100.6, -179.0]     # 基系: P1_ABC = detect_ABC + abc_offset (deg; C≈±179 环绕)
+        p1_abc: [-115.4, 85.0, -6.2]           # 示教 ABC (deg; C=-6.2 与 C=C0-θ 预测-6.1 吻合)
+        p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset
+        p2_abc: [-115.4, 85.0, -6.2]           # 通常 = p1_abc
+        grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
     p1_offset: [0.0330, -0.0834, 0.0022]   # 基系: P1 = detect_base + p1_offset (m) [= p1_offsets.0, 旧链兼容]
     abc_offset: [-169.2, 76.2, -19.7]      # 基系: P1_ABC = detect_ABC + abc_offset (deg, 动态姿态链备用)
     p1_abc: [-115.2, 85.0, -21.1]          # 示教 ABC (deg; enabled 时覆盖 config.yaml handle_euler)
