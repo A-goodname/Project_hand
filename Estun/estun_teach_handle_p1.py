@@ -180,12 +180,18 @@ def main():
     parser = argparse.ArgumentParser(description="P1 把手抓取点示教工具")
     parser.add_argument("--apply", action="store_true",
                         help="示教结束后将 handle_teach 段写入 estun_config.yaml (默认仅打印)")
+    parser.add_argument("--angle", type=float, default=None,
+                        help="本次示教对应的旋转角度/档位 (deg, 如 0/15/30/-15/-30). 按档位建立 t_offset 表")
     args = parser.parse_args()
 
     print("=" * 60)
     print("  P1 把手抓取点示教工具 (基系偏置)")
     print("  检测把手基系位置 + 人工示教 P1 → t_offset (基系直接加)")
     print("  只读相机, 程序不发任何运动指令")
+    if args.angle is not None:
+        print(f"  示教角度: {args.angle:+g}° (该档 t_offset 记入 handle_teach.p1_offsets.{args.angle:g})")
+    else:
+        print("  示教角度: 未指定 (默认 0°)")
     print("=" * 60, flush=True)
 
     # ---- 加载手眼标定 ----
@@ -209,7 +215,9 @@ def main():
     ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = os.path.join(log_dir, f"teach_handle_p1_{ts_now}.log")
     log_lines = []
-    log_lines.append(f"检测间隔: 每 {DETECT_SKIP_FRAMES} 帧 | 稳定窗口: {STABLE_WINDOW} | "
+    _angle_tag = f"{args.angle:+g}" if args.angle is not None else "0 (未指定)"
+    log_lines.append(f"示教角度: {_angle_tag} deg | "
+                     f"检测间隔: 每 {DETECT_SKIP_FRAMES} 帧 | 稳定窗口: {STABLE_WINDOW} | "
                      f"位置阈值: {POS_THRESH} m | 姿态阈值: {ANGLE_THRESH} deg\n")
 
     import cv2
@@ -461,14 +469,17 @@ def main():
         with open(log_path, "w", encoding="utf-8") as f:
             f.writelines(log_lines)
 
-        # ---- 输出 yaml 片段 ----
+        # ---- 输出 yaml 片段 (按角度建 p1_offsets 表) ----
+        _ang_key = f"{args.angle:g}" if args.angle is not None else "0"
         print(f"\n  [提示] 将以下片段写入 Estun/estun_config.yaml 的 estun: 段:")
         yaml_block = [
             "  handle_teach:                     # 把手抓取示教偏置 (基系直接加)",
             "    enabled: true",
-            f"    p1_offset: [{mean_off[0]:.4f}, {mean_off[1]:.4f}, {mean_off[2]:.4f}]  # 基系: P1 = detect_base + p1_offset (m)",
-            f"    abc_offset: [{mean_abc[0]:.1f}, {mean_abc[1]:.1f}, {mean_abc[2]:.1f}]  # 基系: P1_ABC = detect_ABC + abc_offset (deg)",
-            f"    p1_abc: [{p1_abc_final[0]:.1f}, {p1_abc_final[1]:.1f}, {p1_abc_final[2]:.1f}]  # 示教 ABC (deg, 校验参考)",
+            f"    p1_offsets:                     # 按档位 t_offset 表 (data_sm 用)",
+            f'      "{_ang_key}":',
+            f"        p1_offset: [{mean_off[0]:.4f}, {mean_off[1]:.4f}, {mean_off[2]:.4f}]  # 基系: P1 = detect_base + p1_offset (m)",
+            f"        abc_offset: [{mean_abc[0]:.1f}, {mean_abc[1]:.1f}, {mean_abc[2]:.1f}]  # 基系: P1_ABC = detect_ABC + abc_offset (deg)",
+            f"        p1_abc: [{p1_abc_final[0]:.1f}, {p1_abc_final[1]:.1f}, {p1_abc_final[2]:.1f}]  # 示教 ABC (deg, 校验参考)",
         ]
         if p2_mean is not None:
             yaml_block.append(
@@ -479,13 +490,13 @@ def main():
         yaml_block.append("    grasp_offset: [0.0, 0.0, 0.0]  # P1 可选微调")
         print("\n".join(f"    {l}" for l in yaml_block))
 
-        # ---- --apply 写 config ----
+        # ---- --apply 写 config (按角度建 p1_offsets 表) ----
         if args.apply:
             try:
                 with open(_estun_cfg_path, "r", encoding="utf-8") as f:
                     cfg_all = yaml.safe_load(f)
-                cfg_all.setdefault("estun", {})["handle_teach"] = {
-                    "enabled": True,
+                _ang = f"{args.angle:g}" if args.angle is not None else "0"
+                _entry = {
                     "p1_offset": [round(float(x), 4) for x in mean_off],
                     "abc_offset": [round(float(x), 1) for x in mean_abc],
                     "p1_abc": [round(float(x), 1) for x in p1_abc_final],
@@ -493,9 +504,13 @@ def main():
                     "p2_abc": [round(float(x), 1) for x in p1_abc_final],
                     "grasp_offset": [0.0, 0.0, 0.0],
                 }
+                _ht = cfg_all.setdefault("estun", {}).setdefault("handle_teach", {})
+                _ht["enabled"] = True
+                _ht.setdefault("p1_offsets", {})[_ang] = _entry   # 按档位 t_offset 表 (data_sm 用)
+                _ht.update(_entry)                                 # 平铺字段同步本档 (旧 data_sm 兼容)
                 with open(_estun_cfg_path, "w", encoding="utf-8") as f:
                     yaml.safe_dump(cfg_all, f, allow_unicode=True, sort_keys=False)
-                print(f"[INFO] 已写入 {_estun_cfg_path} (注意: yaml 重写会丢失注释)")
+                print(f"[INFO] 已写入 {_estun_cfg_path} 的 handle_teach.p1_offsets.{_ang} (注意: yaml 重写会丢失注释)")
             except Exception as e:
                 print(f"[ERROR] 写入配置失败: {e}")
     print(f"{'='*60}")

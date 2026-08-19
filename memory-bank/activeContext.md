@@ -12,6 +12,13 @@
 
 ## 最近变更
 
+### teach_P1 支持角度参数 (2026-08-19)
+
+1. **`estun_teach_handle_p1.py` 新增 `--angle`**: 示教时指定档位角度 (deg, 如 `--angle 15`), 打角度标签
+2. **输出**: banner/log 头部记录示教角度; yaml 输出块改为按角度建 `handle_teach.p1_offsets.<angle>` 表结构
+3. **`--apply`**: 写入 `handle_teach.p1_offsets.<angle>` (按档 t_offset 表, data_sm 用) + 平铺字段同步本档 (旧 data_sm 兼容)
+4. **用途**: 逐档示教 t_offset (task #3) — 5 档各跑一次 `teach_P1 --angle <band>`; 完成后 data_sm 按检测 band 查 `p1_offsets` 表
+
 ### 5 档简化定案: 纯 θ 区间, 无 ±45 (2026-08-19)
 
 1. **用户定案 (简化)**: 旋转判档只保留 **5 档 -30/-15/0/+15/+30** (无 ±45); +45 物理摆位统一落 +30 (此前已接受); 每档分别示教 t_offset
