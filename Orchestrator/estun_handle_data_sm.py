@@ -114,6 +114,8 @@ class PoseStabilizer:
 # ============================================================
 
 ROT_THETA_WIN = 5   # θ 中位数窗口帧数 (2026-08-19: band 判定用 5 帧中位数, 防边界抖落)
+ROT_THETA_SPREAD_MAX = 5.0   # θ 五帧分歧上限 (deg, B3 2026-08-19: 超限 → REJECT)
+ROT_THETA_FRESH_S = 1.5      # θ 观测新鲜窗口 (s, B3 2026-08-19: 超期 → REJECT)
 
 def fmt_pose(xyz, abc):
     """格式化单个位姿: "x,y,z,A,B,C" (位置 m, 角度 deg)"""
@@ -208,8 +210,11 @@ class HandleDataSM:
         self._handle_teach_t_offset = None
         # 旋转档位 (2026-08-19): θ 5 帧中位数 → band → p1_offsets 查表
         self._rot_theta_win = collections.deque(maxlen=ROT_THETA_WIN)  # θ 中位数窗口
-        self._rot_band = 0          # 当前稳定 band (±30/±15/0); 未稳定前 0
+        self._rot_band = None       # 当前稳定 band (B3: None = 未取得有效候选)
         self._rot_band_th = None    # 稳定时中位数 θ (deg)
+        self._rot_valid = False     # B3: 有效候选 (恰 5 帧新鲜/同代/稳定/一致)
+        self._rot_reject = None     # B3: 最近 REJECT 原因 (str|None)
+        self._rot_obs_t = 0.0       # B3: 最近一次 θ 观测时刻 (monotonic, 新鲜性)
         self._p1_offsets = {}       # band → {p1_offset, p1_abc, ...} (estun_config handle_teach.p1_offsets)
         self._p1_z_check = None     # P1 Z 有效范围 (m, [lo,hi]), 超出警告 (2026-08-19)
         # Cup (仅用于计算 Handle P3 倒水点)
@@ -672,6 +677,25 @@ class HandleDataSM:
                 return Olo + t * (Ohi - Olo)
         return self._handle_teach_t_offset
 
+    def _clamp_p1_z(self, pos_base_1):
+        """P1 Z 有效范围钳位 (2026-08-19 实机标定 [360,362]mm; 超出钳到最近边界).
+
+        Phase B 先钳位再推 P2, 保证 P1/P2 满足同一 pre_offset 几何 (修 B5).
+        返回钳位后的位置 (np.ndarray 原对象就地修改并返回); 无配置时不改.
+        """
+        if self._p1_z_check is None:
+            return pos_base_1
+        _zlo, _zhi = self._p1_z_check
+        if pos_base_1[2] < _zlo:
+            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm < 下限"
+                  f"{_zlo*1000:.1f}mm, 钳到下限", flush=True)
+            pos_base_1[2] = _zlo
+        elif pos_base_1[2] > _zhi:
+            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm > 上限"
+                  f"{_zhi*1000:.1f}mm, 钳到上限", flush=True)
+            pos_base_1[2] = _zhi
+        return pos_base_1
+
     def _detect(self):
         """跳帧检测 Handle+Cup → PoseStabilizer → 更新 last_known_pose.
         与 state_machine.HandleGraspAndPourHandler._detect 完全一致."""
@@ -698,8 +722,16 @@ class HandleDataSM:
             euler = np.array(h["euler_cam"])
             self._handle_stabilizer.add(tuple(pos_cam), tuple(euler))
             # θ 窗口 (band 判定): 每帧有效检测 push, 取中位数
+            # B3 (2026-08-19): 同一代累积; 代际失效清窗作废候选
+            if not self._handle_stabilizer.is_generation_valid():
+                self._rot_theta_win.clear()
+                self._rot_valid = False
+                self._rot_band = None
+                self._rot_band_th = None
+                self._rot_reject = "观测代际失效 (会话重连)"
             if h.get("theta_deg") is not None:
                 self._rot_theta_win.append(float(h["theta_deg"]))
+                self._rot_obs_t = time.monotonic()
             if self._handle_stabilizer.is_stable():
                 if not self._handle_stabilizer.is_generation_valid():
                     self._handle_stabilizer.reset()
@@ -709,13 +741,34 @@ class HandleDataSM:
                     if mean_pos is not None:
                         pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
                         det.last_known_pose = (pos_ee, self._handle_fixed_abc)
-                        # 稳定后: θ 中位数 → band (防边界抖落, 2026-08-19)
-                        if len(self._rot_theta_win) >= 3:
-                            th_med = float(np.median(list(self._rot_theta_win)))
-                            self._rot_band_th = th_med
-                            self._rot_band = self._resolve_rot_band(th_med)
-                            print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
-                                  f" θ_med={th_med:.1f}° band={self._rot_band}")
+                        # 稳定后: 恰 5 帧 θ 中位数 → band (B3)
+                        # 不足/分歧/不可达 → REJECT, 不出候选 (Phase B 不得回退 0°)
+                        win = list(self._rot_theta_win)
+                        if len(win) < ROT_THETA_WIN:
+                            self._rot_valid = False
+                            self._rot_reject = f"θ 样本不足 {len(win)}/{ROT_THETA_WIN}"
+                        else:
+                            spread = max(win) - min(win)
+                            if spread > ROT_THETA_SPREAD_MAX:
+                                self._rot_valid = False
+                                self._rot_reject = \
+                                    f"θ 五帧分歧 spread={spread:.1f}° > {ROT_THETA_SPREAD_MAX:.0f}°"
+                                print(f"\n[ROT-REJECT] {self._rot_reject}, 不生成 band",
+                                      flush=True)
+                            else:
+                                th_med = float(np.median(win))
+                                band = self._resolve_rot_band(th_med)
+                                if band is None:   # θ < -40 不可达
+                                    self._rot_valid = False
+                                    self._rot_reject = f"θ={th_med:.1f}° < -40 不可达"
+                                    print(f"\n[ROT-REJECT] {self._rot_reject}", flush=True)
+                                else:
+                                    self._rot_band_th = th_med
+                                    self._rot_band = band
+                                    self._rot_valid = True
+                                    self._rot_reject = None
+                                    print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
+                                          f" θ_med={th_med:.1f}° band={band}")
 
         # === Cup 稳定 ===
         c = result["cup"]
@@ -847,6 +900,19 @@ class HandleDataSM:
                 band_abc = self._handle_fixed_abc
                 _band = 0
                 if self._handle_teach_enabled:
+                    # B3 (2026-08-19): 无有效 band → REJECT, 不得默认 0° offset;
+                    # 等待有效观测或 Phase B 超时 → 不发计划 → 受控停止
+                    if not self._rot_valid:
+                        print(f"[ROT-REJECT] band 无效: {self._rot_reject or '观测缺失'}; "
+                              f"不发送 P1/P2", flush=True)
+                        time.sleep(0.1)
+                        continue
+                    if (time.monotonic() - self._rot_obs_t) > ROT_THETA_FRESH_S:
+                        self._rot_valid = False
+                        self._rot_reject = "θ 观测过期"
+                        print(f"[ROT-REJECT] {self._rot_reject}; 不发送 P1/P2", flush=True)
+                        time.sleep(0.1)
+                        continue
                     _band = self._rot_band if self._rot_band is not None else 0
                     # X/Y/Z: 有 θ 用插值 (平滑), 否则查表
                     if self._rot_band_th is not None:
@@ -870,21 +936,13 @@ class HandleDataSM:
                     detect_base = transform_pose_to_base(
                         np.array(mean_pos_ee), robot_xyz, robot_ABC)
                     pos_base_1 = detect_base + band_off
-                    # P2 = P1 + R_base_fix @ pre_offset
+                    # P1 Z 有效范围钳位 → 先钳位再推 P2, 保证 P1/P2 满足同一
+                    # pre_offset 几何 (修 B5, 2026-08-19)
+                    pos_base_1 = self._clamp_p1_z(pos_base_1)
+                    # P2 = P1(钳位后) + R_base_fix @ pre_offset
                     # (推导: P2_base = P1_base + R_ee_base@R_grasp_ee@pre
                     #        = P1_base + R_base_fix@pre)
                     pos_base_2 = pos_base_1 + R_base_fix @ self._handle_pre_t_offset
-                    # P1 Z 有效范围钳位 (2026-08-19 实机标定 [359.9,362.9]mm; 超出钳到最近边界)
-                    if self._p1_z_check is not None:
-                        _zlo, _zhi = self._p1_z_check
-                        if pos_base_1[2] < _zlo:
-                            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm < 下限"
-                                  f"{_zlo*1000:.1f}mm, 钳到下限", flush=True)
-                            pos_base_1[2] = _zlo
-                        elif pos_base_1[2] > _zhi:
-                            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm > 上限"
-                                  f"{_zhi*1000:.1f}mm, 钳到上限", flush=True)
-                            pos_base_1[2] = _zhi
                     _src = ("θ插值" if self._rot_band_th is not None else f"查表[{_band}]")
                     print(f"[TEACH] band={_band}({_src}) P1 = detect_base + offset = "
                           f"({pos_base_1[0]:.4f},{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m"
