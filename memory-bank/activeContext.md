@@ -12,6 +12,16 @@
 
 ## 最近变更
 
+### data_sm 接入 band 查表 t_offset (纯查表, 2026-08-19)
+
+1. **estun_handle_data_sm.py 实现 band 查表 P1**: θ 5 帧中位数 → band → `handle_teach.p1_offsets[band]`
+   - `ROT_THETA_WIN=5` + `self._rot_theta_win` deque; `_detect` 每帧 push θ, 稳定后 `median(θ)` → `_resolve_rot_band` ([-8,8]=0, (8,22]=15, >22=30, 负侧对称)
+   - `_resolve_p1_offsets(band)`: 查 p1_offsets 拿 p1_offset + p1_abc (C 已含 C=C0-θ); 缺档回退 0° → 平铺字段
+   - Phase B: `R_base_fix`/A1/B1/C1 用 band_abc, `pos_base_1 = detect_base + band_off`; 旧链 (teach 关闭) 回退固定 ABC
+2. **子 agent 角度-偏移关系分析 (2026-08-19)**: X 对称线性 (-1.72mm/°, R²=0.991), Y 强不对称弯曲 (线性 R²=0.82 失败, 二次 R²=0.998), C 严格线性 (C=-21.14-1.002θ, R²=0.99998, 残差<0.2°), Z 小量
+3. **后续增强 (当前未实现, 纯查表已够用)**: ①**档内 θ 线性插值** (相邻档 offset 按 θ 混合, 消除档边界跳变 X 10~18mm→~2mm) ②**C 用解析式 C=C0-θ** (查表在档边界有 7~8° C 误差) ③Y 连续二次/正余弦模型 (R²=0.998, 若需连续)
+4. **待办**: 实机验证 data_sm band 查表 (各档 P1 落点) → 若边界误差不可接受再上插值
+
 ### t_offset 5 档示教完成 (2026-08-19)
 
 1. **teach_P1 --angle 逐档示教完成**: p1_offsets 表 5 档 (-30/-15/0/+15/+30) 全齐

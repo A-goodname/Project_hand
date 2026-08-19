@@ -26,6 +26,7 @@ import socket
 import sys
 import threading
 import time
+import collections
 
 import cv2
 import numpy as np
@@ -111,6 +112,8 @@ class PoseStabilizer:
 # ============================================================
 #  工具函数 (与 state_machine.py 相同)
 # ============================================================
+
+ROT_THETA_WIN = 5   # θ 中位数窗口帧数 (2026-08-19: band 判定用 5 帧中位数, 防边界抖落)
 
 def fmt_pose(xyz, abc):
     """格式化单个位姿: "x,y,z,A,B,C" (位置 m, 角度 deg)"""
@@ -203,6 +206,11 @@ class HandleDataSM:
         # handle_teach (P1 示教偏置, 基系直接加)
         self._handle_teach_enabled = False
         self._handle_teach_t_offset = None
+        # 旋转档位 (2026-08-19): θ 5 帧中位数 → band → p1_offsets 查表
+        self._rot_theta_win = collections.deque(maxlen=ROT_THETA_WIN)  # θ 中位数窗口
+        self._rot_band = 0          # 当前稳定 band (±30/±15/0); 未稳定前 0
+        self._rot_band_th = None    # 稳定时中位数 θ (deg)
+        self._p1_offsets = {}       # band → {p1_offset, p1_abc, ...} (estun_config handle_teach.p1_offsets)
         # Cup (仅用于计算 Handle P3 倒水点)
         self._cup_handle_side = "back"
         self._cup_t_offset = None
@@ -450,11 +458,15 @@ class HandleDataSM:
         self._handle_teach_t_offset = (
             np.array(ht.get("p1_offset", [0.0, 0.0, 0.0]), dtype=float)
             if ht else np.zeros(3))
+        # 按档位 t_offset 表 (2026-08-19): band → {p1_offset, p1_abc, ...}
+        self._p1_offsets = (ht.get("p1_offsets", {})
+                            if isinstance(ht.get("p1_offsets", {}), dict) else {})
         if self._handle_teach_enabled:
             print(f"[INFO] handle_teach 启用: P1 = detect_base + "
                   f"({self._handle_teach_t_offset[0]:.4f},"
                   f"{self._handle_teach_t_offset[1]:.4f},"
-                  f"{self._handle_teach_t_offset[2]:.4f}) m (基系直接加)")
+                  f"{self._handle_teach_t_offset[2]:.4f}) m (基系直接加) "
+                  f"| p1_offsets 档位: {sorted(self._p1_offsets.keys())}")
 
         # ================================================================
         #  固定 ABC (从 Orchestrator config, 与 state_machine 完全一致)
@@ -596,6 +608,42 @@ class HandleDataSM:
     #  检测 + 稳定化 (移植自 state_machine._detect)
     # ================================================================
 
+    # ================================================================
+    #  旋转档位解析 (2026-08-19)
+    # ================================================================
+
+    def _resolve_rot_band(self, th_deg):
+        """θ → 档位 (5 档纯 θ 区间, 与 handle_cup_detector._classify_rotation 一致).
+
+        [-8,8]=0, (8,22]=15, >22=30, 负侧对称; <-40 不可达.
+        """
+        if th_deg > 22.0:
+            return 30
+        if th_deg > 8.0:
+            return 15
+        if th_deg < -40.0:
+            return None
+        if th_deg < -22.0:
+            return -30
+        if th_deg < -8.0:
+            return -15
+        return 0
+
+    def _resolve_p1_offsets(self, band):
+        """band → (p1_offset, p1_abc). 缺档回退 0° → 平铺字段.
+
+        2026-08-19 纯查表: X/Y/Z 用该档 p1_offset, ABC 用该档 p1_abc (C 已含 C=C0-θ).
+        (插值/连续 C 解析式列为后续增强, 见 memory-bank)
+        """
+        entry = self._p1_offsets.get(str(band)) if self._p1_offsets else None
+        if entry is None:
+            entry = self._p1_offsets.get("0") if self._p1_offsets else None
+        if entry is None:
+            return self._handle_teach_t_offset, self._handle_fixed_abc  # 回退平铺
+        off = np.array(entry.get("p1_offset", self._handle_teach_t_offset), dtype=float)
+        abc = tuple(entry.get("p1_abc", self._handle_fixed_abc))
+        return off, abc
+
     def _detect(self):
         """跳帧检测 Handle+Cup → PoseStabilizer → 更新 last_known_pose.
         与 state_machine.HandleGraspAndPourHandler._detect 完全一致."""
@@ -621,6 +669,9 @@ class HandleDataSM:
             pos_cam = np.array(h["pos_cam"])
             euler = np.array(h["euler_cam"])
             self._handle_stabilizer.add(tuple(pos_cam), tuple(euler))
+            # θ 窗口 (band 判定): 每帧有效检测 push, 取中位数
+            if h.get("theta_deg") is not None:
+                self._rot_theta_win.append(float(h["theta_deg"]))
             if self._handle_stabilizer.is_stable():
                 if not self._handle_stabilizer.is_generation_valid():
                     self._handle_stabilizer.reset()
@@ -630,7 +681,13 @@ class HandleDataSM:
                     if mean_pos is not None:
                         pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
                         det.last_known_pose = (pos_ee, self._handle_fixed_abc)
-                        print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})")
+                        # 稳定后: θ 中位数 → band (防边界抖落, 2026-08-19)
+                        if len(self._rot_theta_win) >= 3:
+                            th_med = float(np.median(list(self._rot_theta_win)))
+                            self._rot_band_th = th_med
+                            self._rot_band = self._resolve_rot_band(th_med)
+                            print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
+                                  f" θ_med={th_med:.1f}° band={self._rot_band}")
 
         # === Cup 稳定 ===
         c = result["cup"]
@@ -751,27 +808,36 @@ class HandleDataSM:
                 cup_pos_cam, cup_euler_cam = cup_pose
 
                 # ============================================================
-                #  Handle P1 / P2 (固定 ABC, 移植自 state_machine)
+                #  Handle P1 / P2 (band 查表 ABC, 2026-08-19)
                 #  位置双链 (二选一, 不能混用):
-                #    handle_teach 启用 → P1 = detect_base + t_offset
-                #      (基系直接加, 含 TCP 偏移语义, 不经过 t_handle_effective)
+                #    handle_teach 启用 → P1 = detect_base + p1_offsets[band].p1_offset
+                #      (基系直接加, 含 TCP 偏移语义, 不经过 t_handle_effective;
+                #       band 由 θ 5 帧中位数判, ABC 用该档 p1_abc, C 已含 C=C0-θ)
                 #    handle_teach 关闭 → 旧链 (ee 系减 t_eff + 固定 ABC) 对照
                 # ============================================================
-                # 固定 ABC 直接构造旋转矩阵 (基系)
-                R_base_fix = euler_to_rotation_matrix(*self._handle_fixed_abc, order="zyx")
+                # 解析 band → offset/abc (teach 启用时; 否则回退固定值)
+                band_off = self._handle_teach_t_offset
+                band_abc = self._handle_fixed_abc
+                _band = 0
+                if self._handle_teach_enabled:
+                    _band = self._rot_band if self._rot_band is not None else 0
+                    band_off, band_abc = self._resolve_p1_offsets(_band)
+                # band ABC 直接构造旋转矩阵 (基系)
+                R_base_fix = euler_to_rotation_matrix(*band_abc, order="zyx")
                 R_grasp_ee = R_ee_base.T @ R_base_fix
 
                 if self._handle_teach_enabled:
-                    # P1 = detect_base + t_offset (基系直接加)
+                    # P1 = detect_base + p1_offsets[band].p1_offset (基系直接加)
                     detect_base = transform_pose_to_base(
                         np.array(mean_pos_ee), robot_xyz, robot_ABC)
-                    pos_base_1 = detect_base + self._handle_teach_t_offset
+                    pos_base_1 = detect_base + band_off
                     # P2 = P1 + R_base_fix @ pre_offset
                     # (推导: P2_base = P1_base + R_ee_base@R_grasp_ee@pre
                     #        = P1_base + R_base_fix@pre)
                     pos_base_2 = pos_base_1 + R_base_fix @ self._handle_pre_t_offset
-                    print(f"[TEACH] P1 = detect_base + t_offset = ({pos_base_1[0]:.4f},"
-                          f"{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m", flush=True)
+                    print(f"[TEACH] band={_band} P1 = detect_base + p1_offsets[{_band}] = "
+                          f"({pos_base_1[0]:.4f},{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m"
+                          f" ABC={tuple(round(x,1) for x in band_abc)}", flush=True)
                 else:
                     # 旧链: ee 系减 t_handle_effective + 固定 ABC
                     h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
@@ -782,8 +848,8 @@ class HandleDataSM:
                     pos_ee_pre = h_pos_ee_compensated + R_grasp_ee @ self._handle_pre_t_offset
                     pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
 
-                A1, B1, C1 = self._handle_fixed_abc
-                A2, B2, C2 = self._handle_fixed_abc
+                A1, B1, C1 = band_abc
+                A2, B2, C2 = band_abc
 
                 R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(
                     *self._handle_target_r_offset, order="zyx")
