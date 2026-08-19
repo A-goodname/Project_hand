@@ -12,6 +12,13 @@
 
 ## 最近变更
 
+### data_sm C 解析式 + P1 Z 钳位 (2026-08-19)
+
+1. **实机验证**: 0° 摆位 P1 Z=361.4mm 落在标定范围 [359.9,362.9]; +30 档此前 Z 高 5mm 的 config 修改**已撤回** (band30 p1_offset.Z 还原 -0.0005 — 原判定有误, 0° 实测证明 offset 正确)
+2. **C 解析式 (data_sm Phase B)**: `C = C0 - θ_med`, C0 = 0° 档 p1_abc.C = -21.1 (2026-08-19); 档中心与查表一致 (θ=30→C=-51.1), 档边界更平滑 (替代档内 p1_abc.C)
+3. **P1 Z 钳位**: config `handle_teach.p1_z_check: [0.3599, 0.3629]` (m); Phase B 算完 P1 后超出范围**钳到最近边界** (非仅警告), P2 随之
+4. **待办**: 实机复测各档 P1 落点 → 确认 C 解析式 + Z 钳位生效
+
 ### data_sm 接入 band 查表 t_offset (纯查表, 2026-08-19)
 
 1. **estun_handle_data_sm.py 实现 band 查表 P1**: θ 5 帧中位数 → band → `handle_teach.p1_offsets[band]`

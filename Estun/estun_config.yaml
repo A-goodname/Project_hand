@@ -89,6 +89,7 @@ estun:
   # enabled: false 时走旧链 (ee 系减 t_eff + config handle_euler) 做对照
   handle_teach:
     enabled: true                   # P1 落点验证通过后置 true (2026-08-17 实机启用)
+    p1_z_check: [0.3599, 0.3629]    # P1 Z 有效范围 (m), 超出打印警告 (2026-08-19 实机标定)
     # 按档位 t_offset 表 (2026-08-19): data_sm 按检测 band 查 p1_offsets.<angle>
     # 0° = 默认/现有 offset (2026-08-17 示教); 其余档位待逐档 teach_P1 --angle <band> --apply 补入
     p1_offsets:
@@ -100,7 +101,7 @@ estun:
         p2_abc: [-115.2, 85.0, -21.1]          # 通常 = p1_abc
         grasp_offset: [0.0, 0.0, 0.0]          # P1 可选微调 (暂未用)
       "30":
-        p1_offset: [-0.0179, -0.0873, -0.0005] # 基系: P1 = detect_base + p1_offset (m) [log 110737, 4次]
+        p1_offset: [-0.0179, -0.0873, -0.0005] # 基系: P1 = detect_base + p1_offset (m) [log 110737, 4次; Z修正已撤回, 0°实测P1 Z=361.4在[359.9,362.9]]
         abc_offset: [-62.6, 100.0, 135.2]      # 基系: P1_ABC = detect_ABC + abc_offset (deg)
         p1_abc: [-115.3, 85.0, -51.1]          # 示教 ABC (deg; C=-51.1 验证 C=C0-θ, A/B 恒定)
         p2_offset: [0.0, 0.0, 0.0]             # P2 = P1 + p2_offset

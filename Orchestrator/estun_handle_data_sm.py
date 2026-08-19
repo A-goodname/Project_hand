@@ -211,6 +211,7 @@ class HandleDataSM:
         self._rot_band = 0          # 当前稳定 band (±30/±15/0); 未稳定前 0
         self._rot_band_th = None    # 稳定时中位数 θ (deg)
         self._p1_offsets = {}       # band → {p1_offset, p1_abc, ...} (estun_config handle_teach.p1_offsets)
+        self._p1_z_check = None     # P1 Z 有效范围 (m, [lo,hi]), 超出警告 (2026-08-19)
         # Cup (仅用于计算 Handle P3 倒水点)
         self._cup_handle_side = "back"
         self._cup_t_offset = None
@@ -461,6 +462,10 @@ class HandleDataSM:
         # 按档位 t_offset 表 (2026-08-19): band → {p1_offset, p1_abc, ...}
         self._p1_offsets = (ht.get("p1_offsets", {})
                             if isinstance(ht.get("p1_offsets", {}), dict) else {})
+        # P1 Z 有效范围检查 (2026-08-19 实机标定 [0.3599,0.3629])
+        _zchk = ht.get("p1_z_check") if ht else None
+        self._p1_z_check = (list(map(float, _zchk)) if isinstance(_zchk, (list, tuple)) and len(_zchk) == 2
+                            else None)
         if self._handle_teach_enabled:
             print(f"[INFO] handle_teach 启用: P1 = detect_base + "
                   f"({self._handle_teach_t_offset[0]:.4f},"
@@ -822,6 +827,14 @@ class HandleDataSM:
                 if self._handle_teach_enabled:
                     _band = self._rot_band if self._rot_band is not None else 0
                     band_off, band_abc = self._resolve_p1_offsets(_band)
+                    # C 解析式: C = C0 - θ_med (2026-08-19, 平滑姿态补偿, 替代档内 p1_abc.C
+                    #   档中心两者一致, 档边界解析式更准; C0 = 0° 档 p1_abc.C)
+                    if self._rot_band_th is not None:
+                        _c0 = -21.1
+                        if self._p1_offsets:
+                            _e0 = self._p1_offsets.get("0", {}) or {}
+                            _c0 = _e0.get("p1_abc", [-115.2, 85.0, -21.1])[2]
+                        band_abc = (band_abc[0], band_abc[1], float(_c0 - self._rot_band_th))
                 # band ABC 直接构造旋转矩阵 (基系)
                 R_base_fix = euler_to_rotation_matrix(*band_abc, order="zyx")
                 R_grasp_ee = R_ee_base.T @ R_base_fix
@@ -835,6 +848,17 @@ class HandleDataSM:
                     # (推导: P2_base = P1_base + R_ee_base@R_grasp_ee@pre
                     #        = P1_base + R_base_fix@pre)
                     pos_base_2 = pos_base_1 + R_base_fix @ self._handle_pre_t_offset
+                    # P1 Z 有效范围钳位 (2026-08-19 实机标定 [359.9,362.9]mm; 超出钳到最近边界)
+                    if self._p1_z_check is not None:
+                        _zlo, _zhi = self._p1_z_check
+                        if pos_base_1[2] < _zlo:
+                            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm < 下限"
+                                  f"{_zlo*1000:.1f}mm, 钳到下限", flush=True)
+                            pos_base_1[2] = _zlo
+                        elif pos_base_1[2] > _zhi:
+                            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm > 上限"
+                                  f"{_zhi*1000:.1f}mm, 钳到上限", flush=True)
+                            pos_base_1[2] = _zhi
                     print(f"[TEACH] band={_band} P1 = detect_base + p1_offsets[{_band}] = "
                           f"({pos_base_1[0]:.4f},{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m"
                           f" ABC={tuple(round(x,1) for x in band_abc)}", flush=True)
