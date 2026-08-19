@@ -70,6 +70,8 @@ CUP_EULER_LEFT = (-90.0, 89.0, -90.0)
 HSV_HUE_LOW, HSV_HUE_HIGH = 40, 110   # 贴纸实测 H 36-105 (青绿渐变)
 HSV_SAT_MIN, HSV_VAL_MIN = 50, 50     # 白色 S 低 / 黑色 V 低 排除
 HANDLE_SIDE_RATIO = 0.3               # 把手在 bbox 右侧 30%
+# 2026-08-19: TAG_ROI_VPAD 纵向扩展已回退 — 贴纸被 YOLO 框裁是 +45 的稳定特征
+# (ratio 虚高到 0.34~0.36 才能与 +15 的 0.30 区分), 保留原 bbox 高度检索
 TAG_MIN_AREA, TAG_MAX_AREA = 8, 5000  # 青色域面积过滤
 DEPTH_MIN = 0.1                       # 有效深度下限 (m)
 
@@ -655,11 +657,10 @@ class HandleCupDetector:
         self._rot_c2 = float(_gm.get("c2_sin", 0.1027))
         self._rot_c3 = float(_gm.get("c3_dd", -0.0725))
         self._rot_dref = float(_gm.get("d_ref", 0.63))
-        _bc = _rot.get("band_coeffs", {})
-        self._rot_band = {
-            int(a): (float(v.get("b0", 0)), float(v.get("b1", 0)), float(v.get("b2", 0)))
-            for a, v in _bc.items()}
-        self._rot_u45 = float(_rot.get("angle45_gate", {}).get("u_min", 530.0))
+        # 纯 θ 区间判档边界 (2026-08-19 简化 5 档)
+        #   band0: 0° 半宽 (θ∈[-band0,band0]→0); band15_hi: (band0, band15_hi]→15, >→30
+        self._rot_band0 = float(_rot.get("band0_halfwidth", 8.0))
+        self._rot_band15_hi = float(_rot.get("band15_hi", 22.0))
 
         # ---- 把手中心模式: mask_center (点云重心) | edge_offset (边界偏移法) ----
         self._pos_mode = _c.get("handle_pos_mode", "edge_offset")
@@ -1250,48 +1251,31 @@ class HandleCupDetector:
         return math.degrees(phi - math.acos(x))
 
     def _classify_rotation(self, ratio, u, d):
-        """旋转档位判定 (用户规则 2026-08-18).
+        """旋转档位判定 (2026-08-19 简化: 纯 θ 区间, 5 档).
 
-        7 档固定抓取: +45/+30/+15/0/-15/-30 (无 -45).
-        [-10,10]=0, (10,20]=15, [20,40]=30, >40→45, <-40 不可达.
-
-        实现: 正半侧 (θ>10) 用 per-band 位置模型 r̂_a(u,d) 最近邻
-              (规避 30° 端 θ 反解放大 + 45° 档反解失效);
-              负半侧用反解 θ 区间 (负侧无 per-band 数据, 反解已证可靠).
-        45 档需 u>=530 门限 (u<530 与 0° 物理不可分).
+        固定抓取 5 档: +30/+15/0/-15/-30 (无 ±45; +45 物理摆位统一落 +30).
+        边界 (用户定案 2026-08-19): [-8,8]=0, (8,22]=15, >22=30; 负侧对称
+              [-22,-8)=-15, <-22→-30, <-40 不可达.
+        纯 θ 反解区间, 无 per-band / u 门限 / 45 识别.
 
         Returns:
-            (band, theta_deg): band ∈ {45,30,15,0,-15,-30,None}; None=不可达.
+            (band, theta_deg): band ∈ {30,15,0,-15,-30,None}; None=不可达.
         """
         if not self._rot_enabled or ratio is None or d is None:
             return None, None
         theta = self._solve_theta(ratio, d)
+        b0 = self._rot_band0
+        b15 = self._rot_band15_hi
 
-        # 正半侧: per-band 位置判档
-        if theta > 10.0:
-            b45 = self._rot_band.get(45)
-            b30 = self._rot_band.get(30)
-            b15 = self._rot_band.get(15)
-            if b45 is not None and b30 is not None and b15 is not None:
-                def _rhat(b, uu, dd):
-                    return b[0] + b[1] * uu + b[2] * dd
-                if u >= self._rot_u45:
-                    d45 = abs(ratio - _rhat(b45, u, d))
-                    d30 = abs(ratio - _rhat(b30, u, d))
-                    d15 = abs(ratio - _rhat(b15, u, d))
-                    if d45 < d30 and d45 < d15:
-                        return 45, theta
-                d30 = abs(ratio - _rhat(b30, u, d))
-                d15 = abs(ratio - _rhat(b15, u, d))
-                return (30 if d30 <= d15 else 15), theta
-            return (30 if theta <= 40 else 45), theta
-
-        # 负半侧: 反解 θ 区间
+        if theta > b15:
+            return 30, theta
+        if theta > b0:
+            return 15, theta
         if theta < -40.0:
             return None, theta       # 不可达
-        if theta < -20.0:
+        if theta < -b15:
             return -30, theta
-        if theta < -10.0:
+        if theta < -b0:
             return -15, theta
         return 0, theta
 

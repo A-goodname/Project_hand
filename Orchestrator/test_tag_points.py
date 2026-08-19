@@ -35,6 +35,8 @@ SAT_MIN = 50                  # 白色 S 低 → 排除
 VAL_MIN = 50                  # 黑色 V 低 → 排除
 
 HANDLE_SIDE_RATIO = 0.3   # 只检测 bbox 右侧 30%
+# 2026-08-19: TAG_ROI_VPAD 纵向扩展已回退 — 贴纸被 YOLO 框裁是 +45 的稳定特征
+# (ratio 虚高 0.34~0.36 才能与 +15 区分), 与 handle_cup_detector 保持一致
 MIN_AREA = 8
 MAX_AREA = 5000
 OPEN_KERNEL = 1           # 形态学开核 (1=关)
