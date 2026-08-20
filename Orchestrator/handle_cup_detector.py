@@ -661,6 +661,11 @@ class HandleCupDetector:
         #   band0: 0° 半宽 (θ∈[-band0,band0]→0); band15_hi: (band0, band15_hi]→15, >→30
         self._rot_band0 = float(_rot.get("band0_halfwidth", 8.0))
         self._rot_band15_hi = float(_rot.get("band15_hi", 22.0))
+        # B2 2026-08-20: 正侧 ratio 上界 (标定物理域之外 = 非物理/裁切虚高) → REJECT, 不归 +30.
+        #   数据依据 (标定 json 2026-08-18, 39 点): 合法档位 ratio 最大 0.3177 (+30, 含 d 修正
+        #   抬升仍 <0.33), 0.34 留 ~0.02 余量, 对合法档位 0 误杀; >0.34 只有被 YOLO 框裁抬高
+        #   的 +45 高尾. 物理干净 +45 与 +30 重合无法区分 → 靠物理摆位限定 [-35,+35] 排除.
+        self._rot_ratio_max = float(_rot.get("ratio_max", 0.34))
 
         # ---- 把手中心模式: mask_center (点云重心) | edge_offset (边界偏移法) ----
         self._pos_mode = _c.get("handle_pos_mode", "edge_offset")
@@ -1262,6 +1267,13 @@ class HandleCupDetector:
             (band, theta_deg): band ∈ {30,15,0,-15,-30,None}; None=不可达.
         """
         if not self._rot_enabled or ratio is None or d is None:
+            return None, None
+        # B2 2026-08-20: 反解前识别非物理/未标定 ratio (正侧越界) → REJECT, 不以 +30 代替.
+        #   检测器不输出 θ (theta_deg=None) → data_sm 稳定窗口不加帧 → B3 缺样本 REJECT 链,
+        #   Phase B 持续无效则超时 → 不发计划 → 受控停止.
+        if ratio > self._rot_ratio_max:
+            print(f"[ROT-REJECT] ratio={ratio:.4f} > {self._rot_ratio_max} 越界 "
+                  f"(非物理/裁切虚高), 拒绝判档", flush=True)
             return None, None
         theta = self._solve_theta(ratio, d)
         b0 = self._rot_band0

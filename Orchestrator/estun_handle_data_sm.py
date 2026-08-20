@@ -146,28 +146,82 @@ def pack_three(p1, p2, p3):
     return f"<{fmt_pose(p1[0], p1[1])}>[{fmt_pose(p2[0], p2[1])}]{{{fmt_pose(p3[0], p3[1])}}}"
 
 
+class CalibrationError(RuntimeError):
+    """标定失败 — 阻止启动 (B4 2026-08-20, 对齐 state_machine D0 门禁).
+    调用方必须中止启动, 不得降级."""
+
+
+# 标定质量门槛 (B4): 与 state_machine.py 的 D0 门禁一致
+_CALIB_MIN_SAMPLES = 10
+_CALIB_MAX_REPROJ_PX = 0.5
+
+
 def load_cam2ee(yaml_path):
-    """从标定结果加载 相机→末端法兰 变换矩阵 (4x4 齐次矩阵)"""
-    I = np.eye(4)
+    """从标定结果加载 相机→末端法兰 变换矩阵 (4x4 齐次矩阵).
+
+    B4 2026-08-20: 复制自 state_machine.py 的 D0 门禁版 — data_sm 为中期文件,
+    不 import 最终程序. 任何失败抛 CalibrationError, 绝不返回 np.eye(4) 或
+    默认 Tsai. 检查项: 文件存在 / YAML 有效 / 样本与重投影质量 / handeye /
+    use_method / 方法存在 / T 存在 / 有限刚体 4x4 / 单位变换拒绝.
+    """
     if not os.path.exists(yaml_path):
-        print(f"[WARN] 手眼标定结果未找到: {yaml_path}")
-        return I
-    with open(yaml_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    calib = data.get("calibration", {})
-    hand_eye = calib.get("handeye", {})
-    if not hand_eye:
-        return I
-    use_method = hand_eye.get("use_method", "Tsai")
-    method_data = hand_eye.get(use_method, {})
-    if not method_data:
-        return I
-    T_raw = method_data.get("T_cam_to_gripper", None)
-    if T_raw is None or len(T_raw) != 4 or len(T_raw[0]) != 4:
-        return I
-    T = np.array(T_raw, dtype=float)
+        raise CalibrationError(f"标定文件不存在: {yaml_path}")
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except Exception as e:
+        raise CalibrationError(f"标定 YAML 解析失败: {e}")
+    if not isinstance(data, dict) or not data.get("calibration"):
+        raise CalibrationError("标定 YAML 缺少 calibration 段")
+    calib = data["calibration"]
+
+    # 质量门槛 (样本数 / 重投影误差)
+    num_samples = calib.get("num_samples")
+    reproj = calib.get("reprojection_error_px")
+    try:
+        if num_samples is not None and int(num_samples) < _CALIB_MIN_SAMPLES:
+            raise CalibrationError(f"标定样本数不足: {num_samples} < {_CALIB_MIN_SAMPLES}")
+        if reproj is not None and float(reproj) > _CALIB_MAX_REPROJ_PX:
+            raise CalibrationError(f"标定重投影误差超标: {reproj} > {_CALIB_MAX_REPROJ_PX}px")
+    except (TypeError, ValueError) as exc:
+        raise CalibrationError(f"标定质量字段非法: {exc}") from exc
+
+    hand_eye = calib.get("handeye")
+    if not isinstance(hand_eye, dict) or not hand_eye:
+        raise CalibrationError("标定缺少 handeye 段")
+    use_method = hand_eye.get("use_method")
+    if not use_method:
+        raise CalibrationError("标定缺少 handeye.use_method")
+    method_data = hand_eye.get(use_method)
+    if not isinstance(method_data, dict) or not method_data:
+        raise CalibrationError(f"标定方法 {use_method!r} 不存在或为空")
+    T_raw = method_data.get("T_cam_to_gripper")
+    if T_raw is None:
+        raise CalibrationError(f"标定方法 {use_method!r} 缺少 T_cam_to_gripper")
+    try:
+        T = np.array(T_raw, dtype=float)
+    except Exception as e:
+        raise CalibrationError(f"T_cam_to_gripper 无法转为数值: {e}")
     if T.shape != (4, 4):
-        return I
+        raise CalibrationError(f"T_cam_to_gripper 形状错误: {T.shape}")
+    if not np.all(np.isfinite(T)):
+        raise CalibrationError("T_cam_to_gripper 含非有限值")
+
+    # 刚体检查: 旋转部分正交且行列式 ≈ 1
+    R = T[:3, :3]
+    det = float(np.linalg.det(R))
+    if not (0.9 <= det <= 1.1):
+        raise CalibrationError(f"旋转矩阵行列式异常: {det:.4f}")
+    RRT = R @ R.T
+    if np.max(np.abs(RRT - np.eye(3))) > 1e-3:
+        raise CalibrationError("旋转矩阵非正交 (非刚体)")
+    if np.max(np.abs(T[3, :] - np.array([0.0, 0.0, 0.0, 1.0]))) > 1e-6:
+        raise CalibrationError("齐次变换最后一行异常")
+    # 单位变换拒绝: 平移近零 + 旋转近单位
+    if (np.max(np.abs(T[:3, 3])) < 1e-6 and
+            np.max(np.abs(R - np.eye(3))) < 1e-6):
+        raise CalibrationError("单位变换标定, 拒绝使用")
+
     t = T[:3, 3]
     print(f"[INFO] 已加载标定矩阵: {use_method}.T_cam_to_gripper, 平移: {t} m")
     return T
@@ -584,7 +638,12 @@ class HandleDataSM:
             _project_root,
             estun.get("calibration", {}).get("result_path", "calib_data/calibration_result.yaml")
         )
-        self._T_cam2ee = load_cam2ee(calib_path)
+        try:
+            self._T_cam2ee = load_cam2ee(calib_path)
+        except CalibrationError as e:
+            # B4 2026-08-20: 标定失败关闭 — 禁 np.eye(4)/默认 Tsai 回退, 阻止启动
+            print(f"[FATAL] B4 标定失败关闭, 拒绝启动: {e}", file=sys.stderr)
+            sys.exit(1)
         print("[INFO] 稳定器+标定已就绪")
 
     # ================================================================
