@@ -1,5 +1,14 @@
 # Progress — Project_hand
 
+### Phase 0 打招呼独立交付: py + CRP (2026-08-20)
+- [x] 更新 doc/state_machine_reference.crp ← IDLEtemp-Down-645 (sha256 a8a8ee00, 状态机单独保存, 旧版 .bak)
+- [x] data_sm-Down-946 与 doc/estun_handle_data_sm.crp sha256 相同 (4227c66b) — 已最新
+- [x] 抽取独立 Phase 0 CRP: gen_greeting_phase0_crp.py → doc/estun_greeting_phase0.crp (sha256 d0dcdd5b, 26块/6点, Socket1:8600 四步)
+- [x] 新建 Estun/estun_greeting_phase0.py: 独立 4 步 TCP, 人检测用迎宾 UGREEN usb-0:4.1, --mock 模拟
+- [x] config greeting.camera_path: usb-0:4.1
+- [x] py_compile + mock TCP 4 步回复全对 + 142 测试绿
+- [ ] 实机验证: 示教器导入 estun_greeting_phase0.crp + PC 跑 estun_greeting_phase0.py 走通 4 步
+
 ### θ 稳定性记录工具 (2026-08-20, 新建脚本, 待实机)
 - [x] 新建 `Orchestrator/tests/theta_stability_log.py` (import 复用 HandleCupDetector, 检测器本体未改)
 - [x] 记录每帧 ratio/rd/θ/band/d/位置/姿态 + 累积 θ 均值/方差 ('r' 按姿势重置); 逐帧只写 log 不刷终端

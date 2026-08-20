@@ -170,6 +170,7 @@ estun:
       r_offset: [0.0, 0.0, -55.0]           # (A, B, C) 度, 倒水姿态 (同 handle_grasp.target_offset.r_offset)
   greeting:                                  # Phase 0 打招呼阶段
     port: 8600                               # Phase 0 TCP 端口
+    camera_path: usb-0:4.1                   # 迎宾相机 USB 物理口 (UGREEN 1080P; 人进门检测, 非 D435i; 2026-08-20 定)
     wave_cycles: 3                           # 挥手循环次数 (Hello_1↔Hello_2)
     wave_interval: 0.45                      # 挥手单帧保持时间 (秒)
     # 握手压力检测
