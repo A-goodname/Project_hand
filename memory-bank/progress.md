@@ -6,6 +6,7 @@
 - [x] 抽取独立 Phase 0 CRP: gen_greeting_phase0_crp.py → doc/estun_greeting_phase0.crp (sha256 d0dcdd5b, 26块/6点, Socket1:8600 四步)
 - [x] 新建 Estun/estun_greeting_phase0.py: 独立 4 步 TCP, 人检测用迎宾 UGREEN usb-0:4.1, --mock 模拟
 - [x] config greeting.camera_path: usb-0:4.1
+- [x] 重新示教三个打招呼位姿 (2026-08-20): Z1/Z2/WS 已更新入 estun_config.yaml (CRP GH_* 零占位无需改)
 - [x] py_compile + mock TCP 4 步回复全对 + 142 测试绿
 - [ ] 实机验证: 示教器导入 estun_greeting_phase0.crp + PC 跑 estun_greeting_phase0.py 走通 4 步
 
