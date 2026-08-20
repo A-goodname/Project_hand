@@ -175,13 +175,17 @@ def load_cam2ee(yaml_path):
         raise CalibrationError("标定 YAML 缺少 calibration 段")
     calib = data["calibration"]
 
-    # 质量门槛 (样本数 / 重投影误差)
+    # 质量门槛 (样本数 / 重投影误差) — 必填 (对方 08-20 最小交付请求: 缺失即失败, 不得跳过质量门)
     num_samples = calib.get("num_samples")
     reproj = calib.get("reprojection_error_px")
     try:
-        if num_samples is not None and int(num_samples) < _CALIB_MIN_SAMPLES:
+        if num_samples is None:
+            raise CalibrationError("标定缺少 num_samples (必填)")
+        if int(num_samples) < _CALIB_MIN_SAMPLES:
             raise CalibrationError(f"标定样本数不足: {num_samples} < {_CALIB_MIN_SAMPLES}")
-        if reproj is not None and float(reproj) > _CALIB_MAX_REPROJ_PX:
+        if reproj is None:
+            raise CalibrationError("标定缺少 reprojection_error_px (必填)")
+        if float(reproj) > _CALIB_MAX_REPROJ_PX:
             raise CalibrationError(f"标定重投影误差超标: {reproj} > {_CALIB_MAX_REPROJ_PX}px")
     except (TypeError, ValueError) as exc:
         raise CalibrationError(f"标定质量字段非法: {exc}") from exc

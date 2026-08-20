@@ -13,6 +13,8 @@ import numpy as np
 import yaml
 
 from Orchestrator.estun_handle_data_sm import CalibrationError, load_cam2ee
+from Orchestrator.state_machine import CalibrationError as SMCalibrationError
+from Orchestrator.state_machine import load_cam2ee as sm_load_cam2ee
 
 
 def _good_matrix():
@@ -80,8 +82,16 @@ class LoadCam2eeFailClosedTest(unittest.TestCase):
     def test_sample_count_non_numeric(self):
         self._mutate(lambda p: p["calibration"].update(num_samples="abc"))
 
+    def test_missing_num_samples(self):
+        # 对方 08-20 最小交付请求: 质量字段必填, 缺失不得跳过质量门
+        self._mutate(lambda p: p["calibration"].pop("num_samples"))
+
     def test_reproj_above_max(self):
         self._mutate(lambda p: p["calibration"].update(reprojection_error_px=3.0))
+
+    def test_missing_reprojection_error_px(self):
+        # 对方 08-20 最小交付请求: 质量字段必填, 缺失不得跳过质量门
+        self._mutate(lambda p: p["calibration"].pop("reprojection_error_px"))
 
     def test_missing_handeye(self):
         self._mutate(lambda p: p["calibration"].pop("handeye"))
@@ -132,6 +142,42 @@ class LoadCam2eeFailClosedTest(unittest.TestCase):
         self.assertFalse(np.allclose(T, np.eye(4)))
         self.assertTrue(np.allclose(T[:3, 3], [0.1, 0.2, 0.3]))
         self.assertTrue(np.all(np.isfinite(T)))
+
+
+class StateMachineLoadCam2eeRequiredFieldsTest(unittest.TestCase):
+    """state_machine (最终程序) load_cam2ee 质量字段必填 (对方 08-20 最小交付请求).
+
+    state_machine 为 D0 门禁版 load_cam2ee 的宿主, 与 data_sm 同样必须对
+    num_samples / reprojection_error_px 缺失 fail-closed.
+    """
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write(self, payload):
+        p = os.path.join(self._tmp.name, "calib.yaml")
+        with open(p, "w", encoding="utf-8") as f:
+            yaml.safe_dump(payload, f)
+        return p
+
+    def test_missing_num_samples(self):
+        payload = _good_payload()
+        payload["calibration"].pop("num_samples")
+        with self.assertRaises(SMCalibrationError):
+            sm_load_cam2ee(self._write(payload))
+
+    def test_missing_reprojection_error_px(self):
+        payload = _good_payload()
+        payload["calibration"].pop("reprojection_error_px")
+        with self.assertRaises(SMCalibrationError):
+            sm_load_cam2ee(self._write(payload))
+
+    def test_good_matrix_still_works(self):
+        T = sm_load_cam2ee(self._write(_good_payload()))
+        self.assertEqual(T.shape, (4, 4))
+        self.assertFalse(np.allclose(T, np.eye(4)))
 
 
 if __name__ == "__main__":
