@@ -681,6 +681,15 @@ class HandleCupDetector:
         #   抬升仍 <0.33), 0.34 留 ~0.02 余量, 对合法档位 0 误杀; >0.34 只有被 YOLO 框裁抬高
         #   的 +45 高尾. 物理干净 +45 与 +30 重合无法区分 → 靠物理摆位限定 [-35,+35] 排除.
         self._rot_ratio_max = float(_rot.get("ratio_max", 0.34))
+        # 2026-08-20: 正侧反解 θ 校正 (三次多项式, 仅 θ>band0 应用). 反解在正侧受
+        #   φ≈28.8° 峰值压缩 (饱和, +30 档被压到 ~20°); 负侧/0° 保持原始反解 (C 补偿精度).
+        _gc = _rot.get("g_correction", {})
+        if (_gc.get("enabled", False)
+                and all(k in _gc for k in ("a3", "a2", "a1", "a0"))):
+            self._rot_g = (float(_gc["a3"]), float(_gc["a2"]),
+                           float(_gc["a1"]), float(_gc["a0"]))
+        else:
+            self._rot_g = None
 
         # ---- 把手中心模式: mask_center (点云重心) | edge_offset (边界偏移法) ----
         self._pos_mode = _c.get("handle_pos_mode", "edge_offset")
@@ -1256,11 +1265,13 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def _solve_theta(self, ratio, d):
-        """全局模型反解连续角度 θ (deg).
+        """全局模型反解连续角度 θ (deg), 正侧经 g 校正.
 
         ratio = c0 + c1·cosθ + c2·sinθ + c3·(d-d_ref)
         θ = φ - arccos((ratio - c0 - c3·(d-d_ref)) / A),  φ=atan2(c2,c1), A=√(c1²+c2²).
         工作范围 [-30,+30] 内用负分支 (θ<φ). 超出 clip 到 ±32° (45° 档不靠反解).
+        2026-08-20: θ > band0 (正侧, +15/+30 域) 时反解受 φ≈28.8° 峰值饱和压缩,
+        应用三次多项式 g 校正 (config g_correction); 负侧/0° 保持原始反解 (C 补偿精度).
         """
         phi = math.atan2(self._rot_c2, self._rot_c1)
         amp = math.hypot(self._rot_c1, self._rot_c2)
@@ -1268,7 +1279,11 @@ class HandleCupDetector:
             return 0.0
         x = (ratio - self._rot_c0 - self._rot_c3 * (d - self._rot_dref)) / amp
         x = max(-1.0, min(1.0, x))
-        return math.degrees(phi - math.acos(x))
+        theta = math.degrees(phi - math.acos(x))
+        if theta > self._rot_band0 and getattr(self, "_rot_g", None) is not None:
+            a3, a2, a1, a0 = self._rot_g
+            theta = a3 * theta**3 + a2 * theta**2 + a1 * theta + a0
+        return theta
 
     def _classify_rotation(self, ratio, u, d):
         """旋转档位判定 (2026-08-19 简化: 纯 θ 区间, 5 档).

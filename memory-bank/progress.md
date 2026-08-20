@@ -1,5 +1,15 @@
 # Progress — Project_hand
 
+### v2 模型重拟合 + g 校正 (2026-08-20, 待实机)
+- [x] v2 标定数据 20 点 (5 档×4, 手动稳定段 N≥29~49) 入 logs/ratio_angle_calibration_v2.json (旧数据弃用)
+- [x] 重拟合 global_model: 0.0903/0.2052/0.1127/-0.0200 (R²=0.974); 负侧+0° 判对全对
+- [x] 探索 u/v 特征: 无效 (过拟合, LOOCV 1-4/20); dd² 仅 17/20
+- [x] g 校正定案: 三次多项式, 全局 18 点拟合 (剔异常 110950/110500), 仅 θ>8° 正侧应用; 判对 19/20 (+30 4/4)
+- [x] config: global_model 更新 + g_correction 段 + ratio_max 0.34→0.36
+- [x] detector `_solve_theta` 集成 g 校正; B2 测试同步新系数; 全量 132 测试全绿
+- [ ] 实机只读验证各档 band/θ_med 输出
+- [ ] 异常点重采确认: 110950 (d=0.531 近距 ratio 虚高) / 110500 (+30 ratio 偏低)
+
 ### 青色贴纸搜索区域扩展 10% (2026-08-20, 待实机)
 - [x] `_detect_tag_region` 区域百分比化按 handle_side: 右侧 [70,110]% / 左侧 [-10,30]% (删 HANDLE_SIDE_RATIO)
 - [x] clamp 图像边界 + 空区域 None; detect() 传 self._handle_side

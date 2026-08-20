@@ -17,12 +17,13 @@ from Orchestrator.handle_cup_detector import HandleCupDetector
 def make_rot_detector(ratio_max=0.34):
     det = HandleCupDetector.__new__(HandleCupDetector)
     det._rot_enabled = True
-    # 全局模型系数 (config.yaml handle_rotation.global_model)
-    det._rot_c0, det._rot_c1, det._rot_c2, det._rot_c3 = 0.1071, 0.1739, 0.0988, -0.0768
+    # 全局模型系数 (config.yaml handle_rotation.global_model, v2 2026-08-20)
+    det._rot_c0, det._rot_c1, det._rot_c2, det._rot_c3 = 0.0903, 0.2052, 0.1127, -0.0200
     det._rot_dref = 0.63
     det._rot_band0 = 8.0
     det._rot_band15_hi = 22.0
     det._rot_ratio_max = float(ratio_max)
+    det._rot_g = None   # 本测试只验证 REJECT 逻辑, 不验证 g 校正
     return det
 
 
