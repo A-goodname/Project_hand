@@ -12,6 +12,14 @@
 
 ## 最近变更
 
+### 青色贴纸搜索区域扩展 10% (2026-08-20, 未实机验证)
+
+1. **区域百分比化**: `_detect_tag_region` 从固定"bbox 右 30%"改为按 handle_side 的百分比区间 — 右侧 **[70%,110%]** (向右扩 10%), 左侧 **[-10%,30%]** (向左扩 10%); 区间 clamp 到图像边界, 空区域 (rx1<=rx0) 返回 None
+2. **接入**: detect() 调用传 `self._handle_side` (config `handle_side`, 默认 right); 常量 `HANDLE_ROI_X_RIGHT/LEFT`, 删 `HANDLE_SIDE_RATIO`; `test_tag_points.py` 独立副本同步同区间
+3. **交互注意 (B2 后 +45 已工艺排除, 2026-08-20)**: 协作线 B2 (`c97605a`) 已将 +45 排除 — 工艺摆位限定 **θ∈[-35,+35]** (源头上 +45 不出现), 且 `_classify_rotation` `ratio>0.34` → REJECT 兜底 (防 YOLO 框裁虚高, 合法档位 max 0.3177 留 0.02 余量 0 误杀)。扩区域让贴纸更完整 → ratio 回落正常范围, **不触发 0.34 REJECT, 判档更准**; 不再依赖"裁切虚高"区分 +45
+4. **验证**: 新测试 6 例 (右/左外延拾取/区域外不拾取/右缘 clamp/空区域/缺省右侧) + 全量 **130 测试全绿** (124 + 6)
+5. **待办**: 实机只读跑检测器, 对比扩前后各朝向 ratio/θ/band (尤其 +45 摆位)
+
 ### PoseStabilizer 合并 θ 稳定窗口 (2026-08-19, 未实机验证)
 
 1. **合并 (data_sm)**: θ 并入 PoseStabilizer — 窗口内每帧同时收 pos+euler+θ (仅 θ 非 None 帧入窗), 稳定判定同时约束三者 (θ 极差<5°), 直接取同一窗口 θ 中位数 → band; 删独立 `_rot_theta_win` deque + spread 手检查

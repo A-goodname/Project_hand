@@ -1,5 +1,12 @@
 # Progress — Project_hand
 
+### 青色贴纸搜索区域扩展 10% (2026-08-20, 待实机)
+- [x] `_detect_tag_region` 区域百分比化按 handle_side: 右侧 [70,110]% / 左侧 [-10,30]% (删 HANDLE_SIDE_RATIO)
+- [x] clamp 图像边界 + 空区域 None; detect() 传 self._handle_side
+- [x] test_tag_points.py 独立副本同步同区间
+- [x] 新测试 6 例 + 全量 130 全绿
+- [ ] 实机只读对比扩前后各朝向 ratio/θ/band (B2 后 +45 已工艺排除 θ∈[-35,+35], 正常摆位 ratio 回落更准; 确认不触发 0.34 REJECT)
+
 ### PoseStabilizer 合并 θ 稳定窗口 (2026-08-19, 待实机)
 - [x] θ 并入 PoseStabilizer: 每帧 pos+euler+θ 同窗, 稳定判定含 θ 极差 (<5°), 直接取窗口 θ 中位数 → band; 删独立 θ deque + spread 手检查
 - [x] config stabilization.window 3→5 (与 ROT_THETA_WIN 统一, B3 恰 5 帧; cup 窗口随之 5)

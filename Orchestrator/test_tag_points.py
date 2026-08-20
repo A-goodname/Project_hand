@@ -34,7 +34,9 @@ HUE_LOW, HUE_HIGH = 40, 110   # OpenCV H: 0-180; 贴纸实测 H 36-105 (青绿�
 SAT_MIN = 50                  # 白色 S 低 → 排除
 VAL_MIN = 50                  # 黑色 V 低 → 排除
 
-HANDLE_SIDE_RATIO = 0.3   # 只检测 bbox 右侧 30%
+# 青色贴纸搜索区域 — bbox 宽度的百分比区间 (2026-08-20 用户定, 与 handle_cup_detector 一致):
+#   右侧把手 [70%, 110%] (向右扩 10%, 防 bbox 右缘裁贴纸)
+HANDLE_ROI_X_RIGHT = (0.70, 1.10)
 # 2026-08-19: TAG_ROI_VPAD 纵向扩展已回退 — 贴纸被 YOLO 框裁是 +45 的稳定特征
 # (ratio 虚高 0.34~0.36 才能与 +15 区分), 与 handle_cup_detector 保持一致
 MIN_AREA = 8
@@ -48,9 +50,13 @@ def detect_tag_region(color_img, bbox):
 
     返回 [(u, v, area, bbox, angle_deg, axis1, axis2, region_mask), ...] 按面积降序。
     """
-    x0, y0, x1, y1 = bbox
-    x0 = x1 - int((x1 - x0) * HANDLE_SIDE_RATIO)
-    roi = color_img[y0:y1, x0:x1]
+    bx0, y0, bx1, y1 = bbox
+    w = bx1 - bx0
+    rx0 = max(0, int(round(bx0 + w * HANDLE_ROI_X_RIGHT[0])))
+    rx1 = min(color_img.shape[1], int(round(bx0 + w * HANDLE_ROI_X_RIGHT[1])))
+    if rx1 <= rx0:
+        return []
+    roi = color_img[y0:y1, rx0:rx1]
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     lower = np.array([HUE_LOW, SAT_MIN, VAL_MIN], dtype=np.uint8)
     upper = np.array([HUE_HIGH, 255, 255], dtype=np.uint8)
@@ -66,9 +72,9 @@ def detect_tag_region(color_img, bbox):
         area = int(stats[i, cv2.CC_STAT_AREA])
         if area < MIN_AREA or area > MAX_AREA:
             continue
-        bbx = (x0 + int(stats[i, cv2.CC_STAT_LEFT]), y0 + int(stats[i, cv2.CC_STAT_TOP]),
+        bbx = (rx0 + int(stats[i, cv2.CC_STAT_LEFT]), y0 + int(stats[i, cv2.CC_STAT_TOP]),
                int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
-        u = x0 + float(centroids[i][0])
+        u = rx0 + float(centroids[i][0])
         v = y0 + float(centroids[i][1])
         angle = None
         axis1 = axis2 = 0.0
@@ -78,7 +84,7 @@ def detect_tag_region(color_img, bbox):
                 (_, _), (axis1, axis2), angle = cv2.fitEllipse(
                     np.column_stack((xs_, ys_)).astype(np.float32))
         mask_full = np.zeros((color_img.shape[0], color_img.shape[1]), dtype=bool)
-        mask_full[y0:y1, x0:x1] = (labels == i)
+        mask_full[y0:y1, rx0:rx1] = (labels == i)
         pts.append((u, v, area, bbx, angle, axis1, axis2, mask_full))
     pts.sort(key=lambda p: -p[2])
     return pts

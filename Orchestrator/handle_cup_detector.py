@@ -69,23 +69,38 @@ CUP_EULER_LEFT = (-90.0, 89.0, -90.0)
 # ============================================================
 HSV_HUE_LOW, HSV_HUE_HIGH = 40, 110   # 贴纸实测 H 36-105 (青绿渐变)
 HSV_SAT_MIN, HSV_VAL_MIN = 50, 50     # 白色 S 低 / 黑色 V 低 排除
-HANDLE_SIDE_RATIO = 0.3               # 把手在 bbox 右侧 30%
+# 青色贴纸搜索区域 — bbox 宽度的百分比区间 (2026-08-20 用户定):
+#   右侧把手 [70%, 110%] (向右扩 10%, 防贴纸被 bbox 右缘裁掉)
+#   左侧把手 [-10%, 30%] (向左扩 10%)
+HANDLE_ROI_X_RIGHT = (0.70, 1.10)
+HANDLE_ROI_X_LEFT = (-0.10, 0.30)
 # 2026-08-19: TAG_ROI_VPAD 纵向扩展已回退 — 贴纸被 YOLO 框裁是 +45 的稳定特征
 # (ratio 虚高到 0.34~0.36 才能与 +15 的 0.30 区分), 保留原 bbox 高度检索
 TAG_MIN_AREA, TAG_MAX_AREA = 8, 5000  # 青色域面积过滤
 DEPTH_MIN = 0.1                       # 有效深度下限 (m)
 
 
-def _detect_tag_region(color_image, bbox):
-    """YOLO bbox 右 30% 内 HSV 青色贴纸检测 (最大域).
+def _detect_tag_region(color_image, bbox, handle_side="right"):
+    """bbox 把手侧百分比区域内 HSV 青色贴纸检测 (最大域).
+
+    区域 = bbox 宽度的百分比区间 (2026-08-20):
+      右侧把手 [70%, 110%] (向右扩 10%, 防 bbox 右缘裁贴纸)
+      左侧把手 [-10%, 30%] (向左扩 10%)
+    区间越出图像边界时 clamp; 空区域返回 None.
 
     返回 (u, v, area, angle, axis1, axis2, region_mask) 或 None.
     region_mask 为全图系 bool; angle/axis1/axis2 来自 fitEllipse
     (angle 对应 width 边, 长轴按 axis1/axis2 大小取).
     """
     x0, y0, x1, y1 = bbox
-    x0 = x1 - int((x1 - x0) * HANDLE_SIDE_RATIO)
-    roi = color_image[y0:y1, x0:x1]
+    w = x1 - x0
+    x_lo, x_hi = (HANDLE_ROI_X_LEFT if handle_side == "left"
+                  else HANDLE_ROI_X_RIGHT)
+    rx0 = max(0, int(round(x0 + w * x_lo)))
+    rx1 = min(color_image.shape[1], int(round(x0 + w * x_hi)))
+    if rx1 <= rx0:
+        return None
+    roi = color_image[y0:y1, rx0:rx1]
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     lower = np.array([HSV_HUE_LOW, HSV_SAT_MIN, HSV_VAL_MIN], dtype=np.uint8)
     upper = np.array([HSV_HUE_HIGH, 255, 255], dtype=np.uint8)
@@ -99,7 +114,7 @@ def _detect_tag_region(color_image, bbox):
             best_i, best_area = i, area
     if best_i is None:
         return None
-    u = x0 + float(cents[best_i][0])
+    u = rx0 + float(cents[best_i][0])
     v = y0 + float(cents[best_i][1])
     angle = None
     axis1 = axis2 = 0.0
@@ -108,7 +123,7 @@ def _detect_tag_region(color_image, bbox):
         (_, _), (axis1, axis2), angle = cv2.fitEllipse(
             np.column_stack((xs, ys)).astype(np.float32))
     mask_full = np.zeros(color_image.shape[:2], dtype=bool)
-    mask_full[y0:y1, x0:x1] = (labels == best_i)
+    mask_full[y0:y1, rx0:rx1] = (labels == best_i)
     return (u, v, best_area, angle, axis1, axis2, mask_full)
 
 
@@ -1333,8 +1348,8 @@ class HandleCupDetector:
             self._last_body_mask = None
             self._last_handle_rot = None
 
-            # ---- HSV 青色贴纸检测 (把手在 bbox 右侧 30%) ----
-            tag = _detect_tag_region(color_image, kettle_bbox)
+            # ---- HSV 青色贴纸检测 (把手侧百分比区域, 2026-08-20 扩 10%) ----
+            tag = _detect_tag_region(color_image, kettle_bbox, self._handle_side)
             if tag is not None:
                 (u, v, _area, angle, axis1, axis2, region_mask) = tag
                 # 深度: 彩色→深度坐标映射 (FOV 不同) → 质心邻域 → 区域内兜底
