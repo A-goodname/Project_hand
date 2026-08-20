@@ -60,6 +60,21 @@ REQUIRED_SAMPLE_FIELDS = ["ratio", "d", "rd", "handle_side",
                           "kettle_bbox", "tag_u", "tag_v"]
 
 
+def cmd_annotate(rid, note):
+    """人工标注失败/异常原因 — 追加 type=annotation 记录到证据 JSONL.
+    用于机械臂侧拒绝 (如 P2 逆解不可达) 等 data_sm 拿不到的原因, 不影响 done 判定."""
+    path = _evidence_path(rid)
+    if not os.path.exists(path):
+        print(f"[ERROR] 无证据文件: {path}")
+        return 1
+    rec = {"type": "annotation", "round_id": rid,
+           "note": note, "ts": time.time()}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    print(f"[OK] {rid} 已标注: {note}")
+    return 0
+
+
 def _data_sm_cmd(rid, angle):
     return [sys.executable, _DATA_SM,
             "--out", _D2_OUT, "--scene-batch-id", "rotation-evidence",
@@ -165,7 +180,11 @@ def main():
     ap = argparse.ArgumentParser(description="18 回合证据集驱动")
     ap.add_argument("--run", metavar="R01", help="启动并驱动单回合 (subprocess data_sm)")
     ap.add_argument("--check", action="store_true", help="校验已采集回合证据字段齐全")
+    ap.add_argument("--annotate", nargs=2, metavar=("R01", "原因"),
+                    help="人工标注失败/异常原因 (追加 type=annotation 记录)")
     args = ap.parse_args()
+    if args.annotate:
+        return cmd_annotate(args.annotate[0], args.annotate[1])
     if args.run:
         return cmd_run(args.run)
     if args.check:
