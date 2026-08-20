@@ -109,15 +109,19 @@ def cmd_list():
         print(f"{done} {rid:<5}{ang:>8}  {desc}")
 
 
-def cmd_run(rid):
+def cmd_run(rid, force=False):
     if rid not in ROUND_MAP:
         print(f"[ERROR] 未知回合 {rid}; 可用: {sorted(ROUND_MAP)}")
         return 1
     ang, desc = ROUND_MAP[rid]
     path = _evidence_path(rid)
     if _round_done(path):
-        print(f"[WARN] {rid} 已有 done 记录: {path}")
-        return 1
+        if not force:
+            print(f"[WARN] {rid} 已有 done 记录: {path} (用 --force 重跑, 旧记录归档)")
+            return 1
+        bak = path.replace(".jsonl", f".failed-{int(time.time())}.jsonl")
+        os.rename(path, bak)
+        print(f"[OK] 旧记录已归档 (保留安全拒绝证据): {bak}")
 
     print(f"===== {rid}: {desc} =====")
     print(f"1) 请操作员把壶把手摆到 {ang}° (量角器/参考线), 物理限位就位")
@@ -179,6 +183,8 @@ def cmd_check():
 def main():
     ap = argparse.ArgumentParser(description="18 回合证据集驱动")
     ap.add_argument("--run", metavar="R01", help="启动并驱动单回合 (subprocess data_sm)")
+    ap.add_argument("--force", action="store_true",
+                    help="配合 --run: 已存在 done 记录时先归档旧记录再重跑 (保留安全拒绝证据)")
     ap.add_argument("--check", action="store_true", help="校验已采集回合证据字段齐全")
     ap.add_argument("--annotate", nargs=2, metavar=("R01", "原因"),
                     help="人工标注失败/异常原因 (追加 type=annotation 记录)")
@@ -186,7 +192,7 @@ def main():
     if args.annotate:
         return cmd_annotate(args.annotate[0], args.annotate[1])
     if args.run:
-        return cmd_run(args.run)
+        return cmd_run(args.run, force=args.force)
     if args.check:
         return cmd_check()
     cmd_list()
