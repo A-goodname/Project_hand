@@ -43,6 +43,7 @@ from Orchestrator.d2_streams import (  # D2 raw/ 流记录 (2026-08-17)
     SceneRecorder, WristStreamRecorder,
 )
 from Orchestrator.tcp_framing import FramedLineReader                 # D2 (2026-08-17)
+from Orchestrator.rotation_evidence import RotationEvidence           # 18 回合证据 (08-20 addendum)
 from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
@@ -123,6 +124,10 @@ class PoseStabilizer:
         th_med = (float(np.median(thetas))
                   if all(t is not None for t in thetas) else None)
         return poses.mean(axis=0), angles.mean(axis=0), th_med
+
+    def get_theta_samples(self):
+        """窗口内 θ 原始样本列表 (18 回合证据: 5 个 θ 原始样本, 对方 08-20 addendum)."""
+        return [float(t) for _, _, t in self._buffer if t is not None]
 
     def reset(self):
         self._buffer = []
@@ -330,6 +335,15 @@ class HandleDataSM:
 
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
+
+        # ---- 18 回合证据集 (对方 08-20 addendum §3) ----
+        self._round_id = None             # 回合 id (main --round-id; None = D2 模式不写证据)
+        self._target_angle = None         # 操作员目标摆位角 (deg)
+        self._rot_evidence = None         # 当前会话 RotationEvidence (会话内有效)
+        self._last_rot_detect = None      # 最近有效检测帧字段缓存 (ratio/d/rd/bbox/贴纸中心)
+        self._last_round_pose = None      # Phase B 发送时 P1/P2/Z 缓存 (回合汇总用)
+        self._gripdone_received = False   # Phase C 是否收到 GRIPDONE (抓取结果)
+        self._rot_samples_open = False    # 采样开关: Phase B 发送计划前写 sample, 进入 Phase C 后停
 
     # ================================================================
     #  生命周期
@@ -840,6 +854,22 @@ class HandleDataSM:
                             print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
                                   f" θ_med={th_med:.1f}° band={band}")
 
+        # ---- 18 回合证据: 每有效检测帧缓存字段 + 写 sample (对方 08-20 addendum §3) ----
+        if h.get("ratio") is not None:
+            d_met = (float(h["pos_cam"][2]) if h.get("pos_cam") is not None else None)
+            self._last_rot_detect = {
+                "ratio": h.get("ratio"), "d": d_met, "rd": h.get("rd"),
+                "handle_side": h.get("handle_side"),
+                "kettle_bbox": h.get("kettle_bbox"),
+                "tag_u": h.get("tag_u"), "tag_v": h.get("tag_v"),
+                "theta_deg": h.get("theta_deg"), "band": h.get("band"),
+                "ts": time.time(),
+            }
+            if self._rot_evidence is not None and self._rot_samples_open:
+                self._rot_evidence.write_sample(**self._last_rot_detect)
+        else:
+            self._last_rot_detect = None
+
         # === Cup 稳定 ===
         c = result["cup"]
         if c["pos_cam"] is not None:
@@ -888,6 +918,22 @@ class HandleDataSM:
         recorder = EpisodeRecorder(self._ep_out_dir, episode_id,
                                    self._scene_batch_id)
         recorder.record_receipt("socket_connected", remote=repr(addr))
+
+        # ---- 18 回合证据 (对方 08-20 addendum): --round-id 提供时按会话记录 ----
+        self._rot_evidence = None
+        self._last_rot_detect = None
+        self._last_round_pose = None
+        self._gripdone_received = False
+        self._rot_samples_open = False
+        if self._round_id:
+            self._rot_evidence = RotationEvidence(
+                os.path.join(_project_root, "logs", "rotation_evidence"),
+                self._round_id, self._target_angle,
+                config_path=os.path.join(_project_root, "Orchestrator", "config.yaml"))
+            self._rot_samples_open = True   # Phase B 发送计划前采样开放
+            self._rot_evidence.write_round(
+                status="session_start", ts=time.time(),
+                episode_id=episode_id, addr=repr(addr))
 
         # ---- D2 raw/ 流记录 (场景 UGREEN 线程 + 腕部 D435i 挂钩) ----
         self._scene_recorder = SceneRecorder(recorder.ep_dir)
@@ -1006,6 +1052,7 @@ class HandleDataSM:
                     detect_base = transform_pose_to_base(
                         np.array(mean_pos_ee), robot_xyz, robot_ABC)
                     pos_base_1 = detect_base + band_off
+                    z_p1_pre = float(pos_base_1[2])   # 18 回合证据: Z 钳位前
                     # P1 Z 有效范围钳位 → 先钳位再推 P2, 保证 P1/P2 满足同一
                     # pre_offset 几何 (修 B5, 2026-08-19)
                     pos_base_1 = self._clamp_p1_z(pos_base_1)
@@ -1087,6 +1134,19 @@ class HandleDataSM:
                     conn.sendall(msg.encode("utf-8"))
                     print(f"[SEND] Phase B Handle: {msg}")
                     target_sent = True
+                    self._rot_samples_open = False   # 18 回合证据: 计划发送后进入 Phase C, 停止 sample 采样
+                    # ---- 18 回合证据: 回合主记录字段缓存 (会话结束写 round) ----
+                    self._last_round_pose = {
+                        "status": "plan_sent",
+                        "theta_samples": self._handle_stabilizer.get_theta_samples(),
+                        "theta_med": self._rot_band_th,
+                        "band": _band,
+                        "p1": list(pos_base_1), "p2": list(pos_base_2),
+                        "abc": list(band_abc),
+                        "p1_z_pre_clamp": z_p1_pre,
+                        "p1_z_post_clamp": float(pos_base_1[2]),
+                        "ts": time.time(),
+                    }
                 except (BrokenPipeError, ConnectionResetError) as e:
                     print(f"[WARN] Phase B: 发送失败: {e}")
                     return
@@ -1121,6 +1181,28 @@ class HandleDataSM:
                 self._wrist_recorder.close()
                 self._wrist_recorder = None
             recorder.close()
+            # ---- 18 回合证据: socket 断开即自动保存回合主记录 (不依赖手动退出) ----
+            if self._rot_evidence is not None:
+                rec = dict(self._last_round_pose or {})
+                if self._last_round_pose is None:
+                    # Phase B 未发送计划 (REJECT/超时)
+                    rec.update({
+                        "status": "done", "grasp_result": "REJECT",
+                        "reject_reason": self._rot_reject or "Phase B 超时未获得稳定位姿",
+                    })
+                else:
+                    rec.update({
+                        "status": "done",
+                        "grasp_result": ("SUCCESS" if self._gripdone_received
+                                         else "NO_GRIPDONE"),
+                        "reject_reason": None,
+                    })
+                if self._last_rot_detect is not None:
+                    rec["last_detect"] = self._last_rot_detect
+                rec["ts_end"] = time.time()
+                self._rot_evidence.write_round(**rec)
+                self._rot_evidence.close()
+                self._rot_evidence = None
             if det is not None:
                 det.last_known_pose = None
                 det.last_known_cup_pose = None
@@ -1169,6 +1251,7 @@ class HandleDataSM:
                 hand_pre_grip()
             elif line == "GRIPDONE" and self._hand_available:
                 hand_grip_done()
+                self._gripdone_received = True   # 18 回合证据: 抓取结果
             elif line == "RESET" and self._hand_available:
                 hand_reset()
             print(f"[INFO] {line}")
@@ -1236,6 +1319,11 @@ def main():
     ap.add_argument("--out", default=None, help="episode 输出根目录 (默认 logs/d2)")
     ap.add_argument("--scene-batch-id", default="canonical-a")
     ap.add_argument("--episode-id", default=None)
+    # 18 回合证据集 (对方 08-20 addendum): 提供 --round-id 时按会话写回合证据 JSONL
+    ap.add_argument("--round-id", default=None,
+                    help="18 回合证据: 回合 id (提供则写 logs/rotation_evidence/<round-id>.jsonl)")
+    ap.add_argument("--target-angle", type=float, default=None,
+                    help="18 回合证据: 操作员目标摆位角 (deg, 记录用)")
     args = ap.parse_args()
 
     sm = HandleDataSM()
@@ -1243,6 +1331,8 @@ def main():
         sm._ep_out_dir = args.out
     sm._scene_batch_id = args.scene_batch_id
     sm._episode_id = args.episode_id
+    sm._round_id = args.round_id
+    sm._target_angle = args.target_angle
     sm.start()
     sm.run()
 

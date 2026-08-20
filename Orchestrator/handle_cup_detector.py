@@ -1402,6 +1402,9 @@ class HandleCupDetector:
             "white_roi": None, "red_contour": None,
             # 方案A旋转判定 (2026-08-18): ratio/theta/band, 检测失败=均 None
             "ratio": None, "theta_deg": None, "band": None,
+            # 18 回合证据集 (对方 08-20 addendum §3): 每有效样本记录字段
+            "rd": None, "tag_u": None, "tag_v": None,
+            "handle_side": self._handle_side,
         }
         cup_result = {
             "pos_cam": None, "euler_cam": self._cup_euler,
@@ -1445,6 +1448,11 @@ class HandleCupDetector:
                         band, theta = self._classify_rotation(ratio, u, d)
                         handle_result["theta_deg"] = theta
                         handle_result["band"] = band
+                        # 18 回合证据集 (对方 08-20 addendum §3): rd 深度校正比 + 贴纸中心像素
+                        handle_result["rd"] = ratio - self._rot_c3 * (d - self._rot_dref)
+                        handle_result["tag_u"] = u
+                        handle_result["tag_v"] = v
+                        handle_result["handle_side"] = self._handle_side
                         self._last_handle_ratio = ratio
                         self._last_handle_theta = theta
                         self._last_handle_band = band
