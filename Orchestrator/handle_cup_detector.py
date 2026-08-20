@@ -681,8 +681,23 @@ class HandleCupDetector:
         #   抬升仍 <0.33), 0.34 留 ~0.02 余量, 对合法档位 0 误杀; >0.34 只有被 YOLO 框裁抬高
         #   的 +45 高尾. 物理干净 +45 与 +30 重合无法区分 → 靠物理摆位限定 [-35,+35] 排除.
         self._rot_ratio_max = float(_rot.get("ratio_max", 0.34))
-        # 2026-08-20: 正侧反解 θ 校正 (三次多项式, 仅 θ>band0 应用). 反解在正侧受
-        #   φ≈28.8° 峰值压缩 (饱和, +30 档被压到 ~20°); 负侧/0° 保持原始反解 (C 补偿精度).
+        # 2026-08-20: 正侧反解 θ 校正 (仅 θ>band0 应用). 反解在正侧受 φ≈28.8° 峰值压缩
+        #   (饱和, +30 档被压到 ~20°); 负侧/0° 保持原始反解 (C 补偿精度).
+        #  pos_side (首选): 双阈值 rd 判档 + 分段线性连续角度, rd>rd30 用 30 档仿射 —
+        #    中间角度 (+20~+25) 连续解算, 不二值化.
+        #  g_correction (后备): 三次多项式 (已弃用).
+        _ps = _rot.get("pos_side", {})
+        if _ps.get("enabled", False):
+            self._rot_rd_a = float(_ps.get("rd_a", 0.314))
+            self._rot_rd_b = float(_ps.get("rd_b", 0.320))
+            self._rot_rd30 = float(_ps.get("rd30", 0.3229))
+            self._rot_k = float(_ps.get("k_slope", 50.0))
+            self._rot_nodes = [(float(r), float(a))
+                               for r, a in _ps.get("nodes", [])]
+        else:
+            self._rot_rd_a = self._rot_rd_b = self._rot_rd30 = None
+            self._rot_k = 50.0
+            self._rot_nodes = []
         _gc = _rot.get("g_correction", {})
         if (_gc.get("enabled", False)
                 and all(k in _gc for k in ("a3", "a2", "a1", "a0"))):
@@ -1265,13 +1280,17 @@ class HandleCupDetector:
     # ------------------------------------------------------------
 
     def _solve_theta(self, ratio, d):
-        """全局模型反解连续角度 θ (deg), 正侧经 g 校正.
+        """全局模型反解连续角度 θ (deg), 正侧经 rd 判档+仿射 或 g 校正.
 
         ratio = c0 + c1·cosθ + c2·sinθ + c3·(d-d_ref)
         θ = φ - arccos((ratio - c0 - c3·(d-d_ref)) / A),  φ=atan2(c2,c1), A=√(c1²+c2²).
         工作范围 [-30,+30] 内用负分支 (θ<φ). 超出 clip 到 ±32° (45° 档不靠反解).
         2026-08-20: θ > band0 (正侧, +15/+30 域) 时反解受 φ≈28.8° 峰值饱和压缩,
-        应用三次多项式 g 校正 (config g_correction); 负侧/0° 保持原始反解 (C 补偿精度).
+        不再直接用反解 — 改为:
+          pos_side (首选): d 修正比 rd=ratio−c3(d−dref) 判档 (+15/+30), 再仿射校正到档中心
+            (θ=center+k·(rd−centroid)), 绕开饱和区, 档内 spread<0.8°.
+          g_correction (后备): 三次多项式 (已弃用).
+        负侧/0° 保持原始反解 (C 补偿精度).
         """
         phi = math.atan2(self._rot_c2, self._rot_c1)
         amp = math.hypot(self._rot_c1, self._rot_c2)
@@ -1280,10 +1299,36 @@ class HandleCupDetector:
         x = (ratio - self._rot_c0 - self._rot_c3 * (d - self._rot_dref)) / amp
         x = max(-1.0, min(1.0, x))
         theta = math.degrees(phi - math.acos(x))
-        if theta > self._rot_band0 and getattr(self, "_rot_g", None) is not None:
-            a3, a2, a1, a0 = self._rot_g
-            theta = a3 * theta**3 + a2 * theta**2 + a1 * theta + a0
+        if theta > self._rot_band0:
+            if getattr(self, "_rot_nodes", None):
+                # pos_side v2: 分段线性连续 (rd≤rd30), rd>rd30 用 30 档仿射
+                rd = ratio - self._rot_c3 * (d - self._rot_dref)
+                if rd > self._rot_rd30:
+                    theta = 30.0 + self._rot_k * (rd - self._rot_rd30)
+                else:
+                    theta = self._interp_pos(rd)
+            elif getattr(self, "_rot_g", None) is not None:
+                a3, a2, a1, a0 = self._rot_g
+                theta = a3 * theta**3 + a2 * theta**2 + a1 * theta + a0
         return theta
+
+    def _interp_pos(self, rd):
+        """正侧 rd → 连续角度 (分段线性过标定节点).
+
+        节点: (rd, angle) = 0°/15°/20°/30° 各档 rd 中位 (config pos_side.nodes).
+        使中间角度 (+15~+30 之间的实际摆位) 连续解算, 不二值化到档位.
+        """
+        nodes = self._rot_nodes
+        if not nodes:
+            return rd
+        if rd <= nodes[0][0]:
+            return nodes[0][1]
+        for i in range(len(nodes) - 1):
+            r0, a0 = nodes[i]
+            r1, a1 = nodes[i + 1]
+            if rd <= r1:
+                return a0 + (rd - r0) * (a1 - a0) / (r1 - r0)
+        return nodes[-1][1]
 
     def _classify_rotation(self, ratio, u, d):
         """旋转档位判定 (2026-08-19 简化: 纯 θ 区间, 5 档).
@@ -1309,9 +1354,18 @@ class HandleCupDetector:
         b0 = self._rot_band0
         b15 = self._rot_band15_hi
 
-        if theta > b15:
-            return 30, theta
+        # 正侧 (θ>band0): pos_side 双阈值 rd 判档 (15 上限 / 30 下限; 中间区按连续 θ 取最近档)
         if theta > b0:
+            if getattr(self, "_rot_nodes", None):
+                rd = ratio - self._rot_c3 * (d - self._rot_dref)
+                if rd >= self._rot_rd_b:
+                    return 30, theta
+                if rd <= self._rot_rd_a:
+                    return 15, theta
+                return (15 if theta < 22.5 else 30), theta
+            # 无 pos_side: 回退 θ 区间判档
+            if theta > b15:
+                return 30, theta
             return 15, theta
         if theta < -40.0:
             return None, theta       # 不可达
