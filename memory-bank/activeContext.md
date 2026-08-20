@@ -12,6 +12,17 @@
 
 ## 最近变更
 
+### θ 稳定性记录工具 (2026-08-20, 新建脚本, 待实机)
+
+1. **新建 `Orchestrator/tests/theta_stability_log.py`** (未改动检测器本体): import 复用 HandleCupDetector, 参考 test_tag_points 风格记录每帧检测结果到 `logs/theta_<ts>.log`
+2. **记录字段**: 帧号 / pos_cam / euler_cam / ratio / rd / θ / band / d / handle_side + 累积 θ 统计 (N/mean/std, 'r' 按姿势重置); **逐帧结果只写 log 文件, 不刷终端**
+3. **按键**: q 退出 | r 重置累积 (换角度后重新采样) | s 存帧; 退出输出 SUMMARY
+4. **参数**: `--skip N` (检测间隔, 默认 1=逐帧; 用 `%N==0` 语义, 避开 `%1==1` 恒 False 坑)
+5. **目的**: 实机摆各档位 → 记录**原始 θ 逐帧变化** → 观察波动规律 → 再定稳定窗口/skip 参数 (**滚动窗口逻辑已去除**, 先只看原始数据, 找到规律再改)
+6. **脚本整理 (2026-08-20)**: `test_tag_points.py` / `mark_roi_hsv.py` / `theta_stability_log.py` 三个独立工具脚本 (均无运行时 import) 移入 `Orchestrator/tests/`; 三者 `_project_root` 路径深度 2→3 层; handle_cup_detector 两处注释路径同步
+7. **验证**: py_compile + import OK + 全量 **142 测试绿** (unittest, pytest 未装)
+8. **待办**: 实机逐档运行记录 → 分析 θ 逐帧 std → 再定稳定窗口与 skip 参数
+
 ### pos_side v2: 双阈值判档 + 分段线性连续角度 (2026-08-20, 解决中间角度二值化)
 
 1. **v1 问题 (用户反馈)**: 单阈值 rd 判档对 ±15/±30 精确, 但中间角度 (+20~+25) 被二值化归 15/30, 正侧角度不连续 — 实际抓取摆位可能非整档

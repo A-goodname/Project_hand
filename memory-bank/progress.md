@@ -1,5 +1,13 @@
 # Progress — Project_hand
 
+### θ 稳定性记录工具 (2026-08-20, 新建脚本, 待实机)
+- [x] 新建 `Orchestrator/tests/theta_stability_log.py` (import 复用 HandleCupDetector, 检测器本体未改)
+- [x] 记录每帧 ratio/rd/θ/band/d/位置/姿态 + 累积 θ 均值/方差 ('r' 按姿势重置); 逐帧只写 log 不刷终端
+- [x] 参数 `--skip` (默认 1=逐帧, %N==0 语义避开 %1==1 坑); **稳定窗口已去除** (先看原始 θ 数据)
+- [x] 脚本整理: test_tag_points / mark_roi_hsv / theta_stability_log 移入 Orchestrator/tests/ (_project_root 2→3 层)
+- [x] py_compile + import OK + 全量 142 测试绿 (unittest)
+- [ ] 实机逐档运行记录 → 分析 θ 逐帧波动 → 定 data_sm 稳定窗口与 skip 参数
+
 ### pos_side v2: 双阈值 + 分段线性连续角度 (2026-08-20, 待实机)
 - [x] v1 中间角度二值化问题: +15~+30 之间的实际摆位被强判 15/30, 正侧不连续
 - [x] 物理限制确认: rd(θ) 在 +20° 后每度 <0.001 (噪声 0.002-0.003), +22~+30 不可分; +15 与 +20 rd 重合

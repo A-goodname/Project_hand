@@ -15,7 +15,7 @@ Cup 检测:    YOLO cup bbox → bbox 采样 → 深度反投影 → 3D 位置 (
 euler_cam 语义: 检测成功 → 相机系动态 ZYX 欧拉角 (deg, 完整检测姿态);
                 检测失败 → 回落 config 固定值 (永不为 None).
 
-参考: Orchestrator/test_tag_points.py (HSV 链实机验证), 旧 yolo+sam 链
+参考: Orchestrator/tests/test_tag_points.py (HSV 链实机验证), 旧 yolo+sam 链
       (RealSense_R/test_handle_6D.py, 方法定义保留)
 """
 
@@ -64,7 +64,7 @@ CUP_EULER_LEFT = (-90.0, 89.0, -90.0)
 #  HSV 青色贴纸检测 (2026-08-17 简化: 替代 SAM 链)
 #  把手正面贴青色贴纸; YOLO bbox 右 30% 内 HSV 分割 → 最大域
 #  质心 = 中心 (3D), 长短轴 = 6D 姿态 (X=短轴, Y=长轴, Z=X×Y).
-#  逻辑移植自 Orchestrator/test_tag_points.py (实机验证:
+#  逻辑移植自 Orchestrator/tests/test_tag_points.py (实机验证:
 #  中心 ±0.2px, euler 稳定, 深度 0.63m 正常).
 # ============================================================
 HSV_HUE_LOW, HSV_HUE_HIGH = 40, 110   # 贴纸实测 H 36-105 (青绿渐变)
