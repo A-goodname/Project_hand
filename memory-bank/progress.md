@@ -6,7 +6,10 @@
 - [x] 参数 `--skip` (默认 1=逐帧, %N==0 语义避开 %1==1 坑); **稳定窗口已去除** (先看原始 θ 数据)
 - [x] 脚本整理: test_tag_points / mark_roi_hsv / theta_stability_log 移入 Orchestrator/tests/ (_project_root 2→3 层)
 - [x] py_compile + import OK + 全量 142 测试绿 (unittest)
-- [ ] 实机逐档运行记录 → 分析 θ 逐帧波动 → 定 data_sm 稳定窗口与 skip 参数
+- [x] log 分析 (2026-08-20): band0 主信号近白噪声 σ0.5°, 5帧稳定窗口中位与全程均值 |偏差|≤0.4°、band 判对率 100%; band-15 单峰无抖档; band0 双峰 = 正侧 8° 接缝不连续 (非窗口问题, 待修)
+- [x] config 定案 (2026-08-20): skip_frames 5→3 + stabilization.window 5→10 (保险; 4 SM 共享, cup/state_machine 亦变; 稳定耗时 0.83s→1s)
+- [x] ROT_THETA_WIN 对齐 10 (2026-08-20, 用户定): 证据 sample 快照/theta_samples 5→10 样本, 18 回合证据合同随之变更 (采集前需训练侧知晓)
+- [ ] 实机验证 10 帧窗口稳定行为; 训练侧申报证据合同 5→10
 
 ### pos_side v2: 双阈值 + 分段线性连续角度 (2026-08-20, 待实机)
 - [x] v1 中间角度二值化问题: +15~+30 之间的实际摆位被强判 15/30, 正侧不连续

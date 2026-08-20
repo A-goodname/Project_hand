@@ -19,14 +19,16 @@ site_gate:
 handle_side: right             # 水壶把手方向: right | left (实机: 把手在左)
 grasp_direction: right        # 抓取方向: right | left
 
-# 检测间隔 (YOLO kettle + cup 每 N 帧运行一次, 30fps 下 N=5≈6Hz)
-skip_frames: 5
+# 检测间隔 (YOLO kettle + cup 每 N 帧运行一次, 30fps 下 N=3≈10Hz; 2026-08-20 保险: 5→3)
+skip_frames: 3
 
 # 位姿稳定器 (PoseStabilizer)
 stabilization:
-  window: 5                  # 稳定窗口帧数 (2026-08-19: 与旋转 θ 窗口合并, B3 恰 5 帧; skip_frames=5 → 0.83s)
+  window: 10                 # 稳定窗口帧数 (2026-08-20 用户定 10 保险; 与 handle/cup 稳定器共用, 亦影响
+                             #   state_machine/handle_sm/cup_sm; ROT_THETA_WIN 已对齐 10;
+                             #   计时: 跳 3 帧≈1/10s/样本 × 10 样本 ≈ 1s 稳定 (原 5/5≈0.83s))
   pos_threshold: 0.01        # 位置波动阈值 (m)
-  angle_threshold: 5.0       # 角度波动阈值 (deg, fixed模式下固定波动=0)
+  angle_threshold: 5.0       # 角度波动阈值 (deg, fixed模式下固定波动=0; θ spread 阈值独立=ROT_THETA_SPREAD_MAX 5)
 
 # ---- 模型路径 (相对项目根目录) ----
 kettle_model: model/kettle_yolov8n_finetune.pt   # 微调水壶 YOLO

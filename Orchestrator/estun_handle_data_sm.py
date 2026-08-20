@@ -138,7 +138,8 @@ class PoseStabilizer:
 #  工具函数 (与 state_machine.py 相同)
 # ============================================================
 
-ROT_THETA_WIN = 5        # 旋转 θ 稳定窗口帧数 (2026-08-19: 并入 PoseStabilizer, 恰满窗才出候选)
+ROT_THETA_WIN = 10       # 旋转 θ 稳定窗口帧数 (2026-08-20: 5→10 与 config stabilization.window 对齐;
+                         #   18 回合证据 theta_samples/sample 快照随之 5→10 样本)
 ROT_THETA_SPREAD_MAX = 5.0   # 窗口内 θ 分歧上限 (deg, B3 2026-08-19: 极差超限 → 不稳定/REJECT)
 ROT_THETA_FRESH_S = 1.5      # θ 观测新鲜窗口 (s, B3 2026-08-19: 超期 → REJECT)
 
@@ -636,7 +637,8 @@ class HandleDataSM:
 
     def _init_stabilizer_and_calib(self):
         stab_cfg = self._orch_cfg.get("stabilization", {})
-        # 2026-08-19: 旋转 θ 并入 handle 稳定窗口 (B3 恰 5 帧, 默认 window=ROT_THETA_WIN);
+        # 2026-08-19: 旋转 θ 并入 handle 稳定窗口 (B3 恰满窗, 默认 window=ROT_THETA_WIN);
+        # 2026-08-20: window 5→10 (config 保险定案), ROT_THETA_WIN 同步 10
         #   θ 极差阈值 = ROT_THETA_SPREAD_MAX. cup 无旋转, 退化为 pos/angle 行为
         self._handle_stabilizer = PoseStabilizer(
             window=stab_cfg.get("window", ROT_THETA_WIN),

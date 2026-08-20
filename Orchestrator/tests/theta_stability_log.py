@@ -149,15 +149,14 @@ def main():
             # ---- 显示 (每帧刷新, 统计复用最近一次检测) ----
             display = detector.visualize(color)
             if last_stat is not None and last_stat["p"] is not None:
-                th_s = f"{last_stat['th']:.2f}" if last_stat["th"] is not None else "N/A"
-                band_s = str(last_stat["band"]) if last_stat["band"] is not None else "N/A"
-                cv2.putText(display, f"th={th_s} band={band_s} N={last_stat['n']} "
-                                     f"mean={last_stat['th_mean']:.2f}",
-                            (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                cv2.putText(display, f"std={last_stat['th_std']:.2f}",
-                            (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                # th/band 已由 visualize() 的 ROT 行显示 (y≈75); 这里只补累积统计,
+                # 放 y=120 避开 visualize 左上文字区 (y=30/55/75/95, 底部 y=h-10)
+                cv2.putText(display, f"acc: N={last_stat['n']} "
+                                     f"mean={last_stat['th_mean']:.2f} "
+                                     f"std={last_stat['th_std']:.2f}",
+                            (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             cv2.putText(display, "q=quit r=reset s=save",
-                        (10, display.shape[0] - 10),
+                        (display.shape[1] - 200, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
             if depth_cmap is not None:
                 h_vis = display.shape[0]

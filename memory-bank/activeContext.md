@@ -12,6 +12,14 @@
 
 ## 最近变更
 
+### config: 稳定窗口 5→10 + 跳帧 5→3 (2026-08-20, 保险定案)
+
+1. **config.yaml**: `skip_frames 5→3` (≈10Hz@30fps) + `stabilization.window 5→10` — 依据 θ 稳定 log 分析: 5 帧窗口稳定后 |偏差|≤0.4°、band 判对率 100%, 但用户为保险加大到 10
+2. **影响范围 (共享 config, 4 状态机读)**: data_sm / handle_sm / cup_sm / state_machine 的 handle+cup 稳定窗口全变 10、跳帧全变 3 → **稳定耗时 1/6s×5=0.83s → 1/10s×10=1s** (用户确认)
+3. **ROT_THETA_WIN 已对齐 10 (用户定)**: `_rot_sample_buf` maxlen 5→10, round 记录 `theta_samples` 现=10 样本 → **18 回合证据合同 "5 原始样本" → 10**, 采集前需训练侧知晓 (addendum §3 变更)
+4. **验证**: config 解析 OK + 全量 142 测试绿
+5. **待办**: 实机验证 10 帧窗口稳定行为; 训练侧证据合同 5→10 申报
+
 ### θ 稳定性记录工具 (2026-08-20, 新建脚本, 待实机)
 
 1. **新建 `Orchestrator/tests/theta_stability_log.py`** (未改动检测器本体): import 复用 HandleCupDetector, 参考 test_tag_points 风格记录每帧检测结果到 `logs/theta_<ts>.log`
