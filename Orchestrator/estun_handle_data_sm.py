@@ -26,6 +26,7 @@ import socket
 import sys
 import threading
 import time
+import collections
 
 import cv2
 import numpy as np
@@ -344,6 +345,8 @@ class HandleDataSM:
         self._last_round_pose = None      # Phase B 发送时 P1/P2/Z 缓存 (回合汇总用)
         self._gripdone_received = False   # Phase C 是否收到 GRIPDONE (抓取结果)
         self._rot_samples_open = False    # 采样开关: Phase B 发送计划前写 sample, 进入 Phase C 后停
+        self._rot_sample_buf = collections.deque(maxlen=ROT_THETA_WIN)  # 最近有效检测帧字段 (判档时写 sample 快照)
+        self._rot_samples_written = None  # 已写 sample 快照去重签名 (θ 元组)
 
     # ================================================================
     #  生命周期
@@ -851,10 +854,19 @@ class HandleDataSM:
                             self._rot_band = band
                             self._rot_valid = True
                             self._rot_reject = None
+                            # ---- 18 回合证据: 稳定判档时写窗口各帧 sample 快照 (去重, 对齐 theta_samples) ----
+                            if self._rot_evidence is not None and self._rot_samples_open:
+                                sig = tuple(
+                                    (round(float(s["theta_deg"]), 2) if s.get("theta_deg") is not None else -999.0)
+                                    for s in self._rot_sample_buf)
+                                if sig != self._rot_samples_written:
+                                    for s in self._rot_sample_buf:
+                                        self._rot_evidence.write_sample(**s)
+                                    self._rot_samples_written = sig
                             print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
                                   f" θ_med={th_med:.1f}° band={band}")
 
-        # ---- 18 回合证据: 每有效检测帧缓存字段 + 写 sample (对方 08-20 addendum §3) ----
+        # ---- 18 回合证据: 每有效检测帧缓存字段 (稳定判档时统一写 sample 快照) ----
         if h.get("ratio") is not None:
             d_met = (float(h["pos_cam"][2]) if h.get("pos_cam") is not None else None)
             self._last_rot_detect = {
@@ -865,8 +877,7 @@ class HandleDataSM:
                 "theta_deg": h.get("theta_deg"), "band": h.get("band"),
                 "ts": time.time(),
             }
-            if self._rot_evidence is not None and self._rot_samples_open:
-                self._rot_evidence.write_sample(**self._last_rot_detect)
+            self._rot_sample_buf.append(self._last_rot_detect)
         else:
             self._last_rot_detect = None
 
