@@ -1,5 +1,13 @@
 # Progress — Project_hand
 
+### PoseStabilizer 合并 θ 稳定窗口 (2026-08-19, 待实机)
+- [x] θ 并入 PoseStabilizer: 每帧 pos+euler+θ 同窗, 稳定判定含 θ 极差 (<5°), 直接取窗口 θ 中位数 → band; 删独立 θ deque + spread 手检查
+- [x] config stabilization.window 3→5 (与 ROT_THETA_WIN 统一, B3 恰 5 帧; cup 窗口随之 5)
+- [x] 删 _detect 双计数 (run 保留, frame_idx 每帧+1; 消除偶数 skip 陷阱)
+- [x] B3 契约保持: 恰满窗/θ 分歧 REJECT/代际失效/禁 0° 回退/1.5s 新鲜度
+- [x] 新测试 9 例 + 全量 101 全绿
+- [ ] 实机只读验证: [Handle STABLE] θ_med/band + 稳定耗时 (3→5 帧 ~0.83s)
+
 ### Cup 阶段移植 + Camera B + Phase D (2026-08-18)
 - [x] estun_teach_cup.py 新建 (Cup P1 示教工具, 镜像 teach_handle_p1)
 - [x] cup_teach 示教验收: t_offset (-0.0226, 0.0021, -0.0078) m, 方差 <5mm ✓

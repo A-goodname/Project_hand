@@ -24,7 +24,7 @@ skip_frames: 5
 
 # 位姿稳定器 (PoseStabilizer)
 stabilization:
-  window: 3                  # 稳定窗口帧数 (skip_frames=5 → 0.83s)
+  window: 5                  # 稳定窗口帧数 (2026-08-19: 与旋转 θ 窗口合并, B3 恰 5 帧; skip_frames=5 → 0.83s)
   pos_threshold: 0.01        # 位置波动阈值 (m)
   angle_threshold: 5.0       # 角度波动阈值 (deg, fixed模式下固定波动=0)
 

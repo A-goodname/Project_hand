@@ -12,6 +12,16 @@
 
 ## 最近变更
 
+### PoseStabilizer 合并 θ 稳定窗口 (2026-08-19, 未实机验证)
+
+1. **合并 (data_sm)**: θ 并入 PoseStabilizer — 窗口内每帧同时收 pos+euler+θ (仅 θ 非 None 帧入窗), 稳定判定同时约束三者 (θ 极差<5°), 直接取同一窗口 θ 中位数 → band; 删独立 `_rot_theta_win` deque + spread 手检查
+2. **收益**: 消除"位姿已稳定但 θ 窗口不满"错位 — θ 缺失帧 (=不可达/异常 ratio, e.g. θ<-40) 不再参与稳定统计, 正是 B2 REJECT 方向; 窗口内帧全带 θ (θ非None ⟺ fitEllipse 成功 ⟺ euler 动态)
+3. **config**: `stabilization.window` 3→5 (与 ROT_THETA_WIN 统一, B3 恰 5 帧; **cup 稳定窗口随之变 5**, 倒水点确定稍慢可接受); `_init_stabilizer_and_calib` handle 加 theta_thresh=ROT_THETA_SPREAD_MAX
+4. **删双计数**: `_detect` 里 `_frame_counter += 1` 删除 (run 主循环保留) — frame_idx 每帧+1 更连续, 消除偶数 skip_frames 永不 detect 隐患 (skip 保持 5 本无 bug; 曾记录 teach_p1 `%1==1` 同款坑)
+5. **B3 契约保持**: 恰满窗 (window=5) / θ 分歧 (极差<5°) / 代际失效作废 / Phase B 无候选禁 0° offset / 1.5s 新鲜度 — 全保留; REJECT 原因 "θ 样本不足" 并入"未稳定" (θ 与帧同窗绑定后不再单独出现)
+6. **验证**: 新测试 9 例 (θ 一致/中位数/分歧/不满窗/向后兼容无θ/代际失效/滑动窗口/阈值覆盖) + 全量 **101 测试全绿**
+7. **待办**: 实机只读跑 data_sm 观察 [Handle STABLE] θ_med/band 输出 + 稳定耗时 (位姿窗口 3→5 帧, ~0.5s→0.83s@skip5/30fps)
+
 ### 抓取成功 + 交接文档 (2026-08-19)
 
 1. **实机抓取成功** (分档 t_offset + θ 插值 + C 解析式 + Z 钳位全链路)

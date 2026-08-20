@@ -26,7 +26,6 @@ import socket
 import sys
 import threading
 import time
-import collections
 
 import cv2
 import numpy as np
@@ -62,13 +61,20 @@ _gf = 0  # 全局代际
 
 
 class PoseStabilizer:
-    """缓存最近 N 帧; 位置+角度波动低于阈值时输出均值.
-    代际计数器: 客户端断开重连时自增, 防止旧帧污染新连接."""
+    """缓存最近 N 帧 (pos, euler[, theta]); 位置+角度(+θ) 波动低于阈值时输出均值.
+    代际计数器: 客户端断开重连时自增, 防止旧帧污染新连接.
 
-    def __init__(self, window=5, pos_thresh=0.005, angle_thresh=3.0):
+    2026-08-19 合并: 旋转 θ 并入稳定窗口 — 窗口内每帧同时具备 pos+euler+θ,
+    稳定判定同时约束三者, 直接取同一窗口的 θ 中位数 (替代独立 θ deque,
+    保 B3 "恰满窗+同代+一致才出候选" 语义). θ=None (cup 等无旋转用途)
+    时退化为原 pos/angle 行为."""
+
+    def __init__(self, window=5, pos_thresh=0.005, angle_thresh=3.0,
+                 theta_thresh=5.0):
         self.window = window
         self.pos_thresh = pos_thresh
         self.angle_thresh = angle_thresh
+        self.theta_thresh = theta_thresh
         self._buffer = []
         self._sf = -1
 
@@ -84,26 +90,39 @@ class PoseStabilizer:
     def is_generation_valid(self):
         return self._sf == _gf
 
-    def add(self, pos, euler):
-        self._buffer.append((np.array(pos, dtype=float), np.array(euler, dtype=float)))
+    def add(self, pos, euler, theta=None):
+        self._buffer.append((np.array(pos, dtype=float),
+                             np.array(euler, dtype=float),
+                             (float(theta) if theta is not None else None)))
         if len(self._buffer) > self.window:
             self._buffer.pop(0)
 
-    def is_stable(self):
+    def is_stable(self, theta_thresh=None):
         if len(self._buffer) < self.window:
             return False
-        poses = np.array([p for p, _ in self._buffer])
-        angles = np.array([a for _, a in self._buffer])
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
         pos_range = np.ptp(poses, axis=0).max()
         angle_range = np.ptp(angles, axis=0).max()
+        if all(t is not None for t in (x[2] for x in self._buffer)):
+            # θ 模式 (旋转链): 窗口内全部带 θ, 纳入一致约束
+            theta_range = np.ptp(np.array([x[2] for x in self._buffer]))
+            thr = self.theta_thresh if theta_thresh is None else theta_thresh
+            return (pos_range < self.pos_thresh
+                    and angle_range < self.angle_thresh
+                    and theta_range < thr)
+        # 无 θ (cup 等): 仅位置+角度
         return pos_range < self.pos_thresh and angle_range < self.angle_thresh
 
     def get_mean(self):
         if not self._buffer:
-            return None, None
-        poses = np.array([p for p, _ in self._buffer])
-        angles = np.array([a for _, a in self._buffer])
-        return poses.mean(axis=0), angles.mean(axis=0)
+            return None, None, None
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
+        thetas = [x[2] for x in self._buffer]
+        th_med = (float(np.median(thetas))
+                  if all(t is not None for t in thetas) else None)
+        return poses.mean(axis=0), angles.mean(axis=0), th_med
 
     def reset(self):
         self._buffer = []
@@ -113,8 +132,8 @@ class PoseStabilizer:
 #  工具函数 (与 state_machine.py 相同)
 # ============================================================
 
-ROT_THETA_WIN = 5   # θ 中位数窗口帧数 (2026-08-19: band 判定用 5 帧中位数, 防边界抖落)
-ROT_THETA_SPREAD_MAX = 5.0   # θ 五帧分歧上限 (deg, B3 2026-08-19: 超限 → REJECT)
+ROT_THETA_WIN = 5        # 旋转 θ 稳定窗口帧数 (2026-08-19: 并入 PoseStabilizer, 恰满窗才出候选)
+ROT_THETA_SPREAD_MAX = 5.0   # 窗口内 θ 分歧上限 (deg, B3 2026-08-19: 极差超限 → 不稳定/REJECT)
 ROT_THETA_FRESH_S = 1.5      # θ 观测新鲜窗口 (s, B3 2026-08-19: 超期 → REJECT)
 
 def fmt_pose(xyz, abc):
@@ -208,10 +227,9 @@ class HandleDataSM:
         # handle_teach (P1 示教偏置, 基系直接加)
         self._handle_teach_enabled = False
         self._handle_teach_t_offset = None
-        # 旋转档位 (2026-08-19): θ 5 帧中位数 → band → p1_offsets 查表
-        self._rot_theta_win = collections.deque(maxlen=ROT_THETA_WIN)  # θ 中位数窗口
+        # 旋转档位 (2026-08-19): θ 并入 PoseStabilizer 稳定窗口 → band → p1_offsets 查表
         self._rot_band = None       # 当前稳定 band (B3: None = 未取得有效候选)
-        self._rot_band_th = None    # 稳定时中位数 θ (deg)
+        self._rot_band_th = None    # 稳定时窗口内 θ 中位数 (deg)
         self._rot_valid = False     # B3: 有效候选 (恰 5 帧新鲜/同代/稳定/一致)
         self._rot_reject = None     # B3: 最近 REJECT 原因 (str|None)
         self._rot_obs_t = 0.0       # B3: 最近一次 θ 观测时刻 (monotonic, 新鲜性)
@@ -543,10 +561,13 @@ class HandleDataSM:
 
     def _init_stabilizer_and_calib(self):
         stab_cfg = self._orch_cfg.get("stabilization", {})
+        # 2026-08-19: 旋转 θ 并入 handle 稳定窗口 (B3 恰 5 帧, 默认 window=ROT_THETA_WIN);
+        #   θ 极差阈值 = ROT_THETA_SPREAD_MAX. cup 无旋转, 退化为 pos/angle 行为
         self._handle_stabilizer = PoseStabilizer(
-            window=stab_cfg.get("window", 3),
+            window=stab_cfg.get("window", ROT_THETA_WIN),
             pos_thresh=stab_cfg.get("pos_threshold", 0.01),
             angle_thresh=stab_cfg.get("angle_threshold", 5.0),
+            theta_thresh=ROT_THETA_SPREAD_MAX,
         )
         self._cup_stabilizer = PoseStabilizer(
             window=stab_cfg.get("window", 3),
@@ -709,7 +730,6 @@ class HandleDataSM:
         if self._handle_stabilizer is None or self._cup_stabilizer is None:
             return
 
-        self._frame_counter += 1
         if self._frame_counter % self._skip_frames != 1:
             return
 
@@ -720,55 +740,42 @@ class HandleDataSM:
         if h["pos_cam"] is not None:
             pos_cam = np.array(h["pos_cam"])
             euler = np.array(h["euler_cam"])
-            self._handle_stabilizer.add(tuple(pos_cam), tuple(euler))
-            # θ 窗口 (band 判定): 每帧有效检测 push, 取中位数
-            # B3 (2026-08-19): 同一代累积; 代际失效清窗作废候选
+            theta = h.get("theta_deg")
+            # 2026-08-19 合并: 位姿+θ 同一稳定窗口 —
+            #   仅收 pos/euler/θ 齐全帧 (θ非None ⟺ fitEllipse 成功 ⟺ euler动态),
+            #   排除姿态退化/不可达无 θ 帧参与稳定统计.
+            #   同一代累积; 代际失效作废候选 (B3)
+            if theta is not None:
+                self._handle_stabilizer.add(tuple(pos_cam), tuple(euler), float(theta))
+                self._rot_obs_t = time.monotonic()
             if not self._handle_stabilizer.is_generation_valid():
-                self._rot_theta_win.clear()
                 self._rot_valid = False
                 self._rot_band = None
                 self._rot_band_th = None
                 self._rot_reject = "观测代际失效 (会话重连)"
-            if h.get("theta_deg") is not None:
-                self._rot_theta_win.append(float(h["theta_deg"]))
-                self._rot_obs_t = time.monotonic()
             if self._handle_stabilizer.is_stable():
                 if not self._handle_stabilizer.is_generation_valid():
                     self._handle_stabilizer.reset()
                     self._handle_stabilizer.capture_generation()
                 else:
-                    mean_pos, _mean_euler = self._handle_stabilizer.get_mean()
-                    if mean_pos is not None:
+                    mean_pos, _mean_euler, th_med = self._handle_stabilizer.get_mean()
+                    if mean_pos is not None and th_med is not None:
                         pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
                         det.last_known_pose = (pos_ee, self._handle_fixed_abc)
-                        # 稳定后: 恰 5 帧 θ 中位数 → band (B3)
-                        # 不足/分歧/不可达 → REJECT, 不出候选 (Phase B 不得回退 0°)
-                        win = list(self._rot_theta_win)
-                        if len(win) < ROT_THETA_WIN:
+                        # 稳定 = 同一窗口内 pos/euler/θ 全部一致 (θ 极差<阈值),
+                        # 直接取 θ 中位数 → band (B3: 恰满窗+同代+一致才出候选)
+                        band = self._resolve_rot_band(th_med)
+                        if band is None:   # θ < -40 不可达
                             self._rot_valid = False
-                            self._rot_reject = f"θ 样本不足 {len(win)}/{ROT_THETA_WIN}"
+                            self._rot_reject = f"θ={th_med:.1f}° < -40 不可达"
+                            print(f"\n[ROT-REJECT] {self._rot_reject}", flush=True)
                         else:
-                            spread = max(win) - min(win)
-                            if spread > ROT_THETA_SPREAD_MAX:
-                                self._rot_valid = False
-                                self._rot_reject = \
-                                    f"θ 五帧分歧 spread={spread:.1f}° > {ROT_THETA_SPREAD_MAX:.0f}°"
-                                print(f"\n[ROT-REJECT] {self._rot_reject}, 不生成 band",
-                                      flush=True)
-                            else:
-                                th_med = float(np.median(win))
-                                band = self._resolve_rot_band(th_med)
-                                if band is None:   # θ < -40 不可达
-                                    self._rot_valid = False
-                                    self._rot_reject = f"θ={th_med:.1f}° < -40 不可达"
-                                    print(f"\n[ROT-REJECT] {self._rot_reject}", flush=True)
-                                else:
-                                    self._rot_band_th = th_med
-                                    self._rot_band = band
-                                    self._rot_valid = True
-                                    self._rot_reject = None
-                                    print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
-                                          f" θ_med={th_med:.1f}° band={band}")
+                            self._rot_band_th = th_med
+                            self._rot_band = band
+                            self._rot_valid = True
+                            self._rot_reject = None
+                            print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
+                                  f" θ_med={th_med:.1f}° band={band}")
 
         # === Cup 稳定 ===
         c = result["cup"]
@@ -781,7 +788,7 @@ class HandleDataSM:
                     self._cup_stabilizer.reset()
                     self._cup_stabilizer.capture_generation()
                 else:
-                    mean_cpos, _mean_ceuler = self._cup_stabilizer.get_mean()
+                    mean_cpos, _mean_ceuler, _ = self._cup_stabilizer.get_mean()
                     if mean_cpos is not None:
                         det.last_known_cup_pose = (mean_cpos, self._cup_fixed_abc)
                         print(f"\n[Cup STABLE]    pos=({mean_cpos[0]:.3f},{mean_cpos[1]:.3f},{mean_cpos[2]:.3f})")
