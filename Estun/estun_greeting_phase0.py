@@ -58,6 +58,9 @@ class Phase0Greeting:
         self._stop_event = threading.Event()
 
         g = estun_cfg.get("greeting", {})
+        vcfg = g.get("voice", {})
+        self._voice_enabled = bool(vcfg.get("enabled", True))
+        self._voice_script = str(vcfg.get("script", "/data/Speech/start_greeting.sh"))
         self._zhaoshou1 = [float(v) for v in g.get("zhaoshou1_pose", [0] * 6)]
         self._zhaoshou2 = [float(v) for v in g.get("zhaoshou2_pose", [0] * 6)]
         self._woshou = [float(v) for v in g.get("woshou_pose", [0] * 6)]
@@ -194,10 +197,38 @@ class Phase0Greeting:
                 cv2.waitKey(1)
             if self._person_stable >= self._person_required:
                 print("\n[GREETING] 检测到人进门!")
+                if self._voice_enabled:
+                    self._announce_voice()
                 return True
             time.sleep(0.03)
         print(f"\n[GREETING] 人检测超时 ({timeout}s)")
         return False
+
+    # ================================================================
+    #  语音欢迎 (复用 /data/Speech 问候链路; 检测到人进门时异步播报)
+    # ================================================================
+
+    def _announce_voice(self):
+        """异步触发一次语音播报: start_greeting.sh --no-enter → 豆包 TTS → JBL.
+
+        文案**不自定义** — 不传 --message, 由 greeting_announcer.py 读
+        /data/Speech/config.json 的 greeting.message (对方改文案我方自动跟随).
+        不阻塞 TCP 协议 (subprocess.Popen 非等待); 独立进程组防与 phase0 同组被误杀.
+        """
+        import subprocess
+        script = self._voice_script
+        if not os.path.exists(script):
+            print(f"[GREETING] 语音脚本不存在: {script} → 跳过播报")
+            return
+        print("[GREETING] 语音播报: 复用 /data/Speech 问候文案 (config.json greeting.message)")
+        try:
+            subprocess.Popen(
+                ["bash", script, "--no-enter"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,   # 独立进程组, 不与 phase0 同组被误杀
+            )
+        except Exception as e:
+            print(f"[GREETING] 语音播报启动失败: {e}")
 
     # ================================================================
     #  挥手 + 握手 (Gesture 枚举, 无手模拟降级)

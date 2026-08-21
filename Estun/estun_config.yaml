@@ -186,6 +186,10 @@ estun:
     zhaoshou1_pose: [-239.73, 339.759, 852.73, -89.008, 1.6, 11.114]
     zhaoshou2_pose: [-204.105, 204.746, 928.191, -46.92, -3.076, 3.518]
     woshou_pose:    [-206.149, 809.121, 602.386, -173.773, 65.873, -87.126]
+    # 语音欢迎 (2026-08-21 融入; 检测到人进门时异步播报, 全部复用 /data/Speech 问候链路)
+    voice:
+      enabled: true                    # false=关语音 (纯视觉打招呼)
+      script: /data/Speech/start_greeting.sh   # /data/Speech 问候脚本 (勿改); 文案用其 config.json greeting.message
 
   # --- Phase E 石头剪刀布 (RPS) 接入 (2026-08-21) ---
   # RPS 语音/视觉/灵巧手出拳由 /data/Speech 服务负责; 本段只负责机械臂:
