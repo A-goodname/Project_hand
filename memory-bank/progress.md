@@ -1,5 +1,19 @@
 # Progress — Project_hand
 
+### Phase E RPS 接入: py + config + 一键脚本 (2026-08-21)
+- [x] 用户写 CRP → 入库 `doc/estun_rps_phaseE.crp` (Down-667, sha a5054c91, 端口 8700; open→P1→While(独立 whileflag)→Home存储点→close; 位姿米/度)
+- [x] config `estun_config.yaml rps:` 段 (port/done_flag/voice_log_path/arm_settle_delay/max_game_wait/rounds/poses.play/auto_invite)
+- [x] 示教 P1 写入 `rps.poses.play` (RPSpos mm→m, 灵巧手落 RPS 相机 FOV)
+- [x] `Estun/estun_rps_phaseE.py` 单一入口: X1→P1(米,度)→[RPS][RESULT]→DONE→等 EOF (Home 存储点, py 不回位姿)
+- [x] `start_rps_phaseE.sh` 一键启动 (终端① RPS 服务 语音 stdout→日志, 本终端 phaseE py)
+- [x] 新测试 6 例 (正常流程/no_rps/mock/全零拒绝/auto_invite FIFO/DONE 后 EOF) + 全量 148 测试绿
+- [x] **while 只循环一次问题 (实机 2026-08-21)**: socketreadstr operateval 不能驱动 while 条件 (成功=0/超时=非0); Codroid 不能比字符串 → 用户改独立标志法 (whileflag) → Down-667; py 无需改 (DONE 内容不比)
+- [x] **相机打开方式改 EyeToHand 式路径解析 (2026-08-21)**: `start_rps_phaseE.sh` 用 find_camera_id(usb-0:2+'UGREEN Camera') → RPS_CAMERA_INDEX, 不硬编码 /dev/videoN; ⚠️ find_camera_id stdout 清单打印需 `| tail -1`; RPS 相机 = Camera B = usb-0:2 = video6 (非 4.2)
+- [x] **音响无播报修复 (2026-08-21)**: 双 PipeWire (wangxilu+user) 抢 JBL A2DP → user 挂不上 bluez sink; 停 wangxilu 音频 → 重连 JBL → bluez_output 出现 + 设默认
+- [x] **语音不出声再排 (2026-08-21)**: realtime_audio `pw-cat --target bluez` 在 A2DP 静默失败 → 复制 config 清空 pipewire_target + `--config` 传语音 → 走 default sink (=JBL, paplay 实测有声); 不改 wangxilu 文件
+- [x] **单局 demo 实机走通 (2026-08-21)**: 导入 `doc/estun_rps_phaseE.crp` + `start_rps_phaseE.sh` — 臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home; 浏览器画面 + 声音正常
+- [ ] 三 CRP 融合 (Phase0 8600 + A2D 8080 + PhaseE 8700, 段间 wait 1s)
+
 ### Phase 0 打招呼独立交付: py + CRP (2026-08-20)
 - [x] 更新 doc/state_machine_reference.crp ← IDLEtemp-Down-645 (sha256 a8a8ee00, 状态机单独保存, 旧版 .bak)
 - [x] data_sm-Down-946 与 doc/estun_handle_data_sm.crp sha256 相同 (4227c66b) — 已最新

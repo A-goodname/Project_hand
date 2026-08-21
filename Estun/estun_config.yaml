@@ -186,3 +186,24 @@ estun:
     zhaoshou1_pose: [-239.73, 339.759, 852.73, -89.008, 1.6, 11.114]
     zhaoshou2_pose: [-204.105, 204.746, 928.191, -46.92, -3.076, 3.518]
     woshou_pose:    [-206.149, 809.121, 602.386, -173.773, 65.873, -87.126]
+
+  # --- Phase E 石头剪刀布 (RPS) 接入 (2026-08-21) ---
+  # RPS 语音/视觉/灵巧手出拳由 /data/Speech 服务负责; 本段只负责机械臂:
+  #   臂到 P1 示教点位(端手到玩家面前) → 游戏期间保持 → 回 Home.
+  # CRP (用户编写): open → P1(sendpos→getpos→movl) → While(等完成标志) → Home → close
+  rps:
+    port: 8700                        # Phase E TCP 端口 (≠ Phase0 8600 / PhaseA2D 8080, 便于三 CRP 融合, 段间 wait 1s)
+    base_url: "http://127.0.0.1:8768" # RPS 视觉服务 (rps_stream.py), 供探测/预留
+    voice_log_path: "/tmp/rps_voice_phaseE.log"  # realtime_voice stdout (start_rps_phaseE.sh 用 python -u 重定向; py tail 它等 [RPS][RESULT])
+    done_flag: "DONE"                 # 游戏完成标志 (CRP 读到任意消息即 break, 内容不比; 此值仅作标识, 可随意)
+    arm_settle_delay: 3.0             # 发 P1 后等机械臂到位再触发邀请 (秒)
+    max_game_wait: 180.0              # 等游戏完成超时 (秒), 超时也发 DONE 回 Home (兜底)
+    rounds: 1                         # 完成几局后发 DONE 回 Home (默认单局)
+    poses:
+      # P1 示教点位 [x,y,z,a,b,c] 单位 米,度 — 已示教 (2026-08-21): RPSpos [-438.676,-16.251,697.643,-126.4,-0.047,84.42] mm,deg
+      # (mm/1000 → m; 此位姿下灵巧手在 RPS 相机 /dev/video6 画面中)。协议位姿为 米/度 (CRP lengthunit=m)。
+      play: [-0.438676, -0.016251, 0.697643, -126.4, -0.047, 84.42]
+      # Home 为 CRP 存储点直 movl, py 不回位姿 → 无 poses.home
+    auto_invite:
+      enabled: true                   # true=py 写 FIFO 自动触发邀请 (臂到位即播邀请词); false=人工在 RPS 终端按回车
+      fifo_path: /tmp/rps_voice_stdin # 一键脚本把 realtime_voice stdin 接到此 FIFO

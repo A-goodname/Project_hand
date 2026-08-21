@@ -27,7 +27,7 @@
 ## 项目目录结构
 
 - `Orchestrator/`: **主入口** — 4 阶段调度 + 双相机检测 + TCP 服务
-- `Estun/`: 单相机入口 (运行/演示/工具); 示教工具 `estun_teach_handle_p1.py`/`estun_teach_cup.py`/`estun_teach_p3.py`; 独立交付 `estun_greeting_phase0.py` (Phase 0 打招呼, 不依赖协作线)
+- `Estun/`: 单相机入口 (运行/演示/工具); 示教工具 `estun_teach_handle_p1.py`/`estun_teach_cup.py`/`estun_teach_p3.py`; 独立交付 `estun_greeting_phase0.py` (Phase 0 打招呼) / `estun_rps_phaseE.py` (Phase E RPS 机械臂接入, 端口 8700, 不依赖协作线)
 - `Orchestrator/tests/`: 独立工具脚本 `test_tag_points.py` (HSV 判档验证) / `mark_roi_hsv.py` (ROI 分析) / `theta_stability_log.py` (θ 稳定性记录)
 - `RealSense_R/`: Camera A D435i 旧版 (手动像素映射)
 - `RealSense/`: Camera A D435i 新版 (rs.align)
@@ -39,6 +39,7 @@
 - `KettleTraining/`: 水壶检测模型微调
 - `doc/`: 文档 + CRP 文件
 - `logs/`: 运行日志
+- `start_cup_handover.sh` / `start_rps_phaseE.sh`: 一键启动脚本 (Phase D 递杯 / Phase E RPS)
 
 ## 依赖安装
 
@@ -58,3 +59,6 @@
 - **/dev/videoN 编号不稳定** (插拔/驱动重绑会重排): 严禁硬编码索引, Camera B 必须按名称枚举 (EyeToHand/camera.py 的 sysfs 探测)
 - **Handle 检测 = HSV 青色贴纸链** (把手面贴标准矩形青贴纸, H 40-110/S/V≥50, 质心=中心 + 长短轴=6D 姿态); 旋转判档 = ratio→θ 反解→5 档 band (`handle_rotation` config: `band0_halfwidth=8`/`band15_hi=22`, pos_side 双阈值 + 分段线性); 抓取姿态 `C=C0-θ` 不逐档示教
 - **Phase 0 独立服务**: TCP 8600 单 Socket 4 步, socketcreate IP 必须 = 本机当前 IP (`192.168.101.96`, DHCP 动态); 迎宾相机 = 迎宾 UGREEN USB 口 `usb-0:4.1` (非 D435i); 三打招呼位姿在 `estun_config.yaml greeting.` (Z1/Z2/WS, mm/deg) + CRP GH_* 存储坐标兜底 (通信失败时回退)
+- **RPS 服务 (/data/Speech, 同事代码)**: `rps_stream.py` (HTTP 127.0.0.1:8768, 视觉+灵巧手动作队列; 相机 **Camera B = usb-0:2 = /dev/video6**, 与 Phase A2D 同相机; rps_stream.py 属 wangxilu 改不了, 由 `start_rps_phaseE.sh` 用 EyeToHand `find_camera_id` 按路径解析后传 `RPS_CAMERA_INDEX`) + `realtime_voice.py --rps-game` (豆包语音+游戏状态机); **灵巧手被 RPS 独占** (STM32 串口冲突 → phaseE 禁 open); 游戏结果只在语音进程 (`[RPS][RESULT]` 日志 + TTS), HTTP 8768 `/round/status` 不含最终胜负; 回车邀请 = asyncio `add_reader(stdin)`, FIFO 写 `\n` 可程序化触发 (但需持写端 `tail -f /dev/null > fifo` 防读端 EOF 停读); `[RESULT]` 打印无 flush → 重定向需 `PYTHONUNBUFFERED=1`
+- **蓝牙音响 (JBL GO 78:44:05:FA:12:B9) 排坑 (2026-08-21)**: 无播报根因 = ①**多声音服务器抢 A2DP** (系统有 `wangxilu` 和 `user` 两个 PipeWire/wireplumber, wireplumber 报 "Multiple sound server instances") → 停多余那方的 pipewire/wireplumber/pipewire-pulse (sudo) → 重连 JBL → bluez sink 出现; ②**realtime_audio `pw-cat --playback --target bluez_output... --rate 24000 --channels 1 --channel-map MONO` 在 A2DP sink 上静默失败** (paplay / pw-cat 不带 --target 走 default sink 正常) → 复制 config 清空 `realtime.pipewire_target` + `--config` 传语音进程 → 走 default sink; `pactl set-default-sink bluez_output.78_44_05_FA_12_B9.1`
+- **Phase E RPS 机械臂接入 (2026-08-21)**: TCP **8700** (≠8600/8080, 三 CRP 融合预留, 段间 wait 1s); CRP = `doc/estun_rps_phaseE.crp` (用户写, sha `a5054c91`); 位姿协议 **[x,y,z,a,b,c] 米,度** (CRP cpostostr/transtrtocpos lengthunit=m, 非 Phase 0 的 mm); py `Estun/estun_rps_phaseE.py` tail `/tmp/rps_voice_phaseE.log` 等 `[RPS][RESULT]`; Home 为 CRP 存储点直 movj (py 不回位姿); auto_invite FIFO `/tmp/rps_voice_stdin`; **socketreadstr operateval: 成功=0 / 超时=非0, 不能驱动 while 条件** (实机"只循环一次"); **Codroid while 无法比较字符串** → 用独立循环标志法 (whileflag 初始=1, `if operateval==0` 置 0 退出)

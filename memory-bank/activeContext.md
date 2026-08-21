@@ -12,7 +12,40 @@
 
 训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。
 
+**Phase E RPS 接入（2026-08-21，单局已走通）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `a5054c91`，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付，148 测试绿。**完整单局已实机走通**（臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home）；排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。待办：RPS 服务收尾、多局制、三 CRP 融合。
+
 ## 最近变更
+
+### Phase E RPS 接入: py + config + 一键脚本 (2026-08-21)
+
+1. **背景**: RPS 语音/视觉/灵巧手出拳由 /data/Speech 服务负责 (rps_stream.py 8768 + realtime_voice.py --rps-game); Phase E 只负责机械臂 — 端手到 P1 → 游戏保持 → 回 Home
+2. **用户定案 (CRP 用户自己写)**: `doc/estun_rps_phaseE.crp` (= `~/下载/PhaseERPS-Down-667.crp`, sha `a5054c91`) 端口 **8700**: open → P1(sendpos→getpos→**movj** RPSpos) → While(**whileflag==1** 独立标志) → **Home 存储点直 movj** → close; 12 widgets (socketcreate/getcurcpos/cpostostr/socketsendstr/socketreadstr/transtrtocpos/movj×2/equal×2/while/socketclose)
+3. **位姿格式 = [x,y,z,a,b,c] 米,度** (cpostostr/transtrtocpos lengthunit=m angleunit=deg, 非 Phase 0 的 mm) — py `_fmt_pose6` 用 `.3f`(xyz 米)/`.2f`(abc 度)
+4. **py** `Estun/estun_rps_phaseE.py` (单一入口, 镜像 Phase 0 结构): TCP 8700; 收 X1 → 回 P1(米,度); tail 语音日志等 `[RPS][RESULT]` → 发 DONE (任意非空串, **内容不比**); **DONE 后等 EOF 优雅退出 (Home 存储点, py 不回位姿)**
+5. **config** `estun_config.yaml rps:` 段: port/done_flag/voice_log_path/arm_settle_delay/max_game_wait/rounds/poses.play(占位待示教)/auto_invite(fifo_path)
+6. **一键脚本** `start_rps_phaseE.sh`: 终端① RPS 服务 (rps_stream --enable-hand + realtime_voice --rps-game, 语音 stdout→终端+/tmp/rps_voice_phaseE.log, PYTHONUNBUFFERED=1; auto_invite=1 时 stdin→FIFO); 本终端 phaseE py (一轮 socket 断开自动退出)
+7. **排坑**: ①**位姿单位米/度** (Phase 0 是 mm, 用户 CRP 是 m) ②游戏完成信号 = 语音日志 [RPS][RESULT] (HTTP 8768 无胜负, 不改同事代码) ③**日志 tail 起始位置须在连接开始时记录** (进 _wait_round_done 才记 → settle 窗口内到达的结果被当旧内容跳过, 已修) ④realtime_voice 回车邀请 = asyncio add_reader(stdin), FIFO 写 \n 可触发; 但 FIFO 需持写端 (tail -f /dev/null > fifo) 防读端 EOF 停读 ⑤语音进程[RESULT]打印无 flush, 需 PYTHONUNBUFFERED=1 ⑥**socketreadstr operateval 不能驱动 while 条件**: 成功=0 / 超时=非0, 直接当条件会"只循环一次" (详见下条 while 修复)
+8. **验证**: py_compile + 新测试 6 例 (正常流程米度/no_rps/mock/全零拒绝/auto_invite FIFO/DONE 后 EOF) + **全量 148 测试绿**
+9. **约束**: phaseE **禁 open 灵巧手** (RPS 服务独占 STM32 串口) / **禁碰相机** (RPS 独占 /dev/video6)
+10. **待办**: ①实机示教 P1 (灵巧手落 RPS 相机 FOV) 写入 config ✓ (已填 `rps.poses.play` 米值) ②导入 `doc/estun_rps_phaseE.crp` 跑 start_rps_phaseE.sh 走通完整 demo ③三 CRP 融合预留 (Phase0 8600 + A2D 8080 + PhaseE 8700, 段间 wait 1s)
+
+### Phase E 实机: while 只循环一次 → 独立标志法修复 (2026-08-21)
+
+1. **实机现象**: 臂到 RPSpos 后 ~2s 自动回 Home (CRP while 只循环一次), 游戏无法开始; 语音服务正常 (Press Enter 邀请 + 麦克风收声)
+2. **根因**: 原 CRP `while endflag==1` 直接用 socketreadstr 的 operateval→endflag; ESTUN operateval **成功=0 / 超时=非0** → 首次读取(游戏期间 py 静默→2s 超时)后 endflag≠1 → 循环退出 → movl Home
+3. **Codroid 限制**: while 条件**无法比较字符串** (不能 `while rpsstr3 != "DONE"`)
+4. **修复 (用户改 CRP → Down-667, 入库 `doc/estun_rps_phaseE.crp` sha `a5054c91`)**: 独立循环标志 — 顶层 `equal whileflag=1` 初始化; `while whileflag==1`; 循环内 `socketreadstr(ov→endflag, 不进条件)` + `if endflag==0`(成功读到数据) → `equal whileflag=0` → 退出 → movj Home
+5. **py 无需改**: DONE 内容不比, 任意非空消息读到即 break; done_flag 仅作标识
+6. **验证**: py_compile + 148 测试绿 (P1→等游戏→DONE→EOF 逻辑不变)
+
+### Phase E 实机: 音响/相机排坑 (2026-08-21)
+
+1. **音响无播报根因 = 双声音服务器抢蓝牙**: 系统同时跑 `wangxilu` 和 `user` 两个 PipeWire, JBL(A2DP) 传输被两边抢 → user wireplumber 报 *"Multiple sound server instances ... trying to use Bluetooth audio at the same time"* → 挂不上 bluez sink → 无声。**修复**: 停 wangxilu 音频 (pipewire/wireplumber/pipewire-pulse, 需 sudo) → 重连 JBL → `bluez_output.78_44_05_FA_12_B9.1` 出现 → `pactl set-default-sink` 设默认 + 80%
+2. **RPS 相机 = Camera B (Phase A2D 同相机)**: `EyeToHand/config.yaml` `camera_path: usb-0:2` + `camera_name: UGREEN Camera` → `/dev/video6`（**非 4.2**；全局记忆里 "Camera B=4.2" 是旧的）。`rps_stream.py` 属 wangxilu(664) 改不了
+3. **相机打开方式改稳定路径解析**: `start_rps_phaseE.sh` 用 EyeToHand `find_camera_id(keywords=['UGREEN Camera'], path_keyword='usb-0:2')` 解析 → `RPS_CAMERA_INDEX=6` 传 rps_stream，不再硬编码 /dev/videoN（编号漂移排坑）。⚠️ find_camera_id 的 V4L2 清单打印走 **stdout** → 捕获须 `| tail -1` 取最后一行
+4. **语音不出声再排 (pw-cat --target)**: realtime_audio 用 `pw-cat --playback --target bluez_output... --rate 24000 --channels 1 --channel-map MONO --format s16` 播 TTS → **A2DP sink 上静默失败** (paplay / pw-cat 不带 --target 走 default sink 正常, 实测 30/30 帧相机 + paplay 有声)。**修复**: 复制 config 清空 `realtime.pipewire_target` → `--config /tmp/rps_config_phaseE.json` 传语音进程 → pw-cat 走 **default sink**; 启动时 `pactl set-default-sink bluez_output.78_44_05_FA_12_B9.1`。不改 wangxilu 文件 (config.json/realtime_audio.py 均 664)
+5. **单局 demo 走通 (2026-08-21)**: 完整流程 — 臂到 P1 → auto-invite → JBL 播邀请 (`default sink`) → 人说"开始" → 倒计时/视觉判拳 → `[RPS][RESULT] outcome=win` → phaseE 发 DONE → 臂回 Home; 浏览器画面 (8768) + JBL 出声均正常; phaseE 退出后 RPS 服务继续等下局"开始" (Ctrl+C 收尾)
+6. **待办**: ①RPS 服务收尾 (demo 后需手动 Ctrl+C 停 RPS 终端) ②多局制 (rounds>1 或等人退出) ③三 CRP 融合 (Phase0 8600 + A2D 8080 + PhaseE 8700, 段间 wait 1s)
 
 ### Cup 状态机同步 data_sm: CRP + py (2026-08-21, Phase D 排查前置)
 
@@ -221,6 +254,8 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
+| 🔴 | **Phase E 实机联调** | 示教 P1(灵巧手落 RPS 相机 FOV) 写入 config + 导入用户 CRP + `start_rps_phaseE.sh` 走通；验证 while(endflag==1) socketreadstr 超时续循环 |
+| 🟡 | 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
 | 🔴 | **Phase D 失败根因待查** | CRP 到 C_P3 后 ~2s 自动停、READY 未发、连接关闭；查 SocketSendStr/SocketReadStr 配置或时序 |
 | 🔴 | **data_sm 实机复测各档 P1** | θ 插值 + C 解析式 + Z 钳位链路落地验证；尤其 +15 档 Z 天然 364mm 超限观察钳位 |
 | 🔴 | **pos_side v2 实机只读验证** | 中间角度连续解算；异常点 110950 重采 |
