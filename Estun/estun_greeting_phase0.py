@@ -104,6 +104,16 @@ class Phase0Greeting:
             except Exception:
                 pass
             self._server = None
+        # 显式关闭灵巧手 (review B 点, 2026-08-21): Phase0/A2D/RPS 共用 STM32 串口,
+        # 不能依赖解释器析构释放 — 否则融合交接 (Phase0→A2D→RPS) 有串口竞态
+        if self._hand is not None:
+            try:
+                from Estun.utils_shared import disable_hand
+                disable_hand()
+                print("[GREETING] 灵巧手已关闭")
+            except Exception as e:
+                print(f"[GREETING] 灵巧手关闭失败: {e}")
+            self._hand = None
         cv2.destroyAllWindows()
         print("[GREETING] 已退出")
 

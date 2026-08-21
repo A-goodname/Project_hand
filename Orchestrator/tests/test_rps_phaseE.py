@@ -333,6 +333,58 @@ class RpsPhaseETest(unittest.TestCase):
             self.assertFalse(t.is_alive())
 
 
+    # ---------- 11. auto-invite 重试: 等 RPS voice 就绪 ----------
+
+    def test_auto_invite_retry_waits_for_reader(self):
+        """重试: FIFO 初始无读者(ENXIO) → 读者出现后自动写 '\\n' 成功."""
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "voice.log")
+            open(log, "w").close()
+            fifo = os.path.join(td, "voice_stdin")
+            os.mkfifo(fifo)
+            svc, t, client = self._start(
+                _make_cfg(log, settle=0.0, auto_invite=True, fifo=fifo, max_wait=0.5))
+            try:
+                client.sendall(b"1.0,2.0,3.0,4.0,5.0,6.0\n")
+                self.assertEqual(_recv_line(client), _fmt(PLAY) + b"\n")
+                # 此刻 FIFO 无读者 → 首邀 ENXIO; 随后开读端+持写端, 重试(每3s)应写入
+                time.sleep(0.3)   # 让首邀先触发 ENXIO
+                rfd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+                holder = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    deadline = time.time() + 5.0
+                    got = b""
+                    while time.time() < deadline:
+                        try:
+                            got = os.read(rfd, 4096)
+                            if got:
+                                break
+                        except BlockingIOError:
+                            time.sleep(0.02)
+                    self.assertEqual(got, b"\n", "重试应在读者出现后写入回车")
+                    client.close()
+                finally:
+                    os.close(rfd)
+                    os.close(holder)
+            finally:
+                pass
+            t.join(timeout=5.0)
+            self.assertFalse(t.is_alive())
+
+    def test_auto_invite_retry_bounded(self):
+        """重试有界: 始终无读者时到 max_wait 返回 False (不无限阻塞)."""
+        with tempfile.TemporaryDirectory() as td:
+            fifo = os.path.join(td, "voice_stdin")
+            os.mkfifo(fifo)
+            svc = PhaseERps(
+                _make_cfg(os.path.join(td, "v.log"), auto_invite=True, fifo=fifo),
+                port=_free_port(), mock=True)
+            t0 = time.monotonic()
+            ok = svc._auto_invite_with_retry(max_wait=1.2, interval=0.4)
+            self.assertFalse(ok)
+            self.assertLess(time.monotonic() - t0, 2.5, "重试应在 max_wait 内返回")
+
+
 def _no_line(client, timeout=0.7):
     """断言在 timeout 内没有数据到达 (返回 True=确实无数据)."""
     client.settimeout(timeout)

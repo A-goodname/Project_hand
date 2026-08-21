@@ -1,5 +1,24 @@
 # Progress — Project_hand
 
+### 融合 RPS 交接加固 (2026-08-21, 同事 review + 用户实测驱动)
+- [x] 用户实测: hand_in_cup.py 按 q 关闭后 0s 即起 PhaseE 成功 → 推翻"USB 沉降 15s 不够"; 根因 = A2D 进程没退干净仍起 RPS
+- [x] start_phase_all.sh 等 A2D 退出硬门禁 (超时 30s → exit 1, 禁空转起 RPS); RPS_SETTLE 15→5s
+- [x] cup_sm stop() teardown 补齐: _hic_active=False + join(_camera_b_thread,5s) + close(_hand_in_cup_detector) + person_detector.stop() (对齐状态机 finally)
+- [x] Phase0 stop() 显式 disable_hand() (三阶段共用串口)
+- [x] helper RPS 启动失败重试 ≤3 次 (等 10s 沉降 + 8768 确认, RPS_MAX_ATTEMPTS env 覆盖)
+- [x] 语音 PID 改进程替换 >(tee) (E 点); 门禁 wait_gate_gone() 轮询确认 (F 点); 启动前清旧实例 pkill -9 兜底 (G 点)
+- [x] bash -n + 模拟测试 + 全量 168 测试绿
+- [x] doc/phase-fusion-handover-2026-08-21.md 交接文档已删 (内容并入 activeContext)
+- [ ] 实机验证 (需训练侧确认): start_phase_all.sh 走通三阶段, 重点 RPS 交接不再崩
+
+### Phase 0 语音欢迎融入 (2026-08-21)
+- [x] 用户定案: 复用 /data/Speech 全部方案, 文案零自定义 (不传 --message, 走对方 config.json greeting.message)
+- [x] estun_greeting_phase0.py `_announce_voice()`: subprocess.Popen start_greeting.sh --no-enter (非阻塞 + 独立进程组); 脚本不存在/失败安全跳过
+- [x] 触发点: `_wait_for_person` 检测到人进门 (stable≥3) 成功后异步播报; 不改 CRP/状态机/start_phase_all.sh
+- [x] config greeting.voice 段 (enabled/script; 无 message)
+- [x] 新测试 5 例 + 全量 166 测试绿
+- [ ] 实机验证 (需训练侧确认): 导入 estun_greeting_phase0.crp 跑 Phase0, 人进门时 JBL 播报对方问候文案
+
 ### Phase E RPS 接入: py + config + 一键脚本 (2026-08-21)
 - [x] 用户写 CRP → 入库 `doc/estun_rps_phaseE.crp` (Down-667, sha a5054c91, 端口 8700; open→P1→While(独立 whileflag)→Home存储点→close; 位姿米/度)
 - [x] config `estun_config.yaml rps:` 段 (port/done_flag/voice_log_path/arm_settle_delay/max_game_wait/rounds/poses.play/auto_invite)
@@ -15,8 +34,14 @@
 - [x] **多局制 rounds=0 等人退出 (2026-08-21, 代码完成待实机)**: config rounds 1→0 + quit_keyword; py 同时 tail [RPS][RESULT] 与裸"退出"行 (rps_voice_game 退出分支 print("退出"), 玩家说"退出游戏/不玩了"); rounds>=1 固定 N 局保留
 - [x] **RPS 服务优雅收尾 (2026-08-21, 代码完成待实机)**: start_rps_phaseE.sh shutdown_rps() — phaseE 退出后 SIGTERM rps_stream+realtime_voice --rps-game (atexit 释放相机/串口), 兜底 fuser -k 8768, 免手动 Ctrl+C
 - [x] 新增 5 测试 (退出触发/局后退出/精确匹配/超时兜底/rounds=2) + 全量 153 测试绿 (py_compile + bash -n 过)
-- [ ] 实机复测多局制: 第 1 局→"开始"→第 2 局→"退出游戏"→DONE→Home→RPS 服务自动收尾
-- [ ] 三 CRP 融合 (Phase0 8600 + A2D 8080 + PhaseE 8700, 段间 wait 1s)
+- [x] 实机复测多局制: 第 1 局→"开始"→第 2 局→"退出游戏"→DONE→Home→RPS 服务自动收尾 (用户确认)
+- [x] **三 CRP 融合代码完成 (2026-08-21)**: `doc/estun_fused_phase_all.crp` (sha 2a2ab984) + `start_phase_all.sh` + `scripts_gen/fuse_three_crp.py`
+  - 段序 Socket1:8600→wait3s→Socket0:8080→wait3s→Socket2:8700; Home 去重; 变量全保留; 段单位各保
+  - A2D Phase D socketreadstr 20s→60s (py 已默认 ABORT, 不动框架)
+  - A2D py --defer-devices (只初始化不占设备, _ensure_devices 连接时开); phaseE auto-invite 重试
+  - sh 预启动 Phase0/A2D-defer/phaseE/8770门禁, 监控端口交接起停 RPS
+  - 全量 159 测试绿 (新增 defer-devices 4 + invite 重试 2); 融合 CRP helpers 结构验证全过
+- [ ] 实机联调三阶段融合: 示教器导入 estun_fused_phase_all.crp + bash start_phase_all.sh; 验证 defer-devices 开设备耗时、RPS 晚起 auto-invite、麦克风交接
 
 ### Phase 0 打招呼独立交付: py + CRP (2026-08-20)
 - [x] 更新 doc/state_machine_reference.crp ← IDLEtemp-Down-645 (sha256 a8a8ee00, 状态机单独保存, 旧版 .bak)
@@ -208,13 +233,13 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
+| 🔴 三阶段融合实机联调 | estun_fused_phase_all.crp + start_phase_all.sh (代码完成 159 绿); 示教器导入走通三阶段; 验证 defer-devices/RPS 晚起/麦克风交接 |
 | 🟡 证据合同 5→10 申报 (训练侧) | ROT_THETA_WIN 对齐 10; 随 18 回合采集一并申报 (协作线) |
 | 🟡 异常点 110950 重采 | pos_side 数据点 d=0.531 近距; 可随 18 回合采集顺带 |
 | 🟡 Phase 0 握手超时备选 | 若握手变慢: 方案A=CRP 90→110~120s / 方案B=py force_release_timeout 60→45s (现冗余足够) |
 | 🟡 豆包实机联调 (1/2/3) + MiMo 对比 | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色; 延迟对比 (遗留, 去留待定) |
 
-已通过/已闭环 (2026-08-21 用户确认): Phase E 单局 + 多局制复测 ✅ (de143d1) · data_sm 各档 P1 复测 ✅ · pos_side 只读验证 ✅ · 10 帧稳定窗口实机验证 ✅ · θ 稳定性记录工具逐档运行 ✅ · Phase D 失败根因 ✅ (cup 裁剪+杯壁 + P3 前移 + HandInCup gate fix + 语音门禁) · sudu2 实机验证 ✅ (随 Phase D CRP 实机覆盖) · 单相机 SM 联调 ❌ 排除 · CRP 实机导入测试 ❌ 过时 (estun_handle_cup_sm.crp 已实机走通)
+已通过/已闭环 (2026-08-21 用户确认): Phase E 单局 + 多局制复测 ✅ (de143d1) · data_sm 各档 P1 复测 ✅ · pos_side 只读验证 ✅ · 10 帧稳定窗口实机验证 ✅ · θ 稳定性记录工具逐档运行 ✅ · Phase D 失败根因 ✅ (cup 裁剪+杯壁 + P3 前移 + HandInCup gate fix + 语音门禁) · sudu2 实机验证 ✅ (随 Phase D CRP 实机覆盖) · **三 CRP 融合代码 ✅ (待实机)** · 单相机 SM 联调 ❌ 排除 · CRP 实机导入测试 ❌ 过时 (estun_handle_cup_sm.crp 已实机走通)
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)

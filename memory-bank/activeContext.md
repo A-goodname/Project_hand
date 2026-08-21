@@ -12,9 +12,48 @@
 
 训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。
 
-**Phase E RPS 接入（✅ 全部完成 2026-08-21）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `a5054c91`，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付。**完整单局已实机走通**（臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home）；**多局制 rounds=0 等人退出**（"退出游戏/不玩了"→日志裸"退出"行→DONE）+ **RPS 服务优雅收尾**（de143d1, 153 测试绿），**实机复测通过（用户 2026-08-21 确认，1→2 局→退出→DONE→Home→RPS 自动收尾）**。排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。待办：仅剩三 CRP 融合。
+**Phase E RPS 接入（✅ 全部完成 2026-08-21）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `e79eceee` 已更新，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付。**完整单局已实机走通**；**多局制 rounds=0 等人退出** + **RPS 服务优雅收尾**（de143d1）实机复测通过。排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。**三 CRP 融合代码完成（2026-08-21，待实机）**：`doc/estun_fused_phase_all.crp` + `start_phase_all.sh`（Phase0→A2D→E 一次走通，A2D --defer-devices 只初始化不占设备，RPS 晚起 auto-invite 重试）。
 
 ## 最近变更
+
+### 融合 RPS 交接加固 (2026-08-21, 同事 review + 用户实测驱动; 交接文档已删)
+
+1. **用户实测推翻沉降假设**: 单独跑 `reference/orchestrator_standalone/hand_in_cup.py` 按 q 关闭后 **0s 立即起 PhaseE 成功** → "USB 沉降 15s 不够" 结论不成立; 崩的根因 = **A2D 进程没退干净仍起 RPS** (非沉降)
+2. **start_phase_all.sh 硬门禁**: 等 A2D 进程退出加 `A2D_EXITED` 标记, 超时 30s 未退出 → `exit 1` 禁止起 RPS (原空转后继续); `RPS_SETTLE 15→5s`
+3. **cup_sm stop() teardown 补齐 (对齐状态机 main.py finally)**: `_hic_active=False` + `_camera_b.release()后置None` + `_person_detector.stop()` + `_camera_b_thread.join(timeout=5)` + `_hand_in_cup_detector.close()` (关 MediaPipe native) + 之后才 disable_hand
+4. **Phase0 stop() 显式关灵巧手** (review B 点): 加 `disable_hand()` (三阶段共用 STM32 串口, 不能依赖解释器析构)
+5. **helper RPS 失败重试** (review D 点): 起 rps_stream 确认 8768, 进程早退/未监听 → 等 10s 沉降重试 ≤3 次 (RPS_MAX_ATTEMPTS 可 env 覆盖); 利用 phaseE auto-invite 60s 窗口
+6. **语音 PID 修正** (review E 点): `| tee` 管道改 `> >(tee)` 进程替换, `$!` 指向真实 python 而非 tee
+7. **门禁确认退出** (review F 点): 新增 `wait_gate_gone()` 轮询确认 8770 进程+端口都消失 (shutdown_rps/cleanup/交接停门禁三处), 替代裸 sleep 1
+8. **启动前清旧实例** (review G 点): pkill 旧 phase0/cup_sm/phaseE py + sleep 1 + pkill -KILL 兜底
+9. **验证**: bash -n + helper 重试/门禁逻辑模拟测试 PASS + **全量 168 测试绿** (Phase0 stop 测试 +2)
+
+### Phase 0 语音欢迎融入: 检测到人进门异步播报 (2026-08-21, 复用 /data/Speech 全部方案)
+
+1. **用户定案 (复用对方, 零自定义)**: 文案不自定义 — `_announce_voice()` 调 `start_greeting.sh --no-enter` **不传 --message**, 由 `greeting_announcer.py` 读 `/data/Speech/config.json` `greeting.message` ("来自同济大学的各位老师晚上好呀！"); 对方改文案我方自动跟随
+2. **接入点 (用户指出最简方案)**: `estun_greeting_phase0.py` `_wait_for_person` 检测到人进门 (stable≥3) 成功后 → `_announce_voice()` — **subprocess.Popen 非阻塞 + start_new_session=True** (独立进程组防与 phase0 同组被误杀); 不改 CRP/状态机/start_phase_all.sh
+3. **config**: `greeting.voice` 段 (enabled/script; 无 message — 文案全部走对方); 脚本不存在/启动失败安全跳过
+4. **验证**: py_compile + config yaml + 新测试 5 例 (检测触发/超时不播/disabled 不播/缺脚本跳过/非阻塞) + **全量 166 测试绿** (161+5)
+
+### 三 CRP 融合实机排坑: A2D 永不 accept + 语音门禁提前启动 (2026-08-21)
+
+1. **A2D defer 永不 accept (实机定位)**: `run()` 主循环 `_accept_tcp()` 只在**帧非 None 分支**调用; `--defer-devices` 下 detector=None → `_get_frames()` 恒 None → 走 continue 分支 → **8080 永不 accept** → CRP 连上无响应、一直循环收、设备也永不打开。**修复**: 空闲分支也调 `_accept_tcp()` (run 循环里 `continue` 前)。新测试 `test_run_accepts_tcp_when_no_frames`
+2. **语音门禁提前启动 (用户指出)**: 原 sh 预启动 8770 门禁 (Phase 0/A/B 就在跑)。**修复**: 改为 A2D py 在 READY (Phase D) 时**异步自启** — `_init_handover_voice` 触发后台线程 `_gate_setup`: 先连 8770, 不在则 `subprocess.Popen` realtime_voice --config, 轮询 ≤20s 等就绪; 不阻塞 READY/HandInCup; 不可用回退纯视觉; `stop()` terminate 自启门禁。sh 不再预开 8770 (监控段 pkill 兜底)
+3. **open_term 引号 bug (首轮报错)**: `bash -c "'$*'"` 把含空格命令当单个文件名 → 127; 改 `bash -c "$*; ..."`
+4. **多窗口 CPU 渲染太卡 (GPU 不支持渲染)**: 3 终端 + A2D 两个 cv2 视频窗 + Phase0 预览窗全 CPU imshow → 太卡。**修复**: 融合默认 **headless** — A2D py 加 `--no-preview` (不建窗口/不 imshow/不 waitKey), Phase0 传 `--no-preview` (已有); sh `PREVIEW=1` 可开预览调试。新测试 `test_no_preview_skips_windows`
+5. **RPS 服务启动崩溃 (实机定位+隔离)**: 融合下 rps_stream 在第二段 MediaPipe init 时静默崩溃 (C++ segfault, 无回溯), standalone 正常。**隔离确认** (2026-08-21): rps_stream 用 `--hand-dry-run`/`--enable-hand`/`tee` 三种方式 standalone 均正常 (Flask 起来) → **不是服务/启动方式问题, 是 USB 设备沉降时间**: A2D 刚用完 D435i+UGREEN+串口, RPS ~3s 后启动即崩溃, 等几分钟就正常。**修复**: sh 起 RPS 前等 A2D 进程完全退出 (锚定 pgrep, ≤30s) + **`RPS_SETTLE=15`s 沉降** (可 env 覆盖; phaseE auto-invite 60s 窗口内完全来得及)
+6. **验证**: py_compile + bash -n + 全量 **161 测试绿** (defer-accept 1 + no-preview 1)
+
+### 三 CRP 融合: Phase0 + A2D + E (2026-08-21, 代码完成待实机)
+
+1. **交付物**: `doc/estun_fused_phase_all.crp` (sha `2a2ab984`, 97 widgets/23 points/20 project vars) + `start_phase_all.sh`; 融合脚本 `scripts_gen/fuse_three_crp.py` (可复现)
+2. **CRP 融合** (用户定): Socket1:8600→wait 3s→Socket0:8080→wait 3s→Socket2:8700; **Home 去重一个** (P0/A2D 共享 ID ptmquqgw91h2026u, E 的 Home 重指, 旧 ID 0 引用); 变量全保留 (projectcfg.vars.data 三文件逐字节相同用 A2D; data.vars.project = A2D15+E5 并集); 位姿单位各段保留 (段1 mm, 段2/3 m); **A2D Phase D socketreadstr 接受延时 20s→60s** (py 已默认 ABORT, 最坏 ~55s 判决; 不动 CRP 框架)
+3. **A2D py 加 `--defer-devices`** (用户定, 防位姿不稳定): start() 只 init 配置/标定/稳定器+bind 8080, **不占设备不检测**; 新增 `_ensure_devices()` 在 `_handle_session` 入口打开灵巧手/D435i/Camera B (幂等); `_get_frames` 在 detector None 时空转 → 主循环无需改; 位姿稳定靠 PoseStabilizer 等 N 帧稳定才发 pack_three
+4. **phaseE py auto-invite 重试**: `_auto_invite_trigger(quiet=)` + `_auto_invite_with_retry()` (ENXIO 每 3s 重试 ≤60s), 兜底 RPS 服务晚起
+5. **sh 编排** (用户定, 服务各自 gnome-terminal, sh 只协调): 预启动 A(Phase0)/C(A2D --defer-devices)/D(phaseE)/B(8770 门禁 VOICE_GATE=0 可关); 监控端口释放做设备交接 — 8080 释放→停门禁+起 RPS 服务(8768), 8700 释放→停 RPS; 8600 释放→日志; 设备/麦克风严格串行 (Phase0占→释放→A2D占→释放→RPS占)
+6. **排坑**: ①CposOffset 点类型在 `data.value.postype` 非 `type` 字段 ②Home 点 P0/A2D 共享 ID, E 不同 ID 需重指 ③`doc/*.crp` 在 .gitignore (CRP 不入 git) ④`wait` 在 helper `set -e` 下 SIGTERM 会提前 abort → set +e 包裹
+7. **验证**: py_compile + bash -n + 全量 **159 测试绿** (新增 defer-devices 4 + invite 重试 2); 融合 CRP helpers 结构验证 (socketcreate 8600/8080/8700、wait 3s×2、Phase D 60s、Home 引用 4 处、CposOffset pointa=dcpos/pointb=cpos 全对、socketclose 无 string data)
+8. **待办 (实机)**: 示教器导入 `estun_fused_phase_all.crp` + `bash start_phase_all.sh` 走通三阶段; 重点验证 A2D defer-devices 连接时开设备耗时 < Phase B 60s、RPS 晚起 auto-invite 重试成功、8770 门禁→RPS voice 麦克风交接
 
 ### Phase E 多局制 + RPS 服务优雅收尾 (2026-08-21, 代码完成待实机)
 
@@ -262,10 +301,10 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
+| 🔴 | **三阶段融合实机联调** | `doc/estun_fused_phase_all.crp` + `start_phase_all.sh` 代码完成 (159 测试绿)；示教器导入 + 一键脚本走通 Phase0→A2D→E，验证 defer-devices 开设备耗时、RPS 晚起 auto-invite、麦克风交接 |
 | 🟡 | 证据合同 5→10 申报（训练侧） | ROT_THETA_WIN 对齐 10 已定案；随 18 回合采集一并申报（协作线，非实机新动作） |
 | 🟡 | 异常点 110950 重采 | pos_side 数据点 d=0.531 近距；可随 18 回合采集顺带 |
 | 🟡 | Phase 0 握手超时备选 | 若握手场景变慢：方案A=CRP 90→110~120s / 方案B=py force_release_timeout 60→45s（现冗余足够，未触发） |
 | 🟡 | 豆包实机联调 + MiMo 对比 | 阶段 1/2/3 实机 + 延迟对比（遗留，非主线，去留待定） |
 
-已通过/已闭环（2026-08-21 用户确认）：Phase E 单局 + 多局制复测 ✅ · data_sm 各档 P1 复测 ✅ · pos_side 只读验证 ✅ · 10 帧稳定窗口实机验证 ✅ · θ 稳定性记录工具逐档运行 ✅ · Phase D 失败根因 ✅ · 单相机 SM 联调 ❌ 排除 · CRP 实机导入测试 ❌ 过时（Cup 阶段已实机走通） · sudu2 实机验证 ✅（随 Phase D CRP 实机已覆盖）
+已通过/已闭环（2026-08-21 用户确认）：Phase E 单局 + 多局制复测 ✅ · data_sm 各档 P1 复测 ✅ · pos_side 只读验证 ✅ · 10 帧稳定窗口实机验证 ✅ · θ 稳定性记录工具逐档运行 ✅ · Phase D 失败根因 ✅ · 三 CRP 融合代码 ✅（待实机）· 单相机 SM 联调 ❌ 排除 · CRP 实机导入测试 ❌ 过时（Cup 阶段已实机走通） · sudu2 实机验证 ✅（随 Phase D CRP 实机已覆盖）

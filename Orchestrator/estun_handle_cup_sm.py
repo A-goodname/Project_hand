@@ -19,6 +19,7 @@ Camera B:   PersonDetector (人就位) + HandInCupDetector (手在杯判定)
   python Orchestrator/estun_handle_cup_sm.py
 """
 
+import argparse
 import os
 import socket
 import sys
@@ -310,6 +311,11 @@ class HandleCupSM:
         self._hand_port = "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"
         self._phase_b_timeout = 60.0
 
+        # ---- 融合模式 (三 CRP 融合, --defer-devices): 只初始化不占设备, 连接时才打开 ----
+        self._defer_devices = False    # True=start 不 init_hand/_init_detector/_init_camera_b, 等 _ensure_devices
+        self._devices_opened = False   # _ensure_devices 幂等标记
+        self._no_preview = False       # True=不渲染 cv2 窗口 (融合 headless, 省 CPU; GPU 不支持渲染时必需)
+
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
 
@@ -325,6 +331,8 @@ class HandleCupSM:
         self._handover_voice = None         # HandoverVoiceClient (TCP 127.0.0.1:8770)
         self._voice_gate_enabled = False    # 语音门禁服务可用时 True
         self._handover_voice_timeout = 30.0 # 语音确认超时 (s)
+        self._gate_started = False          # 门禁已尝试启动 (READY 时异步触发, 防 Phase A/B 提前启动)
+        self._gate_proc = None              # 自启的 8770 门禁子进程 (stop 时 terminate)
         self._hand_in_cup_lock = threading.Lock()
         self._camera_b_thread = None
         self._last_frame_b = None       # Camera B 最近帧缓存 (线程写, 主循环 imshow, 2026-08-21)
@@ -336,6 +344,13 @@ class HandleCupSM:
     def start(self):
         """初始化全部资源."""
         self._load_configs()
+        if self._defer_devices:
+            # 融合模式: 只做初始化(配置/标定/稳定器) + bind, 不占设备不检测;
+            # 灵巧手/D435i/Camera B 在机器人连接时由 _ensure_devices 打开 (三 py 可同时预启动)
+            self._init_stabilizer_and_calib()
+            self._init_tcp()
+            print("[HandleCupSM] --defer-devices: 已初始化并监听 8080, 设备待连接时打开")
+            return
         self._init_hand()
         self._init_detector()
         self._init_stabilizer_and_calib()
@@ -343,18 +358,32 @@ class HandleCupSM:
         self._init_tcp()
         print("[HandleCupSM] 状态机已启动, 等待机器人连接...")
 
+    def _ensure_devices(self):
+        """融合模式: 机器人连接到达时打开设备 (灵巧手 + Camera A + Camera B). 幂等."""
+        if not self._defer_devices or self._devices_opened:
+            return
+        print("[HandleCupSM] 连接到达 → 打开设备 (灵巧手/Camera A/Camera B)...")
+        self._init_hand()
+        self._init_detector()
+        self._init_camera_b()
+        self._devices_opened = True
+        print("[HandleCupSM] 设备已就绪, 开始协议")
+
     def run(self):
-        """主循环: 帧获取 → 检测 → 可视化 → accept TCP."""
-        cv2.namedWindow("HandleCupSM | Camera A", cv2.WINDOW_NORMAL)
-        cv2.namedWindow("HandleCupSM | Camera B", cv2.WINDOW_NORMAL)
+        """主循环: 帧获取 → 检测 → 可视化 → accept TCP. --no-preview 下不渲染窗口 (headless)."""
+        if not self._no_preview:
+            cv2.namedWindow("HandleCupSM | Camera A", cv2.WINDOW_NORMAL)
+            cv2.namedWindow("HandleCupSM | Camera B", cv2.WINDOW_NORMAL)
 
         try:
             while not self._stop_event.is_set():
                 # [Step 1] 获取帧
                 color, depth_img, depth_cmap, depth_frame = self._get_frames()
                 if color is None or depth_frame is None:
+                    # 融合 defer-devices: 检测器未开(无帧)也必须 accept, 否则 8080 永不接受连接
+                    self._accept_tcp()
                     time.sleep(0.03)
-                    if cv2.waitKey(30) & 0xFF == ord("q"):
+                    if not self._no_preview and cv2.waitKey(30) & 0xFF == ord("q"):
                         print("[INFO] 用户按 q 退出")
                         self._stop_event.set()
                         break
@@ -365,18 +394,19 @@ class HandleCupSM:
                 if self._detect_active:
                     self._detect()
 
-                # [Step 3] 可视化
-                self._visualize(color.copy(), depth_cmap)
+                if not self._no_preview:
+                    # [Step 3] 可视化
+                    self._visualize(color.copy(), depth_cmap)
 
-                # [Step 3.5] Camera B 实时画面 (主线程 imshow, 线程只缓存帧)
-                if self._last_frame_b is not None:
-                    cv2.imshow("HandleCupSM | Camera B", self._last_frame_b)
+                    # [Step 3.5] Camera B 实时画面 (主线程 imshow, 线程只缓存帧)
+                    if self._last_frame_b is not None:
+                        cv2.imshow("HandleCupSM | Camera B", self._last_frame_b)
 
-                # [Step 4] 退出检测
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    print("[INFO] 用户按 q 退出")
-                    self._stop_event.set()
-                    break
+                    # [Step 4] 退出检测
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        print("[INFO] 用户按 q 退出")
+                        self._stop_event.set()
+                        break
 
                 # [Step 5] 非阻塞 accept
                 self._accept_tcp()
@@ -393,7 +423,10 @@ class HandleCupSM:
     def stop(self):
         """清理所有资源."""
         self._stop_event.set()
-        cv2.destroyAllWindows()
+        with self._hand_in_cup_lock:
+            self._hic_active = False    # 停 Camera B 线程的 HandInCup 检测 (先关 native 使用)
+        if not self._no_preview:
+            cv2.destroyAllWindows()
 
         if self._server:
             try:
@@ -409,12 +442,41 @@ class HandleCupSM:
             except Exception as e:
                 print(f"[WARN] 停止 pipeline 失败: {e}")
 
+        # ---- Camera B teardown (2026-08-21, 对齐状态机 main.py finally) ----
+        # 顺序: 先 release 解除可能阻塞的 V4L2 read → join 后台线程 → close HandInCup MediaPipe.
+        # 此前 stop() 只 release 相机, 未 join 线程/未 close detector → 融合下 RPS 交接时
+        # Camera B/MediaPipe native 资源未释放完, rps_stream 初始化崩溃 (同事 review 定位).
         if self._camera_b is not None:
             try:
                 self._camera_b.release()
                 print("[INFO] Camera B 已关闭")
             except Exception as e:
                 print(f"[WARN] Camera B 关闭失败: {e}")
+            self._camera_b = None
+
+        if self._person_detector is not None:
+            try:
+                self._person_detector.stop()   # start_camera=False 下 camera 为 None, 安全
+            except Exception as e:
+                print(f"[WARN] PersonDetector 停止异常: {e}")
+            self._person_detector = None
+
+        if self._camera_b_thread is not None:
+            try:
+                self._camera_b_thread.join(timeout=5.0)
+                if self._camera_b_thread.is_alive():
+                    print("[WARN] Camera B 线程未在 5s 内退出")
+            except Exception as e:
+                print(f"[WARN] Camera B 线程 join 异常: {e}")
+            self._camera_b_thread = None
+
+        if self._hand_in_cup_detector is not None:
+            try:
+                self._hand_in_cup_detector.close()
+                print("[INFO] HandInCup 检测器已关闭")
+            except Exception as e:
+                print(f"[WARN] HandInCup 检测器关闭异常: {e}")
+            self._hand_in_cup_detector = None
 
         if self._hand_available:
             try:
@@ -422,6 +484,14 @@ class HandleCupSM:
                 print("[INFO] 灵巧手已关闭")
             except Exception as e:
                 print(f"[WARN] 灵巧手关闭异常: {e}")
+
+        if self._gate_proc is not None:
+            try:
+                self._gate_proc.terminate()
+                print("[VOICE-GATE] 自启门禁服务已停止")
+            except Exception as e:
+                print(f"[WARN] 门禁服务停止异常: {e}")
+            self._gate_proc = None
 
         print("[HandleCupSM] 已退出")
 
@@ -708,12 +778,19 @@ class HandleCupSM:
         print("[INFO] Camera B 线程已启动")
 
     def _init_handover_voice(self):
-        """初始化语音门禁客户端 (内联 _HandoverClient, TCP 8770; 服务由 /data/Speech/realtime_voice.py 提供).
+        """初始化语音门禁 (异步; 用户定: 不在 Phase A/B 提前启动, READY 才尝试).
 
-        服务不可用时回退纯视觉 (不阻塞主流程). 返回 True=语音门禁启用.
+        TCP 8770 由 /data/Speech/realtime_voice.py --config 提供 (gate-only).
+        服务已在跑则直接连接; 不在则自启子进程, 后台等 8770 就绪再连.
+        全程不阻塞 READY 处理 (HandInCup 照常开始); 不可用则回退纯视觉.
         """
-        if self._voice_gate_enabled:
-            return True
+        if self._voice_gate_enabled or self._gate_started:
+            return
+        self._gate_started = True
+        threading.Thread(target=self._gate_setup, daemon=True,
+                         name="voice-gate-setup").start()
+
+    def _connect_handover_voice(self):
         try:
             client = _HandoverClient(host="127.0.0.1", port=8770, timeout=2.0)
             client.start()   # 连接 + HANDOVER_START, 确认服务可用
@@ -721,11 +798,37 @@ class HandleCupSM:
             self._voice_gate_enabled = True
             print("[VOICE-GATE] 语音门禁已启用 (127.0.0.1:8770, 视觉命中后需语音确认才松手)")
             return True
-        except Exception as e:
-            self._handover_voice = None
-            self._voice_gate_enabled = False
-            print(f"[VOICE-GATE] 语音门禁不可用 ({e}) → 回退纯视觉 (检测到即松手)")
+        except Exception:
             return False
+
+    def _spawn_handover_gate(self):
+        """自启 8770 门禁服务 (realtime_voice --config, gate-only, 不开机器人/相机)."""
+        import subprocess
+        try:
+            self._gate_proc = subprocess.Popen(
+                ["/data/xilu/conda-envs/VLA/bin/python",
+                 "/data/Speech/realtime_voice.py",
+                 "--config", "/data/Speech/config.json"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            print(f"[VOICE-GATE] 门禁服务已自启 (pid={self._gate_proc.pid})")
+        except Exception as e:
+            self._gate_proc = None
+            print(f"[VOICE-GATE] 门禁服务自启失败: {e} → 回退纯视觉")
+
+    def _gate_setup(self):
+        """后台线程: 尝试连接 8770 → 失败则自启服务 → 轮询等就绪."""
+        if self._connect_handover_voice():
+            return
+        print("[VOICE-GATE] 8770 未就绪 → 自启门禁服务并等待...")
+        self._spawn_handover_gate()
+        deadline = time.time() + 20.0
+        while time.time() < deadline and not self._stop_event.is_set():
+            time.sleep(0.5)
+            if self._connect_handover_voice():
+                return
+        if not self._voice_gate_enabled:
+            print("[VOICE-GATE] 门禁服务 20s 未就绪 → 回退纯视觉 (检测到即松手)")
 
     def _camera_b_loop(self):
         """Camera B 独立线程: 持续读帧 → PersonDetector → HandInCupDetector.
@@ -983,6 +1086,9 @@ class HandleCupSM:
         入口移植自 state_machine._handle_client_impl,
         运动流程 (Phase A-C) 移植自 estun_handle_cup_run._handle_client_impl."""
         print(f"[INFO] 客户端已连接: {addr}")
+
+        # ---- 融合模式: 连接到达 → 打开设备 (灵巧手/Camera A/Camera B) ----
+        self._ensure_devices()
 
         # ---- 预计算工具偏移 ----
         _, t_handle_effective = compute_gripper_offset_transform(
@@ -1482,7 +1588,17 @@ def main():
     print("  流程: Phase A(接收位姿) → Phase B(发送Handle) → Phase C(CUP回复)")
     print("=" * 60)
 
+    ap = argparse.ArgumentParser(description="Handle+Cup 状态机 (TCP 8080)")
+    ap.add_argument("--defer-devices", action="store_true",
+                    help="融合模式: 只初始化(配置/标定/稳定器)+bind 8080, 不占设备不检测; "
+                         "机器人连接时才打开灵巧手/D435i/Camera B (三 CRP 融合时与 Phase0/phaseE 同时预启动)")
+    ap.add_argument("--no-preview", action="store_true",
+                    help="不渲染 cv2 窗口 (headless; 融合演示多窗口 CPU 渲染太卡, GPU 不支持渲染时必需)")
+    args = ap.parse_args()
+
     sm = HandleCupSM()
+    sm._defer_devices = args.defer_devices
+    sm._no_preview = args.no_preview
     sm.start()
     sm.run()
 

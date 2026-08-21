@@ -108,6 +108,24 @@ class Phase0VoiceTest(unittest.TestCase):
         call = popen.call_args
         self.assertEqual(call.kwargs["start_new_session"], True)
 
+    # ---------- 5. stop() 显式关闭灵巧手 (review B 点) ----------
+
+    def test_stop_closes_hand(self):
+        svc = self._svc()
+        svc._hand = object()   # 模拟有灵巧手
+        with mock.patch("Estun.utils_shared.disable_hand") as dh:
+            svc.stop()
+        dh.assert_called_once()
+        self.assertIsNone(svc._hand, "stop 后应置空 _hand")
+
+    def test_stop_hand_close_failure_safe(self):
+        svc = self._svc()
+        svc._hand = object()
+        with mock.patch("Estun.utils_shared.disable_hand",
+                        side_effect=RuntimeError("串口忙")):
+            svc.stop()   # 不抛异常
+        self.assertIsNone(svc._hand)
+
 
 if __name__ == "__main__":
     unittest.main()

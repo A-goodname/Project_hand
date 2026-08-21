@@ -104,14 +104,15 @@ class PhaseERps:
     #  RPS 游戏协调 (只读语音日志 + FIFO; 不 open 灵巧手/相机)
     # ================================================================
 
-    def _auto_invite_trigger(self):
+    def _auto_invite_trigger(self, quiet=False):
         """写 '\\n' 到 FIFO (realtime_voice stdin) 触发邀请; 失败提示人工按回车."""
         fifo = self._fifo_path
         try:
             fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
         except OSError as e:
             if e.errno in (errno.ENXIO, errno.ENOENT):
-                print(f"[RPS-PHASE-E] FIFO {fifo} 不存在/无读者 → 无法自动邀请, 请人工按回车")
+                if not quiet:
+                    print(f"[RPS-PHASE-E] FIFO {fifo} 不存在/无读者 → 无法自动邀请, 请人工按回车")
                 return False
             raise
         try:
@@ -120,6 +121,23 @@ class PhaseERps:
             os.close(fd)
         print(f"[RPS-PHASE-E] 已写回车到 FIFO {fifo} → 触发 RPS 邀请")
         return True
+
+    def _auto_invite_with_retry(self, max_wait=60.0, interval=3.0):
+        """RPS voice 未就绪 (FIFO 无读者) 时每 interval 重试邀请, 直到成功或超时.
+
+        融合场景: RPS 服务在 A2D 退出后才起 (~10s), 而 phaseE 已提前监听 8700;
+        首邀常遇 ENXIO (FIFO 无读端) → 每 interval 重试, voice 一读 FIFO 即触发邀请.
+        """
+        deadline = time.time() + max_wait
+        while not self._stop_event.is_set():
+            if self._auto_invite_trigger(quiet=True):
+                print("[RPS-PHASE-E] 邀请成功 (FIFO 已连接) → RPS 邀请已触发")
+                return True
+            if time.time() >= deadline:
+                print(f"[RPS-PHASE-E] 邀请重试 {max_wait:.0f}s 仍无 FIFO 读者 (RPS 服务未起?) → 请人工按回车")
+                return False
+            time.sleep(interval)
+        return False
 
     def _wait_round_done(self, timeout, start_pos=None):
         """Tail 语音日志, 等游戏结束. 返回 bool (是否等到).
@@ -203,7 +221,7 @@ class PhaseERps:
             print(f"[RPS-PHASE-E] 等机械臂到位 {self._settle_delay:.0f}s ...")
             time.sleep(self._settle_delay)
             if self._auto_invite:
-                self._auto_invite_trigger()
+                self._auto_invite_with_retry()
             else:
                 print("[RPS-PHASE-E] 请人工在 RPS 语音终端按回车触发邀请 (或加 --auto-invite)")
             self._wait_round_done(timeout=self._max_wait, start_pos=tail_start)
