@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import argparse
+import collections
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -109,6 +110,8 @@ def main():
     stab = PoseStabilizer(window=int(stab_cfg.get("window", 10)),
                           pos_thresh=pos_thresh, angle_thresh=angle_thresh,
                           theta_thresh=ROT_THETA_SPREAD_MAX)
+    # 完整检测字段缓存 (与稳定器同步入窗; 稳定后逐样本输出全字段, 对方 §1 要求)
+    sample_buf = collections.deque(maxlen=WINDOW_SAMPLES)
 
     out_dir = os.path.join(_project_root, "logs", "rotation_verify_zero_motion")
     os.makedirs(out_dir, exist_ok=True)
@@ -144,18 +147,31 @@ def main():
             # ---- data_sm 稳定机制: 有效帧 (pos+theta 齐全) 入窗, 恰满 10 帧且一致才出窗口 ----
             if phase == "collecting" and h["pos_cam"] is not None \
                     and h.get("theta_deg") is not None:
+                # 完整检测字段缓存 (与稳定器同步; 稳定后逐样本输出, 对方 §1 每有效样本全字段)
+                sample_buf.append({
+                    "theta_deg": float(h["theta_deg"]), "band": h.get("band"),
+                    "ratio": h.get("ratio"), "d": float(h["pos_cam"][2]),
+                    "rd": h.get("rd"), "handle_side": h.get("handle_side"),
+                    "kettle_bbox": h.get("kettle_bbox"),
+                    "tag_u": h.get("tag_u"), "tag_v": h.get("tag_v"),
+                })
                 stab.add(tuple(h["pos_cam"]), tuple(h["euler_cam"]),
                          float(h["theta_deg"]))
                 if stab.is_stable():
                     ths = stab.get_theta_samples()
                     th_med = float(np.median(ths))
                     band = resolve_rot_band(th_med, band0, band15_hi)
-                    samples = []
-                    # 稳定窗口内 10 帧: 从 buffer 取最近 10 个有效检测字段
-                    # (buffer 每项 (pos, euler, theta); ratio/d/rd 用各帧检测, 此处以当前窗口帧逐项取)
-                    for s in ths:
-                        samples.append({"theta_deg": round(float(s), 4)})
-                    # 每有效样本全字段: 用窗口期间缓存的各帧检测 (detect 输出当前帧)
+                    # ---- 逐样本记录 (每有效样本: theta/band/ratio/d/rd/handle_side/bbox/贴纸中心/config SHA/git rev) ----
+                    for i, s in enumerate(sample_buf, 1):
+                        rec = {
+                            "type": "sample", "window_id": WINDOWS[win_i][1],
+                            "idx": i, "target_angle_deg": WINDOWS[win_i][0],
+                            "config_sha256": cfg_sha, "git_rev": git_rev,
+                            "ts": time.time(),
+                            **s,
+                        }
+                        out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    # ---- 窗口汇总 ----
                     win_rec = {
                         "type": "window", "window_id": WINDOWS[win_i][1],
                         "target_angle_deg": WINDOWS[win_i][0],
@@ -173,6 +189,7 @@ def main():
                     win_i += 1
                     stab.reset()
                     stab.capture_generation()
+                    sample_buf.clear()
                     phase = "idle"
                     if win_i < len(WINDOWS):
                         nxt = WINDOWS[win_i][0]
