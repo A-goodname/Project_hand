@@ -19,6 +19,10 @@ FIFO="/tmp/rps_voice_stdin"
 HELPER="/tmp/rps_phaseE_service.sh"
 PREVIEW="${PREVIEW:-0}"   # 1=开 cv2 预览窗口 (调试); 0=headless (默认, GPU 不支持渲染省 CPU)
 RPS_SETTLE="${RPS_SETTLE:-5}"   # A2D 退出后到 RPS 启动的沉降秒数 (用户实测 hand_in_cup→PhaseE 0s 即可起; 留 5s 余量, 可 env 覆盖)
+# 各阶段 py 进程匹配模式 (pgrep -f 锚定真实命令行, 用于"等进程退出"交接判断)
+A2D_PATTERN="^${PROJ_PY} .*estun_handle_cup_sm\.py"
+PHASE0_PATTERN="^${PROJ_PY} .*estun_greeting_phase0\.py"
+PHASEE_PATTERN="^${PROJ_PY} .*estun_rps_phaseE\.py"
 
 # ---- 清理残留 (端口 + RPS 进程 + 临时文件) ----
 echo "[清理] 检查残留端口/进程..."
@@ -321,13 +325,16 @@ while true; do
     open_term "RPS 服务 (8768)" "bash $HELPER"
     rps_started=1
   fi
-  if [ "$rps_started" = "1" ] && ! ss -ltn | grep -q ':8700 '; then
-    echo "[交接] phaseE 已完成 (8700 释放) → 停 RPS, 融合 demo 结束"
+  if [ "$rps_started" = "1" ] && ! pgrep -f "$PHASEE_PATTERN" >/dev/null 2>&1; then
+    # 不能用"8700 端口释放"判断 phaseE 完成: phaseE serve() accept 后立即 close 监听 socket
+    # (单连接模式), 8700 在 game 期间就不监听 → 端口释放 ≠ 完成, 会过早停 RPS (2026-08-21 实机).
+    # 正确信号 = phaseE 进程退出 (socket 断开后 _handle_session finally 退出进程).
+    echo "[交接] phaseE 进程已退出 → 停 RPS, 融合 demo 结束"
     shutdown_rps
     break
   fi
-  if [ "$p0_logged" = "0" ] && ! ss -ltn | grep -q ':8600 '; then
-    echo "[交接] Phase 0 已完成 (8600 释放); A2D/phaseE 已就绪"
+  if [ "$p0_logged" = "0" ] && ! pgrep -f "$PHASE0_PATTERN" >/dev/null 2>&1; then
+    echo "[交接] Phase 0 进程已退出; A2D/phaseE 已就绪"
     p0_logged=1
   fi
   sleep 1

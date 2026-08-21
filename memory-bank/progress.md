@@ -1,5 +1,12 @@
 # Progress — Project_hand
 
+### 融合 phaseE 完成判断修复 (2026-08-21, 实机定位)
+- [x] 现象: RPS 可起 (第 2 次重试成功), 但 sh 过早"phaseE 已完成 (8700 释放)→停 RPS"
+- [x] 根因: phaseE serve() accept 后立即 close 监听 socket (单连接), 8700 从 game 一开始就不监听 → 端口释放≠完成
+- [x] 修复: start_phase_all.sh 改 pgrep 进程判断 (PHASEE_PATTERN/PHASE0_PATTERN/A2D_PATTERN 统一变量); 8600 提示处同步
+- [x] bash -n + 进程判断模拟测试 PASS
+- [ ] 实机复测: 融合 demo RPS 交接不再过早收尾 (等 phaseE 真正结束才停 RPS)
+
 ### 融合 RPS 交接加固 (2026-08-21, 同事 review + 用户实测驱动)
 - [x] 用户实测: hand_in_cup.py 按 q 关闭后 0s 即起 PhaseE 成功 → 推翻"USB 沉降 15s 不够"; 根因 = A2D 进程没退干净仍起 RPS
 - [x] start_phase_all.sh 等 A2D 退出硬门禁 (超时 30s → exit 1, 禁空转起 RPS); RPS_SETTLE 15→5s

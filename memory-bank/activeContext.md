@@ -16,6 +16,14 @@
 
 ## 最近变更
 
+### 融合 phaseE 完成判断修复: 端口释放 → 进程退出 (2026-08-21, 实机定位)
+
+1. **实机现象**: RPS 服务可起 (第 2 次重试成功 8768 就绪 + 语音起来), 但 sh 过早"phaseE 已完成 (8700 释放) → 停 RPS" — 融合 demo 刚起 RPS 就收尾
+2. **根因**: 主脚本用 `ss -ltn | grep ':8700 '` (LISTEN 端口) 判断 phaseE 完成; 但 phaseE `serve()` accept 到机器人连接后 `break` → `finally: server.close()` **立即关闭监听 socket** (单连接模式), 然后才进 `_handle_session` 等游戏 (最长 180s) → **8700 从 game 一开始就不监听, 端口释放 ≠ 完成** → 误判过早停 RPS
+3. **修复**: `start_phase_all.sh` 改**进程判断** — `pgrep -f "$PHASEE_PATTERN"` (phaseE 进程退出 = socket 断开后 finally 退出进程); 新增统一 pgrep 模式变量 `A2D_PATTERN/PHASE0_PATTERN/PHASEE_PATTERN`; 8600 那处 (Phase0 提示) 同样改进程判断
+4. **注意**: A2D 8080 释放信号仍可靠 (cup_sm run() 一直非阻塞 accept 保持监听, 仅 stop() 关); phaseE/Phase0 是单连接模式 accept 即关监听, 不能用端口判断
+5. **验证**: bash -n + 进程判断模拟测试 PASS (进程在 game 中不判完成 / 进程退出判完成)
+
 ### 融合 RPS 交接加固 (2026-08-21, 同事 review + 用户实测驱动; 交接文档已删)
 
 1. **用户实测推翻沉降假设**: 单独跑 `reference/orchestrator_standalone/hand_in_cup.py` 按 q 关闭后 **0s 立即起 PhaseE 成功** → "USB 沉降 15s 不够" 结论不成立; 崩的根因 = **A2D 进程没退干净仍起 RPS** (非沉降)
