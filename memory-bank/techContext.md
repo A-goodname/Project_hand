@@ -12,28 +12,23 @@
 | 设备探测 | Linux: `/sys/class/video4linux` 名称匹配 + ID_PATH 物理口 (同名相机区分); Windows: pygrabber (DSHOW) |
 | 配置 | PyYAML |
 
-## 开发环境
+## 开发环境 (Linux 主用, 2026-08-16 起唯一工作区)
 
-- **OS**: Windows 10 (原开发机)
-- **IDE**: VS Code
-- **Conda 环境**: `D:\Environment\miniconda\envs\Proj\python.exe`
-- **GPU**: MX450 (可选)
-- **Python 版本**: 3.11+
-
-### Linux 工作机 (2026-08-14 起, 主用)
-
-- **OS**: Ubuntu (Linux 7.0.0-28-generic)
-- **Conda 环境**: `/home/user/miniconda3/envs/Proj` (Python 3.11.15)
+- **工作区**: `/data/VLA/Project_hand` (唯一; Windows 副本仅历史)
+- **OS**: Ubuntu (Linux 7.0.0-29-generic)
+- **Conda 环境**: `/home/user/miniconda3/envs/Proj` (Python 3.11.15); 运行时 `conda run -n Proj python ...`
 - **GPU**: 可用 (torch 2.13.0+cu126, CUDA 可用)
 - **已装依赖**: numpy 2.4.4, opencv-python / opencv-contrib-python 4.13.0.92, PyYAML 6.0.3, pyserial 3.5, pyrealsense2 2.56.5.9235, ultralytics 8.4.48, mediapipe 0.10.35
 - **未装 (按需)**: EpicEye SDK, pyorbbecsdk2, pygrabber/comtypes (Windows 专属), 语音控制包 (sherpa-onnx / sounddevice / pypinyin / openai / websocket-client)
-- **git 配置**: `core.autocrlf input` + `.gitattributes` (`* text=auto`), 与 Windows 端 `autocrlf=true` 兼容
+- **git 配置**: 身份 `qaq <huangzhiwuming@163.com>`; `core.autocrlf input` + `.gitattributes` (`* text=auto`); **本地提交不 push**
 - **灵巧手串口**: `/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00` (STM32 VCP, 枚举为 /dev/ttyACM0; **禁 ttyACM 编号**); 460800; 节点 0x01; 当前用户已在 dialout 组直连 (2026-08-16 起全项目默认端口已统一为此路径)
+- **机械臂**: 192.168.101.100 ↔ 本机 `192.168.101.96:8080` (本机 IP 为 DHCP 动态, 启动前确认; Phase 0 独立服务用 8600)
 
 ## 项目目录结构
 
 - `Orchestrator/`: **主入口** — 4 阶段调度 + 双相机检测 + TCP 服务
-- `Estun/`: 单相机入口 (运行/演示/工具)
+- `Estun/`: 单相机入口 (运行/演示/工具); 示教工具 `estun_teach_handle_p1.py`/`estun_teach_cup.py`/`estun_teach_p3.py`; 独立交付 `estun_greeting_phase0.py` (Phase 0 打招呼, 不依赖协作线)
+- `Orchestrator/tests/`: 独立工具脚本 `test_tag_points.py` (HSV 判档验证) / `mark_roi_hsv.py` (ROI 分析) / `theta_stability_log.py` (θ 稳定性记录)
 - `RealSense_R/`: Camera A D435i 旧版 (手动像素映射)
 - `RealSense/`: Camera A D435i 新版 (rs.align)
 - `EyeToHand/`: Camera B UGREEN 1080P — PersonDetector + HandInCup
@@ -61,3 +56,5 @@
 - HandInCup: YOLOv8n (杯检测, class=41) + MediaPipe Hands (手部 21 landmarks, hand_landmarker.task)
 - HandInCup 模型路径可配置: `EyeToHand/config.yaml` → `hand_in_cup` 段
 - **/dev/videoN 编号不稳定** (插拔/驱动重绑会重排): 严禁硬编码索引, Camera B 必须按名称枚举 (EyeToHand/camera.py 的 sysfs 探测)
+- **Handle 检测 = HSV 青色贴纸链** (把手面贴标准矩形青贴纸, H 40-110/S/V≥50, 质心=中心 + 长短轴=6D 姿态); 旋转判档 = ratio→θ 反解→5 档 band (`handle_rotation` config: `band0_halfwidth=8`/`band15_hi=22`, pos_side 双阈值 + 分段线性); 抓取姿态 `C=C0-θ` 不逐档示教
+- **Phase 0 独立服务**: TCP 8600 单 Socket 4 步, socketcreate IP 必须 = 本机当前 IP (`192.168.101.96`, DHCP 动态); 迎宾相机 = 迎宾 UGREEN USB 口 `usb-0:4.1` (非 D435i); 三打招呼位姿在 `estun_config.yaml greeting.` (Z1/Z2/WS, mm/deg) + CRP GH_* 存储坐标兜底 (通信失败时回退)

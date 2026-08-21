@@ -15,6 +15,6 @@
 - 机械臂: ESTUN 机器人 (TCP 通信)
 - 灵巧手: Omnihand (USB 串口通信)
 - 相机: Camera A = RealSense D435i (眼在手上), Camera B = UGREEN 1080P (眼在手外, 纯RGB)
-- 检测算法: YOLOv8n (微调kettle) + YOLOv8m/YOLOv8n (cup) + MediaPipe Hands + HSV 白把手/红胶带
-- 位姿计算: 固定 ABC 模式 (基系 config 直读) + 深度反投影
+- 检测算法: YOLOv8n (微调kettle) + YOLOv8m/YOLOv8n (cup) + MediaPipe Hands + HSV 青色贴纸 (把手, 含旋转判档)
+- 位姿计算: 检测动态 6D + 旋转 band 补偿 (C=C0-θ) + 深度反投影; 固定 ABC 为回退模式
 - 环境: Python 3.11+, Conda (Proj), PyTorch CUDA 12.6

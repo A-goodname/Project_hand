@@ -23,7 +23,7 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 | 决策 | 选择 | 理由 |
 | ------ | ------ | ------ |
 | 检测框架 | YOLOv8 / YOLO-World / 微调 YOLOv8n / YOLOv8-Pose | 场景多样化, 各有利弊; Pose 用于 HandInCup |
-| 位姿计算 | PCA + PointNet++ (主), SAM2 (把手) | PCA 稳定高效, SAM 适合不规则物体 |
+| 位姿计算 | **HSV 青色贴纸 fitEllipse 长短轴 (6D) + ratio→θ 反解 (旋转判档)** (原 PCA+SAM 已弃用) | SAM 链 mask 不稳定 (08-17 弃); 标准矩形贴纸长短轴稳定, θ 由宽高比反解 |
 | 深度对齐 | rs.align (新相机) / 手动像素映射 (旧相机) | 旧相机内参损坏无法使用 rs.align |
 | 通信协议 | TCP 单 Session 全流程 | 简单可靠, 与 ESTUN 兼容; 避免多连接状态同步 |
 | 配置管理 | YAML 文件 (模块级 config.yaml) | 不改代码可调参数 |
@@ -53,6 +53,28 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 
 - Cup 检测器以 `start_pipeline=False` 初始化, 通过 `inject_frames()` 复用 Handle 检测器的帧
 - 避免重复打开相机硬件
+
+### Phase 0 打招呼独立协议 (独立交付, 2026-08-20)
+
+- `Estun/estun_greeting_phase0.py` + `doc/estun_greeting_phase0.crp` — 从 4 阶段调度 GreetingHandler **抽取独立化** (无 SharedContext/协作线依赖, 可单独跑)
+- TCP 8600 单 Socket 持久连接, 4 步: 发当前位姿 → 回 ZHAOSHOU1 → 等人 → 回 ZHAOSHOU2 → 挥手 → 回 WOSHOU → 握手 → 回 Home → SocketClose
+- 超时: CRP SocketReadStr 10/130/30/90s; py recv 5/130/30/90s (Step4 py 握手最坏 92.5s 略超 CRP 90s, 实机冗余足够, 方案 A=CRP 90→110~120s / B=py force_release_timeout 60→45s 备选)
+- 迎宾相机 = UGREEN USB 口 `usb-0:4.1` (人进门 YOLO 检测, 非 D435i); 握手 = 手背压力基线+增量双阈值
+
+### 旋转判档检测链 (Handle 抓取, 2026-08 定版)
+
+```text
+YOLO kettle bbox → bbox 侧向区间 (handle_side: 右侧 [70,110]% / 左侧 [-10,30]%)
+  → HSV 青色贴纸分割 (H 40-110/S/V≥50) → 最大域
+  → 质心(中心, 深度 color_to_depth_pixel 映射) + fitEllipse 长短轴(6D 姿态, X=短轴/Y=长轴/Z=X×Y)
+  → ratio=短/长 → θ 反解 (pos_side 双阈值+分段线性连续角度) → band
+    (5 档: [-8,8]=0, (8,22]=15, >22=30, 负侧对称; 无 ±45, +45 统一落 +30)
+```
+
+- **姿态规律**: 绕竖直轴旋转只改 C, `C = C0 - θ` (误差<0.2°), A/B 恒定 → 姿态不逐档示教
+- **抓取位置**: 每档 t_offset 示教 (p1_offsets 表 -30/-15/0/+15/+30); data_sm 按 band 查表 + θ 档内线性插值 (`_interp_p1_offset`) + P1 Z 钳位 [0.360,0.362]
+- **稳定窗口**: θ 并入 PoseStabilizer (pos+euler+θ 同窗, θ 极差<5°, 取 θ 中位数→band); window 10 / skip 3 (2026-08-20, 4 SM 共享)
+- **标准**: 相邻档误判可接受 (用户定), 无跨档即可; +45 工艺排除 (θ∈[-35,+35])
 
 ### 通信协议: `pack_three` + 新指令
 
@@ -141,7 +163,7 @@ HandleSM / HandleCupSM / HandleDataSM
 |--------|---------|--------------|-----|
 | HandleSM (estun_handle_sm.py) | Z-up 抬升 (lift_z) | PREGRIP/GRIPDONE/RESET | estun_handle_sm.crp (23w, 全 V100) |
 | HandleCupSM (estun_handle_cup_sm.py) | 倒水点 (杯位+示教偏移) | + CUP/RELEASE/GRIP | estun_handle_cup_sm.crp (53w, 含 H_P4) |
-| HandleDataSM (estun_handle_data_sm.py) | 倒水点 (同 HandleCupSM) | 同 HandleSM | estun_handle_data_sm.crp (35w, 含 H_P4) |
+| HandleDataSM (estun_handle_data_sm.py) | 倒水点 (同 HandleCupSM) | 同 HandleSM | estun_handle_data_sm.crp (38w, 含 H_P1 放回, sha256 4227c66b) |
 
 ### CRP H_P4 回退避碰模式
 
@@ -172,6 +194,10 @@ Orchestrator/                        ← 系统入口
   └── logger.py                      ← 终端+文件双输出
 
 Estun/                               ← 顶层入口 (单相机)
+  ├── estun_greeting_phase0.py       ← [新] Phase 0 打招呼独立服务 (8600 4 步, 迎宾相机 4.1)
+  ├── estun_teach_handle_p1.py       ← [新] Handle P1 示教工具 (--angle 逐档 t_offset)
+  ├── estun_teach_cup.py             ← [新] Cup P1 示教工具
+  ├── estun_teach_p3.py              ← [新] P3 倒水点示教工具
   ├── estun_handle_cup_run.py        ← RealSense Handle+Cup 融合 (参考实现)
   ├── estun_handle_run.py            ← RealSense 把手抓取
   ├── estun_run.py                   ← RealSense 实时瓶身
