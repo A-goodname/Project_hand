@@ -12,6 +12,10 @@
 - [x] **音响无播报修复 (2026-08-21)**: 双 PipeWire (wangxilu+user) 抢 JBL A2DP → user 挂不上 bluez sink; 停 wangxilu 音频 → 重连 JBL → bluez_output 出现 + 设默认
 - [x] **语音不出声再排 (2026-08-21)**: realtime_audio `pw-cat --target bluez` 在 A2DP 静默失败 → 复制 config 清空 pipewire_target + `--config` 传语音 → 走 default sink (=JBL, paplay 实测有声); 不改 wangxilu 文件
 - [x] **单局 demo 实机走通 (2026-08-21)**: 导入 `doc/estun_rps_phaseE.crp` + `start_rps_phaseE.sh` — 臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home; 浏览器画面 + 声音正常
+- [x] **多局制 rounds=0 等人退出 (2026-08-21, 代码完成待实机)**: config rounds 1→0 + quit_keyword; py 同时 tail [RPS][RESULT] 与裸"退出"行 (rps_voice_game 退出分支 print("退出"), 玩家说"退出游戏/不玩了"); rounds>=1 固定 N 局保留
+- [x] **RPS 服务优雅收尾 (2026-08-21, 代码完成待实机)**: start_rps_phaseE.sh shutdown_rps() — phaseE 退出后 SIGTERM rps_stream+realtime_voice --rps-game (atexit 释放相机/串口), 兜底 fuser -k 8768, 免手动 Ctrl+C
+- [x] 新增 5 测试 (退出触发/局后退出/精确匹配/超时兜底/rounds=2) + 全量 153 测试绿 (py_compile + bash -n 过)
+- [ ] 实机复测多局制: 第 1 局→"开始"→第 2 局→"退出游戏"→DONE→Home→RPS 服务自动收尾
 - [ ] 三 CRP 融合 (Phase0 8600 + A2D 8080 + PhaseE 8700, 段间 wait 1s)
 
 ### Phase 0 打招呼独立交付: py + CRP (2026-08-20)

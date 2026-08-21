@@ -1,9 +1,10 @@
 #!/bin/bash
-# 一键启动 Phase E RPS 游戏 (2026-08-21):
+# 一键启动 Phase E RPS 游戏 (2026-08-21, 多局制 + 优雅收尾 2026-08-21):
 #   终端①(新窗口): RPS 服务 (rps_stream.py --enable-hand + realtime_voice.py --rps-game, VLA Python)
-#      - realtime_voice stdout → 终端 + /tmp/rps_voice_phaseE.log (phaseE py tail 它等 [RPS][RESULT])
+#      - realtime_voice stdout → 终端 + /tmp/rps_voice_phaseE.log (phaseE py tail 它等游戏信号 [RPS][RESULT]/退出裸行)
 #      - auto_invite=1 → 语音 stdin 接 FIFO, phaseE py 写回车触发邀请; 否则人工在 RPS 终端按回车
-#   本终端:        estun_rps_phaseE.py (Proj Python, 等机器人连接, 一轮 socket 断开后自动退出)
+#   本终端:        estun_rps_phaseE.py (Proj Python, 等机器人连接, 多局制: rounds=0 等人退出, 退出关键词/超时 → DONE 回 Home → socket 断开 → py 退出)
+#   收尾:          phaseE py 退出后自动 SIGTERM rps_stream + realtime_voice (atexit 释放相机/MediaPipe/串口), 免手动 Ctrl+C
 # 用法: bash start_rps_phaseE.sh
 # 前提: 机器人端 CRP 已导入 (open→P1→While→Home→close, 端口 8700); RPS 相机 (Camera B = usb-0:2) 空闲
 #
@@ -27,6 +28,20 @@ print('1' if cfg['estun'].get('rps', {}).get('auto_invite', {}).get('enabled', F
 " 2>/dev/null || echo 0
 }
 AUTO_INVITE=$(read_auto_invite)
+
+# ---- 优雅收尾: SIGTERM RPS 服务 (rps_stream atexit 释放相机/MediaPipe/串口; realtime_voice finally 关资源) ----
+# 只匹配 --rps-game 的语音进程, 不误伤递杯门禁 (realtime_voice.py --config, 8770)
+shutdown_rps() {
+  echo "[收尾] phaseE 结束 → 优雅停 RPS 服务 (SIGTERM rps_stream + realtime_voice --rps-game)"
+  pkill -TERM -f 'realtime_voice.py --rps-game' 2>/dev/null || true
+  pkill -TERM -f 'rps_stream.py' 2>/dev/null || true
+  sleep 1
+  if ss -ltn | grep -q ':8768 '; then
+    echo "[WARN] 8768 仍被占用 → fuser -k 强制停"
+    fuser -k 8768/tcp 2>/dev/null || true
+  fi
+  echo "[收尾] RPS 服务已停止 (相机/串口已释放)"
+}
 
 echo "=============================================="
 echo " Phase E RPS 一键启动  auto_invite=$AUTO_INVITE"
@@ -123,6 +138,9 @@ if [ "${RPS_OPEN_BROWSER:-1}" = "1" ]; then
 fi
 
 echo "[RPS] 启动语音服务 realtime_voice.py --rps-game (stdout→终端+日志)..."
+# 收尾时主脚本 SIGTERM 语音进程 → 管道非零退出, set -e + pipefail 会提前 abort;
+# 用 set +e 包裹, 捕获 status 后再恢复, 保证打印退出信息并走 cleanup
+set +e
 if [ "$AUTO_INVITE" = "1" ]; then
   echo "[RPS] 语音 stdin=FIFO (phaseE 自动邀请); 终端回车将不可用"
   sudo -u user env -u PIPEWIRE_REMOTE -u PIPEWIRE_RUNTIME_DIR -u PULSE_SERVER -u PULSE_RUNTIME_PATH \
@@ -137,6 +155,7 @@ else
     "$PYTHON" "$VOICE_SCRIPT" --rps-game --config "$VOICE_CONFIG" 2>&1 | tee -a "$VOICE_LOG"
 fi
 status=$?
+set -e
 echo "[RPS] 语音服务退出 (code=$status)"
 exit "$status"
 EOS
@@ -156,16 +175,17 @@ echo "开 RPS 服务窗口..."
 gnome-terminal --title="RPS 语音服务 (8768)" -- bash -c "'$HELPER'; echo 'RPS 服务已退出 (code='\$?')'; exec bash" \
   || echo "[WARN] 无法打开 gnome-terminal → RPS 服务未启动, 请手动跑 $HELPER"
 
-# ---- 本终端: phaseE py (等机器人连接, 一轮后自动退出) ----
-echo "本终端启动 phaseE (一轮 RPS 后自动退出)..."
+# ---- 本终端: phaseE py (多局制: rounds=0 等人退出, 玩家说 '退出游戏/不玩了' 或超时 → DONE → Home → socket 断开 → 退出) ----
+echo "本终端启动 phaseE (多局制, 玩家说 '退出游戏/不玩了' 或超时后回 Home 自动退出)..."
 cd "$PROJECT_DIR"
 set +e
 "$PROJ_PY" "$PROJECT_DIR/Estun/estun_rps_phaseE.py"
 rc=$?
 set -e
 
-# ---- 清理 ----
+# ---- 收尾: 优雅停 RPS 服务 + 清理 (无论 phaseE 正常/异常退出, 都释放相机/串口) ----
+shutdown_rps
 if [ -n "$FIFO_HOLDER" ]; then kill "$FIFO_HOLDER" 2>/dev/null || true; fi
 rm -f "$HELPER"
-echo "phaseE 已退出 (code=$rc)"
+echo "phaseE 已退出 (code=$rc), RPS 服务已收尾"
 exit "$rc"

@@ -18,6 +18,12 @@ TCP 协议 (8700, 单 Socket 持久连接, 位姿串 [x,y,z,a,b,c] 单位 米,�
   - 禁止 open 灵巧手 (RPS 服务独占 STM32 串口) / 禁止碰相机 (RPS 服务独占 /dev/video6)
   - 游戏完成信号 = tail realtime_voice stdout 日志 [RPS][RESULT] (不改同事代码; 一键脚本用 python -u 解缓冲)
 
+多局制 (config rps.rounds):
+  rounds=0  (推荐): 无限局 — 臂保持 P1, 玩家每局说 "开始" 续局, 说 "退出游戏/不玩了"
+                    结束 (rps_voice_game 退出分支打日志裸行 "退出", 本脚本 tail 到即 DONE 回 Home)
+  rounds=N: 固定 N 局 RESULT 后 DONE 回 Home
+  两种模式均受 max_game_wait 总超时兜底.
+
 用法:
   conda run -n Proj python Estun/estun_rps_phaseE.py                 # 实机 (人工在 RPS 语音终端按回车邀请)
   conda run -n Proj python Estun/estun_rps_phaseE.py --auto-invite  # 自动写 FIFO 触发邀请
@@ -64,7 +70,10 @@ class PhaseERps:
         self._voice_log = str(r.get("voice_log_path", "/tmp/rps_voice_phaseE.log"))
         self._settle_delay = float(r.get("arm_settle_delay", 3.0))
         self._max_wait = float(r.get("max_game_wait", 180.0))
-        self._rounds = max(1, int(r.get("rounds", 1)))
+        # rounds>=1 = 固定 N 局后 DONE; rounds=0 = 等人退出 (玩家说退出关键词/超时 → DONE)
+        self._rounds = int(r.get("rounds", 0))
+        # 退出关键词的日志裸行 (rps_voice_game.py 退出分支 print("退出"), 行内容即 "退出")
+        self._quit_keyword = str(r.get("quit_keyword", "退出"))
 
         # ---- P1 位姿 (米, 度) — Home 为 CRP 存储点直 movl, py 不回位姿 ----
         self._play_pose = [float(v) for v in r.get("poses", {}).get("play", [])]
@@ -113,9 +122,13 @@ class PhaseERps:
         return True
 
     def _wait_round_done(self, timeout, start_pos=None):
-        """Tail 语音日志, 等 [RPS][RESULT] 出现 rounds 次. 返回 bool (是否等到).
+        """Tail 语音日志, 等游戏结束. 返回 bool (是否等到).
 
-        start_pos: 日志起始字节位置 (连接建立时捕获) — 只数它之后新出现的 RESULT.
+        rounds>=1: 数 [RPS][RESULT] 到 N 局 (臂保持 P1, 玩家每局说"开始"续局);
+        rounds=0: 无限局直到玩家说退出关键词 (日志裸行 "退出", 见
+        /data/Speech/rps_voice_game.py handle_user_text quit 分支 print("退出"))
+        或超时. 超时/退出均视为"结束" → 发 DONE 回 Home.
+        start_pos: 日志起始字节位置 (连接建立时捕获) — 只数它之后新出现的行.
         """
         if self._mock:
             print("[RPS-PHASE-E] --mock: 模拟游戏 3s 后完成")
@@ -124,16 +137,17 @@ class PhaseERps:
         if self._no_rps:
             print("[RPS-PHASE-E] --no-rps: 跳过游戏等待, 立即完成")
             return True
-        target = self._rounds
+        target = self._rounds if self._rounds >= 1 else None   # None = 等人退出
         log = self._voice_log
         pos = 0
         if start_pos is not None:
             pos = start_pos
         elif os.path.exists(log):
-            pos = os.path.getsize(log)  # 只数新出现的 RESULT
+            pos = os.path.getsize(log)  # 只数新出现的行
         else:
             print(f"[RPS-PHASE-E] 语音日志 {log} 不存在 (RPS 服务没起?) → 等 {timeout:.0f}s 兜底")
-        print(f"[RPS-PHASE-E] 等待游戏完成: 目标 {target} 局, 超时 {timeout:.0f}s (tail {log}) ...")
+        mode = f"目标 {target} 局" if target else "等人退出 (说 '退出游戏/不玩了' 结束)"
+        print(f"[RPS-PHASE-E] 等待游戏结束: {mode}, 超时 {timeout:.0f}s (tail {log}) ...")
         seen = 0
         deadline = time.time() + timeout
         while time.time() < deadline and not self._stop_event.is_set():
@@ -151,12 +165,15 @@ class PhaseERps:
                     for line in new.splitlines():
                         if "[RPS][RESULT]" in line:
                             seen += 1
-                            print(f"[RPS-PHASE-E] 检测到游戏完成 ({seen}/{target}): {line.strip()}")
-                            if seen >= target:
-                                print("[RPS-PHASE-E] 游戏完成, 即将发送完成标志")
+                            print(f"[RPS-PHASE-E] 检测到第 {seen} 局完成: {line.strip()}")
+                            if target is not None and seen >= target:
+                                print("[RPS-PHASE-E] 达到目标局数, 即将发送完成标志")
                                 return True
+                        elif line.strip() == self._quit_keyword:
+                            print("[RPS-PHASE-E] 玩家说退出关键词 → 结束游戏, 即将发送完成标志")
+                            return True
             time.sleep(0.5)
-        print(f"[RPS-PHASE-E] 等待游戏完成超时 ({timeout:.0f}s) → 兜底发完成标志回 Home")
+        print(f"[RPS-PHASE-E] 等待游戏结束超时 ({timeout:.0f}s) → 兜底发完成标志回 Home")
         return False
 
     # ================================================================

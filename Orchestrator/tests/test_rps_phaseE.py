@@ -8,6 +8,10 @@
   4. --mock: 模拟游戏短时后发 DONE
   5. play 位姿全零且非 mock → 拒绝启动 (防机器人跑原点)
   6. auto_invite FIFO: 服务端写 '\\n' 到 FIFO 触发邀请
+  7. rounds=0 等人退出: 日志裸行 "退出" → 发 DONE (rps_voice_game 退出分支 print("退出"))
+  8. rounds=0: 一局 RESULT 后玩家退出 → 发 DONE; 精确匹配不误伤含"退出"的其它行
+  9. rounds=0 超时兜底: 无信号也发 DONE 回 Home
+  10. rounds=2: 两局 [RPS][RESULT] 后才发 DONE (第 1 局后不发)
 """
 import os
 import socket
@@ -218,6 +222,125 @@ class RpsPhaseETest(unittest.TestCase):
                 os.close(holder)
             t.join(timeout=3.0)
             self.assertFalse(t.is_alive())
+
+    # ---------- 7. rounds=0 等人退出: 裸 "退出" 行 → DONE ----------
+
+    def test_rounds_zero_quit_line_triggers_done(self):
+        """rounds=0: 日志裸行 '退出' (玩家说退出关键词) → 发 DONE."""
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "voice.log")
+            open(log, "w").close()
+            svc, t, client = self._start(_make_cfg(log, settle=0.0, rounds=0))
+            try:
+                client.sendall(b"1.0,2.0,3.0,4.0,5.0,6.0\n")
+                self.assertEqual(_recv_line(client), _fmt(PLAY) + b"\n")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write("退出\n")
+                self.assertEqual(_recv_line(client, timeout=3.0),
+                                 DONE_FLAG.encode() + b"\n")
+            finally:
+                client.close()
+            t.join(timeout=3.0)
+            self.assertFalse(t.is_alive())
+
+    # ---------- 8. rounds=0: 一局后退出 + 精确匹配 ----------
+
+    def test_rounds_zero_result_then_quit(self):
+        """rounds=0: 先一局 RESULT 再退出 → 退出后 DONE (不等第 2 局)."""
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "voice.log")
+            open(log, "w").close()
+            svc, t, client = self._start(_make_cfg(log, settle=0.0, rounds=0))
+            try:
+                client.sendall(b"1.0,2.0,3.0,4.0,5.0,6.0\n")
+                self.assertEqual(_recv_line(client), _fmt(PLAY) + b"\n")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write(RESULT_LINE)
+                    fh.write("退出\n")
+                self.assertEqual(_recv_line(client, timeout=3.0),
+                                 DONE_FLAG.encode() + b"\n")
+            finally:
+                client.close()
+            t.join(timeout=3.0)
+            self.assertFalse(t.is_alive())
+
+    def test_quit_exact_match_no_false_positive(self):
+        """退出信号须裸行精确等于 '退出'; 含 '退出' 的其它行不触发."""
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "voice.log")
+            open(log, "w").close()
+            svc, t, client = self._start(_make_cfg(log, settle=0.0, rounds=0))
+            try:
+                client.sendall(b"1.0,2.0,3.0,4.0,5.0,6.0\n")
+                self.assertEqual(_recv_line(client), _fmt(PLAY) + b"\n")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write("[RPS][VOICE] 结果里含'退出'字样\n")
+                    fh.write("退出游戏\n")          # 不等同于裸行 "退出"
+                # 这两个非精确行不应触发 DONE
+                self.assertTrue(_no_line(client, timeout=0.7),
+                                "含'退出'的其它行不应触发完成")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write("退出\n")
+                self.assertEqual(_recv_line(client, timeout=3.0),
+                                 DONE_FLAG.encode() + b"\n")
+            finally:
+                client.close()
+            t.join(timeout=3.0)
+            self.assertFalse(t.is_alive())
+
+    # ---------- 9. rounds=0 超时兜底 ----------
+
+    def test_rounds_zero_timeout_fallback(self):
+        """rounds=0 无人玩也无退出: 超时 → 仍发 DONE 回 Home (兜底)."""
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "voice.log")
+            open(log, "w").close()
+            svc, t, client = self._start(_make_cfg(log, settle=0.0, rounds=0,
+                                                   max_wait=0.5))
+            try:
+                client.sendall(b"1.0,2.0,3.0,4.0,5.0,6.0\n")
+                self.assertEqual(_recv_line(client), _fmt(PLAY) + b"\n")
+                self.assertEqual(_recv_line(client, timeout=3.0),
+                                 DONE_FLAG.encode() + b"\n")
+            finally:
+                client.close()
+            t.join(timeout=3.0)
+            self.assertFalse(t.is_alive())
+
+    # ---------- 10. rounds=2: 两局后才 DONE ----------
+
+    def test_rounds_two_two_results(self):
+        """rounds=2: 第 1 局 RESULT 后不发 DONE; 第 2 局 RESULT 后才发."""
+        with tempfile.TemporaryDirectory() as td:
+            log = os.path.join(td, "voice.log")
+            open(log, "w").close()
+            svc, t, client = self._start(_make_cfg(log, settle=0.0, rounds=2,
+                                                   max_wait=10.0))
+            try:
+                client.sendall(b"1.0,2.0,3.0,4.0,5.0,6.0\n")
+                self.assertEqual(_recv_line(client), _fmt(PLAY) + b"\n")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write(RESULT_LINE)           # 第 1 局
+                self.assertTrue(_no_line(client, timeout=0.7),
+                                "rounds=2 第 1 局后不应 DONE")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write(RESULT_LINE)           # 第 2 局
+                self.assertEqual(_recv_line(client, timeout=3.0),
+                                 DONE_FLAG.encode() + b"\n")
+            finally:
+                client.close()
+            t.join(timeout=3.0)
+            self.assertFalse(t.is_alive())
+
+
+def _no_line(client, timeout=0.7):
+    """断言在 timeout 内没有数据到达 (返回 True=确实无数据)."""
+    client.settimeout(timeout)
+    try:
+        data = client.recv(4096)
+    except socket.timeout:
+        return True
+    return not data
 
 
 if __name__ == "__main__":

@@ -12,9 +12,17 @@
 
 训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。
 
-**Phase E RPS 接入（2026-08-21，单局已走通）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `a5054c91`，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付，148 测试绿。**完整单局已实机走通**（臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home）；排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。待办：RPS 服务收尾、多局制、三 CRP 融合。
+**Phase E RPS 接入（2026-08-21，单局已走通 + 多局制/收尾代码完成待实机）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `a5054c91`，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付。**完整单局已实机走通**（臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home）；**多局制 rounds=0 等人退出**（"退出游戏/不玩了"→日志裸"退出"行→DONE）+ **RPS 服务优雅收尾** 代码完成，153 测试绿。排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。待办：多局制实机复测、三 CRP 融合。
 
 ## 最近变更
+
+### Phase E 多局制 + RPS 服务优雅收尾 (2026-08-21, 代码完成待实机)
+
+1. **多局制 rounds=0 等人退出 (用户要求)**: config `rps.rounds 1→0` (0=等人退出 默认; N≥1 固定 N 局保留) + 新增 `quit_keyword: "退出"`; py `_wait_round_done` 同时 tail 两个信号 — `[RPS][RESULT]` (计数 N 局) 与 **裸行 == "退出"** (玩家在 replay-decision 窗口说 "退出游戏/不玩了" → `rps_voice_game.py` handle_user_text quit 分支 `print("退出")`, 精确匹配不误伤含"退出"字样其它行) → 任一命中/超时 → 发 DONE 回 Home
+2. **收尾机制 (同事侧确认)**: 退出仅 honor 在 `awaiting_replay_decision` 窗口内 (结果播报后到下次开始); 退出后 `invited=False` 需新邀请才可再开; 每局续玩说 "开始" 即可, 无需局间 FIFO 再邀请
+3. **RPS 服务优雅收尾**: `start_rps_phaseE.sh` 新增 `shutdown_rps()` — phaseE py 退出后 (无论 rc) SIGTERM `rps_stream.py` + `realtime_voice.py --rps-game` (atexit 释放相机/MediaPipe/串口), sleep 1 兜底 `fuser -k 8768`; `--rps-game` 限定不误伤递杯门禁 (8770 realtime_voice --config); helper 语音管道包 `set +e` 防 SIGTERM 下 `set -e+pipefail` 提前 abort 丢退出信息
+4. **验证**: py_compile + bash -n + 全量 **153 测试绿** (新增 5: rounds=0 退出触发 / 一局后退出 / 精确匹配不误伤 / rounds=0 超时兜底 / rounds=2 两局后 DONE)
+5. **待办**: 实机复测多局制 (第 1 局→说"开始"→第 2 局→说"退出游戏"→DONE→Home→RPS 服务自动收尾); 三 CRP 融合 (Phase0 8600 + A2D 8080 + PhaseE 8700)
 
 ### Phase E RPS 接入: py + config + 一键脚本 (2026-08-21)
 
@@ -254,7 +262,7 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | **Phase E 实机联调** | 示教 P1(灵巧手落 RPS 相机 FOV) 写入 config + 导入用户 CRP + `start_rps_phaseE.sh` 走通；验证 while(endflag==1) socketreadstr 超时续循环 |
+| 🔴 | **Phase E 多局制实机复测** | rounds=0 等人退出已实现: 第 1 局→"开始"→第 2 局→"退出游戏"→DONE→Home→RPS 服务自动收尾；单局 demo 已走通 (2026-08-21) |
 | 🟡 | 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
 | 🔴 | **Phase D 失败根因待查** | CRP 到 C_P3 后 ~2s 自动停、READY 未发、连接关闭；查 SocketSendStr/SocketReadStr 配置或时序 |
 | 🔴 | **data_sm 实机复测各档 P1** | θ 插值 + C 解析式 + Z 钳位链路落地验证；尤其 +15 档 Z 天然 364mm 超限观察钳位 |
