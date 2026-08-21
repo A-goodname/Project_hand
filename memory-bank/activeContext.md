@@ -16,6 +16,13 @@
 
 ## 最近变更
 
+### 融合服务终端自动关闭 (2026-08-21, 用户指出 A2D 终端不自动关)
+
+1. **现象**: A2D py 已退出 (主脚本 pgrep 确认), 但其 gnome-terminal 不自动关闭
+2. **根因**: `open_term()` 命令串末尾 `exec bash` — py 跑完后启动交互 bash, 终端永久停留 (当初为方便看日志)
+3. **修复**: 默认去掉 `exec bash` (py 退出 → bash -c 结束 → 终端自动关); `KEEP_TERM=1` 时保留 (exec bash, 调试看日志); RPS 服务终端同理 (helper 前台 wait, shutdown_rps 后自动关)
+4. **验证**: bash -n + 命令串模拟测试 (默认无 exec bash / KEEP_TERM=1 有)
+
 ### 融合 phaseE 完成判断修复: 端口释放 → 进程退出 (2026-08-21, 实机定位)
 
 1. **实机现象**: RPS 服务可起 (第 2 次重试成功 8768 就绪 + 语音起来), 但 sh 过早"phaseE 已完成 (8700 释放) → 停 RPS" — 融合 demo 刚起 RPS 就收尾

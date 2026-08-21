@@ -205,10 +205,16 @@ chmod +x "$HELPER"
 # ---- 开终端 (通用) ----
 # 注意: 不能用 "'$*'" 单引号包命令 (会把整条含空格命令当成一个文件名 → 127).
 # 命令直接放双引号内, 由内层 bash 解析 (本项目命令均无空格/特殊字符).
+# KEEP_TERM=1 时保留终端 (exec bash, 看日志); 默认 py 退出后终端自动关闭.
 open_term() {
   local title="$1"; shift
-  gnome-terminal --title="$title" -- bash -c "$*; echo '[$title] 已退出 (code='\$?')'; exec bash" \
-    >/dev/null 2>&1 || { echo "[WARN] 无法开终端 $title → 请手动跑: $*"; return 1; }
+  if [ "${KEEP_TERM:-0}" = "1" ]; then
+    gnome-terminal --title="$title" -- bash -c "$*; echo '[$title] 已退出 (code='\$?')'; exec bash" \
+      >/dev/null 2>&1 || { echo "[WARN] 无法开终端 $title → 请手动跑: $*"; return 1; }
+  else
+    gnome-terminal --title="$title" -- bash -c "$*; echo '[$title] 已退出 (code='\$?')'" \
+      >/dev/null 2>&1 || { echo "[WARN] 无法开终端 $title → 请手动跑: $*"; return 1; }
+  fi
 }
 
 echo "=============================================="

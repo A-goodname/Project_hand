@@ -1,5 +1,9 @@
 # Progress — Project_hand
 
+### 融合服务终端自动关闭 (2026-08-21)
+- [x] open_term() 默认去 exec bash → py 退出终端自动关; KEEP_TERM=1 保留 (调试)
+- [x] bash -n + 命令串模拟测试 PASS
+
 ### 融合 phaseE 完成判断修复 (2026-08-21, 实机定位)
 - [x] 现象: RPS 可起 (第 2 次重试成功), 但 sh 过早"phaseE 已完成 (8700 释放)→停 RPS"
 - [x] 根因: phaseE serve() accept 后立即 close 监听 socket (单连接), 8700 从 game 一开始就不监听 → 端口释放≠完成
