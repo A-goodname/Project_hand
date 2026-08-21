@@ -266,9 +266,11 @@ class HandleCupSM:
         self._person_detector = None
         self._hand_in_cup_detector = None
         self._is_person_seated = False  # 人就位 (PersonDetector)
-        self._hand_on_cup = None        # True/False/None (HandInCupDetector, None=未启动)
+        self._hand_on_cup = None        # True/False/None (HandInCupDetector, None=未启动/未决)
+        self._hic_active = False        # HandInCup 检测激活标志 (Camera B 线程 gate; READY 激活后 True)
         self._hand_in_cup_lock = threading.Lock()
         self._camera_b_thread = None
+        self._last_frame_b = None       # Camera B 最近帧缓存 (线程写, 主循环 imshow, 2026-08-21)
 
     # ================================================================
     #  生命周期
@@ -287,6 +289,7 @@ class HandleCupSM:
     def run(self):
         """主循环: 帧获取 → 检测 → 可视化 → accept TCP."""
         cv2.namedWindow("HandleCupSM | Camera A", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("HandleCupSM | Camera B", cv2.WINDOW_NORMAL)
 
         try:
             while not self._stop_event.is_set():
@@ -307,6 +310,10 @@ class HandleCupSM:
 
                 # [Step 3] 可视化
                 self._visualize(color.copy(), depth_cmap)
+
+                # [Step 3.5] Camera B 实时画面 (主线程 imshow, 线程只缓存帧)
+                if self._last_frame_b is not None:
+                    cv2.imshow("HandleCupSM | Camera B", self._last_frame_b)
 
                 # [Step 4] 退出检测
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -656,21 +663,26 @@ class HandleCupSM:
                     time.sleep(0.03)
                     continue
 
+                self._last_frame_b = frame   # 缓存供主线程实时显示 (2026-08-21)
+
                 # PersonDetector: 人就位检测 (检测到人即可, 每帧)
                 if self._person_detector is not None:
                     seated = self._person_detector.detect_person_only(frame)
                     with self._hand_in_cup_lock:
                         self._is_person_seated = seated
 
-                # HandInCupDetector: 手在杯检测 (仅在 HandInCup 激活时)
+                # HandInCupDetector: 手在杯检测 (仅在 HandInCup 激活时, _hic_active gate)
+                # 2026-08-21: 原 `_hand_on_cup is not None` 与 READY 激活(None)矛盾 → update 永不调用;
+                #            改独立 _hic_active 标志 (READY 激活置 True, 检测到/超时置 False)
                 if self._hand_in_cup_detector is not None:
                     with self._hand_in_cup_lock:
-                        active = self._hand_on_cup is not None
+                        active = self._hic_active
                     if active:
                         self._hand_in_cup_detector.update(frame)
                         with self._hand_in_cup_lock:
                             if self._hand_in_cup_detector.is_hand_on_cup:
                                 self._hand_on_cup = True
+                                self._hic_active = False
 
             except Exception as e:
                 print(f"[WARN] Camera B 线程异常: {e}")
@@ -1263,10 +1275,12 @@ class HandleCupSM:
                         print("[INFO] READY: 人未就位 → HandInCup=false")
                         with self._hand_in_cup_lock:
                             self._hand_on_cup = False
+                            self._hic_active = False
                     else:
                         print(f"[INFO] READY: 人就位 → 启动 HandInCup (≤{_hic_timeout:.0f}s)")
                         with self._hand_in_cup_lock:
-                            self._hand_on_cup = None  # 激活检测
+                            self._hand_on_cup = None  # 未决
+                            self._hic_active = True   # 激活检测 (Camera B 线程 gate)
                         if self._hand_in_cup_detector is not None:
                             self._hand_in_cup_detector.reset()
                         _hic_start = time.time()
@@ -1281,6 +1295,7 @@ class HandleCupSM:
                             if _hic_elapsed > _hic_timeout:
                                 with self._hand_in_cup_lock:
                                     self._hand_on_cup = False
+                                    self._hic_active = False
                                 print(f"[INFO] HandInCup: 超时 ({_hic_timeout:.0f}s) → FALSE")
                                 break
                             # CRP SocketReadStr(20s) 窗口预警: 超过则 CRP 先超时 (Phase D 疑点)

@@ -642,6 +642,7 @@ class HandleCupDetector:
         self._depth_z_thr = float(_c.get("depth_z_threshold", 0.05))
         self._cup_handle_side = _c.get("cup_handle_side", "back")
         self._cup_rim_radius = float(_c.get("cup_rim_radius", 0.035))
+        self._cup_wall_thickness = float(_c.get("cup_wall_thickness", 0.005))  # 杯壁厚度 (m), 裁剪补偿 (2026-08-21)
         self._kettle_conf = float(_c.get("kettle_conf", 0.7))
         self._cup_conf = float(_c.get("cup_conf", 0.5))
         self._handle_side = _c.get("handle_side", "right")
@@ -1079,12 +1080,15 @@ class HandleCupDetector:
         _x1_orig, _x2_orig = x1, x2
         if self._cup_handle_side in ("left", "right"):
             rim_px = max(1, int(self._cup_rim_radius * self._color_intr.fx / anchor_d))
+            # 2026-08-21: 2×杯口半径 + 杯壁厚度(5mm 像素) — bbox 靠近杯缘/把手非正对时
+            # 2×rim 采样偏窄把杯体真实部分裁掉 → 位置/倒水点偏; 加厚壁补偿覆盖杯体
+            thick_px = max(1, int(self._cup_wall_thickness * self._color_intr.fx / anchor_d))
             if self._cup_handle_side == "left":
-                # 把手在左侧, 从右边界向左取 2 倍杯口半径
-                x1 = max(int(x2) - 2 * rim_px, int(x1))
+                # 把手在左侧, 从右边界向左取 2×杯口半径 + 杯壁
+                x1 = max(int(x2) - 2 * rim_px - thick_px, int(x1))
             elif self._cup_handle_side == "right":
-                # 把手在右侧, 从左边界向右取 2 倍杯口半径
-                x2 = min(int(x1) + 2 * rim_px, int(x2))
+                # 把手在右侧, 从左边界向右取 2×杯口半径 + 杯壁
+                x2 = min(int(x1) + 2 * rim_px + thick_px, int(x2))
             if x2 - x1 < 4:
                 x1, x2 = _x1_orig, _x2_orig  # 回退到原始 bbox
             # 更新锚点深度为裁剪后 bbox 中心

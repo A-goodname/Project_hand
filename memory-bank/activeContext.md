@@ -17,11 +17,19 @@
 ### Cup 状态机同步 data_sm: CRP + py (2026-08-21, Phase D 排查前置)
 
 1. **CRP (`doc/estun_handle_cup_sm.crp`, sha256 `41e7e147`)**: ①H_P3 倒水后 wait 1000→**3000ms** ②`movl H_P2`×2 + `movl Home(sudu2)` → **MovJ**(mblendtype→mjblendtype); 旧版 `.bak`
+   - **2026-08-21 更新: 用户手动补 `DCp1.dcpos.dc` 计算(示教器导出 `PhaseA2D-Down-442` → doc 版替换, 现 sha256 `fefef5fd`, 57 widgets)** — 原 doc 版缺 DCp1 绕 Z(dc) 分量, 倒水避碰点 H_P4 姿态需它
 2. **py (`estun_handle_cup_sm.py`)**: ①**修 skip_frames 双计数** — `_detect` 删 `frame_counter+=1`(run 保留; 消除偶数 skip 永不 detect 隐患, 与 data_sm 对齐) ②**PoseStabilizer 升级增强版** — θ 并入窗口(仅收 pos/euler/θ 齐全帧, θ 极差<5°, 取 θ 中位数→band), get_mean 返回 3 元组 ③**_detect Handle 段** 加 θ 稳定/代际失效作废/`_resolve_rot_band` 判档; Cup 段 get_mean 兼容 3 元组 ④**新增** `_resolve_rot_band`/`_resolve_p1_offsets`/`_interp_p1_offset`/`_clamp_p1_z` ⑤config `handle_teach.p1_offsets`/`p1_z_check` 加载 ⑥**Phase B 抓取策略同步 data_sm** — θ 插值 offset + `C=C0-θ` 解析式 + P1 Z 钳位[0.360,0.362] + B3 无有效 band REJECT(不得默认 0°)
 3. **验证**: py_compile + import OK + 全量 **142 测试绿**
 4. **Camera A 生命周期 (2026-08-21)**: `_detect_active` 标志 — Phase B 完成 → `False` 停 Handle/Cup 检测(`[CAM-A] Phase B 完成 → 停止...`); socket 断开(finally) → `True` 恢复(`[CAM-A] socket 断开 → 恢复...`); run 主循环条件调用 `_detect`
 5. **Phase D 排查打印增强**: HandInCup 结果打印耗时(`[INFO] HandInCup: TRUE (X.Xs)` / 超时); `[WARN] HandInCup 已 18s+ → 逼近 CRP 20s 窗口` 预警(直接验证 25s vs 22s 疑点)
-6. **待办**: Phase D 根因实机重测 — 观察 `[CAM-A]` 停/开时序 + `[WARN] HandInCup 18s` + `[RECV] READY` 是否出现; 关键疑点: CRP socketreadstr 20s(总22s) < py HandInCup 25s; READY↔RELEASE 1s(参考 SKILL 应 2s)
+6. **实机日志分析 (2026-08-21)**: 
+   - 首测: GRIP 后连接关, READY 未发 → CRP C_P3 后 sendstr 无返回值(socket 层); 用户确认"后面的 socketsendstr 没有返回值"
+   - **次测(CRP 更新 fefef5fd 后)**: **READY 到达 ✓**(`[RECV] READY` → 人就位 → 启动 HandInCup)→ 通信链路通了; 但 **HandInCup 18s 无结果**(`[WARN] HandInCup 已 18.0s`), `_hand_on_cup` 一直 None
+7. **HandInCup gate bug 修复 (2026-08-21, 检测失败根因)**: `_camera_b_loop` 的 `active = _hand_on_cup is not None` 与 READY 激活(设 None)矛盾 → **`update()` 永不调用** → 检测永不运行 → 18s 超时。修复: 加**独立 `_hic_active` 标志**(READY 激活置 True, 检测到/超时/人未就位置 False); Camera B 线程 `active = self._hic_active`, 检测到 True 清标志。142 测试绿
+8. **同事 HANDOVER 方案 (/data/Speech/)**: Phase D 视觉(计分制连续5帧命中)之上加**语音门禁** — 状态机 IDLE→WAITING_HAND→WAITING_CONFIRMATION→CONFIRMED; 视觉命中后仍需语音确认("拿好了/接住了"等)才 release permission; 未确认/超时 → 保持夹持 → 返回 `[位姿]` ABORT 路径。**接入点**: cup_sm READY 后 `HandoverVoiceClient(127.0.0.1:8770)` start, 视觉 True → hand_detected, RELEASE 时 `wait_confirmed` → confirmed 才 `release_object()`(PROJECT_HAND_PHASE_D_PATCH.md 最小接入)。待确认是否接入
+9. **cup 检测优化 (2026-08-21, 裁剪+杯壁)**: `_compute_cup_3d` 裁剪宽度 `2×rim_px` → **+杯壁 5mm 像素**(thick_px, config `cup_wall_thickness: 0.005`); 解决 **bbox 靠近杯缘/把手非正对左侧时采样偏窄 → 杯体被裁 → 倒水点偏**。142 测试绿
+10. **P3 已调 (2026-08-21, 用户定)**: `p3_teach_offset.left.30.t_offset` X 0.0686→**0.0886**(+2cm), Z 0.2536→**0.2636**(+1cm) — 若裁剪+杯壁仍偏, P3 前移补偿
+11. **待办**: ①**实机测试完整流程**(P3 已改: 倒水点是否正对杯口) ②重测 HandInCup 视觉(gate fix `_hic_active`) ③接入语音门禁(同事方案, 待定)
 
 ### Phase 0 实机验证通过 (2026-08-21)
 
