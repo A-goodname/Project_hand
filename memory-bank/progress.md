@@ -62,6 +62,8 @@
 - [x] CRP Phase D blocks 添加 (TranStrToCpos + If 分支 + sudu2 + 新 points)
 - [x] Phase A-C 实机验证通过 (Handle→倒水→Cup 抓取→递送)
 - [ ] **Phase D 失败**: CRP 到 C_P3 后停止运动, 未发送 READY, 连接关闭 — 根因待查
+  - [x] (2026-08-21 前置同步): CRP H_P3 后 wait 3s + H_P2/Home 改 MovJ; py 修 skip_frames 双计数 + PoseStabilizer θ 升级 + Phase B θ 插值/C 解析式/Z 钳位同步 data_sm (142 测试绿) — 待实机重测
+  - [x] (2026-08-21 Camera A 生命周期 + 打印): Phase B 完成 → `_detect_active=False` 停检测; socket 断开 → True 恢复; HandInCup 耗时/18s 预警打印
 - [x] P3 X+1cm 微调 (0.0686 → 0.0786 m)
 - [x] doc 清理 (删除旧 session-barrier 文件, 更新 CRP)
 

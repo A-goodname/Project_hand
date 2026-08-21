@@ -61,10 +61,12 @@ class PoseStabilizer:
     """缓存最近 N 帧; 位置+角度波动低于阈值时输出均值.
     代际计数器: 客户端断开重连时自增, 防止旧帧污染新连接."""
 
-    def __init__(self, window=5, pos_thresh=0.005, angle_thresh=3.0):
+    def __init__(self, window=5, pos_thresh=0.005, angle_thresh=3.0,
+                 theta_thresh=5.0):
         self.window = window
         self.pos_thresh = pos_thresh
         self.angle_thresh = angle_thresh
+        self.theta_thresh = theta_thresh
         self._buffer = []
         self._sf = -1
 
@@ -80,29 +82,47 @@ class PoseStabilizer:
     def is_generation_valid(self):
         return self._sf == _gf
 
-    def add(self, pos, euler):
-        self._buffer.append((np.array(pos, dtype=float), np.array(euler, dtype=float)))
+    def add(self, pos, euler, theta=None):
+        self._buffer.append((np.array(pos, dtype=float),
+                             np.array(euler, dtype=float),
+                             (float(theta) if theta is not None else None)))
         if len(self._buffer) > self.window:
             self._buffer.pop(0)
 
-    def is_stable(self):
+    def is_stable(self, theta_thresh=None):
         if len(self._buffer) < self.window:
             return False
-        poses = np.array([p for p, _ in self._buffer])
-        angles = np.array([a for _, a in self._buffer])
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
         pos_range = np.ptp(poses, axis=0).max()
         angle_range = np.ptp(angles, axis=0).max()
+        if all(t is not None for t in (x[2] for x in self._buffer)):
+            # θ 模式 (旋转链): 窗口内全部带 θ, 纳入一致约束
+            theta_range = np.ptp(np.array([x[2] for x in self._buffer]))
+            thr = self.theta_thresh if theta_thresh is None else theta_thresh
+            return (pos_range < self.pos_thresh
+                    and angle_range < self.angle_thresh
+                    and theta_range < thr)
+        # 无 θ (cup 等): 仅位置+角度
         return pos_range < self.pos_thresh and angle_range < self.angle_thresh
 
     def get_mean(self):
         if not self._buffer:
-            return None, None
-        poses = np.array([p for p, _ in self._buffer])
-        angles = np.array([a for _, a in self._buffer])
-        return poses.mean(axis=0), angles.mean(axis=0)
+            return None, None, None
+        poses = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
+        thetas = [x[2] for x in self._buffer]
+        th_med = (float(np.median(thetas))
+                  if all(t is not None for t in thetas) else None)
+        return poses.mean(axis=0), angles.mean(axis=0), th_med
 
     def reset(self):
         self._buffer = []
+
+
+ROT_THETA_WIN = 10       # 旋转 θ 稳定窗口帧数 (2026-08-20: 与 config stabilization.window 对齐)
+ROT_THETA_SPREAD_MAX = 5.0   # 窗口内 θ 分歧上限 (deg, B3: 极差超限 → 不稳定/REJECT)
+ROT_THETA_FRESH_S = 1.5      # θ 观测新鲜窗口 (s, B3: 超期 → REJECT)
 
 
 # ============================================================
@@ -173,6 +193,7 @@ class HandleCupSM:
 
         # ---- 跳帧 + 帧缓存 ----
         self._frame_counter = 0
+        self._detect_active = True   # Phase B 完成 → False (停 Camera A 检测); socket 断开 → True
         self._last_color = None
         self._last_depth_frame = None
         self._last_depth_image = None
@@ -196,6 +217,14 @@ class HandleCupSM:
         # handle_teach (P1 示教偏置, 基系直接加)
         self._handle_teach_enabled = False
         self._handle_teach_t_offset = None
+        # 旋转档位 (2026-08-19): θ 并入 PoseStabilizer 稳定窗口 → band → p1_offsets 查表
+        self._rot_band = None       # 当前稳定 band (None = 未取得有效候选)
+        self._rot_band_th = None    # 稳定时窗口内 θ 中位数 (deg)
+        self._rot_valid = False     # B3: 有效候选 (恰满窗/同代/稳定/一致)
+        self._rot_reject = None     # B3: 最近 REJECT 原因 (str|None)
+        self._rot_obs_t = 0.0       # B3: 最近一次 θ 观测时刻 (monotonic, 新鲜性)
+        self._p1_offsets = {}       # band → {p1_offset, p1_abc, ...} (estun_config handle_teach.p1_offsets)
+        self._p1_z_check = None     # P1 Z 有效范围 (m, [lo,hi]), 超出钳位 (2026-08-19)
         # Cup
         self._cup_handle_side = "back"
         self._cup_t_offset = None
@@ -271,9 +300,10 @@ class HandleCupSM:
                         break
                     continue
 
-                # [Step 2] 跳帧检测 + 稳定化
+                # [Step 2] 跳帧检测 + 稳定化 (Phase B 后暂停, socket 断开恢复)
                 self._frame_counter += 1
-                self._detect()
+                if self._detect_active:
+                    self._detect()
 
                 # [Step 3] 可视化
                 self._visualize(color.copy(), depth_cmap)
@@ -422,11 +452,19 @@ class HandleCupSM:
         self._handle_teach_t_offset = (
             np.array(ht.get("p1_offset", [0.0, 0.0, 0.0]), dtype=float)
             if ht else np.zeros(3))
+        # 按档位 t_offset 表 (2026-08-19): band → {p1_offset, p1_abc, ...}
+        self._p1_offsets = (ht.get("p1_offsets", {})
+                            if isinstance(ht.get("p1_offsets", {}), dict) else {})
+        # P1 Z 有效范围检查 (2026-08-19 实机标定 [0.360, 0.362])
+        _zchk = ht.get("p1_z_check") if ht else None
+        self._p1_z_check = (list(map(float, _zchk)) if isinstance(_zchk, (list, tuple)) and len(_zchk) == 2
+                            else None)
         if self._handle_teach_enabled:
             print(f"[INFO] handle_teach 启用: P1 = detect_base + "
                   f"({self._handle_teach_t_offset[0]:.4f},"
                   f"{self._handle_teach_t_offset[1]:.4f},"
-                  f"{self._handle_teach_t_offset[2]:.4f}) m (基系直接加)")
+                  f"{self._handle_teach_t_offset[2]:.4f}) m (基系直接加) "
+                  f"| p1_offsets 档位: {sorted(self._p1_offsets.keys())}")
 
         # ================================================================
         #  cup_teach (Cup P1 示教偏置 + P3 固定值)
@@ -527,10 +565,13 @@ class HandleCupSM:
 
     def _init_stabilizer_and_calib(self):
         stab_cfg = self._orch_cfg.get("stabilization", {})
+        # 2026-08-19: 旋转 θ 并入 handle 稳定窗口 (B3 恰满窗, window=config/ROT_THETA_WIN);
+        # 2026-08-20: window 5→10 (config 保险定案). cup 无旋转, 退化为 pos/angle 行为
         self._handle_stabilizer = PoseStabilizer(
-            window=stab_cfg.get("window", 3),
+            window=stab_cfg.get("window", ROT_THETA_WIN),
             pos_thresh=stab_cfg.get("pos_threshold", 0.01),
             angle_thresh=stab_cfg.get("angle_threshold", 5.0),
+            theta_thresh=ROT_THETA_SPREAD_MAX,
         )
         self._cup_stabilizer = PoseStabilizer(
             window=stab_cfg.get("window", 3),
@@ -671,6 +712,84 @@ class HandleCupSM:
         return color, depth, depth_colormap, depth_frame
 
     # ================================================================
+    #  旋转档位解析 (2026-08-19, 与 data_sm 同步)
+    # ================================================================
+
+    def _resolve_rot_band(self, th_deg):
+        """θ → 档位 (5 档纯 θ 区间, 与 handle_cup_detector._classify_rotation 一致).
+
+        [-8,8]=0, (8,22]=15, >22=30, 负侧对称; <-40 不可达.
+        """
+        if th_deg > 22.0:
+            return 30
+        if th_deg > 8.0:
+            return 15
+        if th_deg < -40.0:
+            return None
+        if th_deg < -22.0:
+            return -30
+        if th_deg < -8.0:
+            return -15
+        return 0
+
+    def _resolve_p1_offsets(self, band):
+        """band → (p1_offset, p1_abc). 缺档回退 0° → 平铺字段.
+
+        (查表用; Phase B 在 teach 启用且有 θ 时改用 _interp_p1_offset 插值 X/Y/Z)
+        """
+        entry = self._p1_offsets.get(str(band)) if self._p1_offsets else None
+        if entry is None:
+            entry = self._p1_offsets.get("0") if self._p1_offsets else None
+        if entry is None:
+            return self._handle_teach_t_offset, self._handle_fixed_abc  # 回退平铺
+        off = np.array(entry.get("p1_offset", self._handle_teach_t_offset), dtype=float)
+        abc = tuple(entry.get("p1_abc", self._handle_fixed_abc))
+        return off, abc
+
+    def _interp_p1_offset(self, th_deg):
+        """θ 档内线性插值 X/Y/Z (2026-08-19, 消除档边界跳变).
+
+        相邻档中心 (p1_offsets 键) 线性混合; θ 超出 [min,max] 钳到端点档.
+        返回 np.ndarray (3,) offset; 无表/无 θ 时回退平铺.
+        """
+        if not self._p1_offsets:
+            return self._handle_teach_t_offset
+        centers = sorted(int(k) for k in self._p1_offsets)
+        if len(centers) == 0:
+            return self._handle_teach_t_offset
+        if th_deg <= centers[0]:
+            return np.array(self._p1_offsets[str(centers[0])]["p1_offset"], dtype=float)
+        if th_deg >= centers[-1]:
+            return np.array(self._p1_offsets[str(centers[-1])]["p1_offset"], dtype=float)
+        for i in range(len(centers) - 1):
+            lo, hi = centers[i], centers[i + 1]
+            if lo <= th_deg <= hi:
+                Olo = np.array(self._p1_offsets[str(lo)]["p1_offset"], dtype=float)
+                Ohi = np.array(self._p1_offsets[str(hi)]["p1_offset"], dtype=float)
+                t = (th_deg - lo) / (hi - lo) if hi != lo else 0.0
+                return Olo + t * (Ohi - Olo)
+        return self._handle_teach_t_offset
+
+    def _clamp_p1_z(self, pos_base_1):
+        """P1 Z 有效范围钳位 (2026-08-19 实机标定 [360,362]mm; 超出钳到最近边界).
+
+        Phase B 先钳位再推 P2, 保证 P1/P2 满足同一 pre_offset 几何 (修 B5).
+        返回钳位后的位置 (np.ndarray 原对象就地修改并返回); 无配置时不改.
+        """
+        if self._p1_z_check is None:
+            return pos_base_1
+        _zlo, _zhi = self._p1_z_check
+        if pos_base_1[2] < _zlo:
+            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm < 下限"
+                  f"{_zlo*1000:.1f}mm, 钳到下限", flush=True)
+            pos_base_1[2] = _zlo
+        elif pos_base_1[2] > _zhi:
+            print(f"[WARN] P1 Z={pos_base_1[2]*1000:.1f}mm > 上限"
+                  f"{_zhi*1000:.1f}mm, 钳到上限", flush=True)
+            pos_base_1[2] = _zhi
+        return pos_base_1
+
+    # ================================================================
     #  检测 + 稳定化 (移植自 state_machine._detect)
     # ================================================================
 
@@ -687,7 +806,7 @@ class HandleCupSM:
         if self._handle_stabilizer is None or self._cup_stabilizer is None:
             return
 
-        self._frame_counter += 1
+        # 2026-08-19: 删双计数 (run 主循环保留 frame_idx 每帧+1, _detect 不再 +1)
         if self._frame_counter % self._skip_frames != 1:
             return
 
@@ -698,17 +817,41 @@ class HandleCupSM:
         if h["pos_cam"] is not None:
             pos_cam = np.array(h["pos_cam"])
             euler = np.array(h["euler_cam"])
-            self._handle_stabilizer.add(tuple(pos_cam), tuple(euler))
+            theta = h.get("theta_deg")
+            # 2026-08-19 合并: 位姿+θ 同一稳定窗口 —
+            #   仅收 pos/euler/θ 齐全帧 (θ非None ⟺ fitEllipse 成功 ⟺ euler动态),
+            #   排除姿态退化/不可达无 θ 帧参与稳定统计. 同一代累积; 代际失效作废候选 (B3)
+            if theta is not None:
+                self._handle_stabilizer.add(tuple(pos_cam), tuple(euler), float(theta))
+                self._rot_obs_t = time.monotonic()
+            if not self._handle_stabilizer.is_generation_valid():
+                self._rot_valid = False
+                self._rot_band = None
+                self._rot_band_th = None
+                self._rot_reject = "观测代际失效 (会话重连)"
             if self._handle_stabilizer.is_stable():
                 if not self._handle_stabilizer.is_generation_valid():
                     self._handle_stabilizer.reset()
                     self._handle_stabilizer.capture_generation()
                 else:
-                    mean_pos, _mean_euler = self._handle_stabilizer.get_mean()
-                    if mean_pos is not None:
+                    mean_pos, _mean_euler, th_med = self._handle_stabilizer.get_mean()
+                    if mean_pos is not None and th_med is not None:
                         pos_ee = T_cam2ee[:3, :3] @ mean_pos + T_cam2ee[:3, 3]
                         det.last_known_pose = (pos_ee, self._handle_fixed_abc)
-                        print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})")
+                        # 稳定 = 同一窗口内 pos/euler/θ 全部一致 (θ 极差<阈值),
+                        # 直接取 θ 中位数 → band (B3: 恰满窗+同代+一致才出候选)
+                        band = self._resolve_rot_band(th_med)
+                        if band is None:   # θ < -40 不可达
+                            self._rot_valid = False
+                            self._rot_reject = f"θ={th_med:.1f}° < -40 不可达"
+                            print(f"\n[ROT-REJECT] {self._rot_reject}", flush=True)
+                        else:
+                            self._rot_band_th = th_med
+                            self._rot_band = band
+                            self._rot_valid = True
+                            self._rot_reject = None
+                            print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
+                                  f" θ_med={th_med:.1f}° band={band}")
 
         # === Cup 稳定 ===
         c = result["cup"]
@@ -721,7 +864,7 @@ class HandleCupSM:
                     self._cup_stabilizer.reset()
                     self._cup_stabilizer.capture_generation()
                 else:
-                    mean_cpos, _mean_ceuler = self._cup_stabilizer.get_mean()
+                    mean_cpos, _mean_ceuler, _ = self._cup_stabilizer.get_mean()
                     if mean_cpos is not None:
                         det.last_known_cup_pose = (mean_cpos, self._cup_fixed_abc)
                         print(f"\n[Cup STABLE]    pos=({mean_cpos[0]:.3f},{mean_cpos[1]:.3f},{mean_cpos[2]:.3f})")
@@ -815,27 +958,64 @@ class HandleCupSM:
                 cup_pos_cam, cup_euler_cam = cup_pose
 
                 # ============================================================
-                #  Handle P1 / P2 (固定 ABC, 移植自 state_machine)
+                #  Handle P1 / P2 (θ 插值 offset + C 解析式, 2026-08-19)
                 #  位置双链 (二选一, 不能混用):
-                #    handle_teach 启用 → P1 = detect_base + t_offset
-                #      (基系直接加, 含 TCP 偏移语义, 不经过 t_handle_effective)
+                #    handle_teach 启用 → P1 = detect_base + interp_offset(θ_med)
+                #      (θ 中位数, X/Y/Z 相邻档线性插值, ABC 的 C 用 C=C0-θ 解析式)
                 #    handle_teach 关闭 → 旧链 (ee 系减 t_eff + 固定 ABC) 对照
                 # ============================================================
-                # 固定 ABC 直接构造旋转矩阵 (基系)
-                R_base_fix = euler_to_rotation_matrix(*self._handle_fixed_abc, order="zyx")
+                # 解析 band → offset/abc (teach 启用时; 否则回退固定值)
+                band_off = self._handle_teach_t_offset
+                band_abc = self._handle_fixed_abc
+                _band = 0
+                if self._handle_teach_enabled:
+                    # B3 (2026-08-19): 无有效 band → REJECT, 不得默认 0° offset;
+                    # 等待有效观测或 Phase B 超时 → 不发计划 → 受控停止
+                    if not self._rot_valid:
+                        print(f"[ROT-REJECT] band 无效: {self._rot_reject or '观测缺失'}; "
+                              f"不发送 P1/P2", flush=True)
+                        time.sleep(0.1)
+                        continue
+                    if (time.monotonic() - self._rot_obs_t) > ROT_THETA_FRESH_S:
+                        self._rot_valid = False
+                        self._rot_reject = "θ 观测过期"
+                        print(f"[ROT-REJECT] {self._rot_reject}; 不发送 P1/P2", flush=True)
+                        time.sleep(0.1)
+                        continue
+                    _band = self._rot_band if self._rot_band is not None else 0
+                    # X/Y/Z: 有 θ 用插值 (平滑), 否则查表
+                    if self._rot_band_th is not None:
+                        band_off = self._interp_p1_offset(self._rot_band_th)
+                        _, band_abc = self._resolve_p1_offsets(_band)  # A/B
+                    else:
+                        band_off, band_abc = self._resolve_p1_offsets(_band)
+                    # C 解析式: C = C0 - θ_med (平滑姿态补偿; C0 = 0° 档 p1_abc.C)
+                    if self._rot_band_th is not None:
+                        _c0 = -21.1
+                        if self._p1_offsets:
+                            _e0 = self._p1_offsets.get("0", {}) or {}
+                            _c0 = _e0.get("p1_abc", [-115.2, 85.0, -21.1])[2]
+                        band_abc = (band_abc[0], band_abc[1], float(_c0 - self._rot_band_th))
+                # band ABC 直接构造旋转矩阵 (基系)
+                R_base_fix = euler_to_rotation_matrix(*band_abc, order="zyx")
                 R_grasp_ee = R_ee_base.T @ R_base_fix
 
                 if self._handle_teach_enabled:
-                    # P1 = detect_base + t_offset (基系直接加)
+                    # P1 = detect_base + p1_offsets[band].p1_offset (基系直接加)
                     detect_base = transform_pose_to_base(
                         np.array(mean_pos_ee), robot_xyz, robot_ABC)
-                    pos_base_1 = detect_base + self._handle_teach_t_offset
-                    # P2 = P1 + R_base_fix @ pre_offset
+                    pos_base_1 = detect_base + band_off
+                    # P1 Z 有效范围钳位 → 先钳位再推 P2, 保证 P1/P2 满足同一
+                    # pre_offset 几何 (修 B5, 2026-08-19)
+                    pos_base_1 = self._clamp_p1_z(pos_base_1)
+                    # P2 = P1(钳位后) + R_base_fix @ pre_offset
                     # (推导: P2_base = P1_base + R_ee_base@R_grasp_ee@pre
                     #        = P1_base + R_base_fix@pre)
                     pos_base_2 = pos_base_1 + R_base_fix @ self._handle_pre_t_offset
-                    print(f"[TEACH] P1 = detect_base + t_offset = ({pos_base_1[0]:.4f},"
-                          f"{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m", flush=True)
+                    _src = ("θ插值" if self._rot_band_th is not None else f"查表[{_band}]")
+                    print(f"[TEACH] band={_band}({_src}) P1 = detect_base + offset = "
+                          f"({pos_base_1[0]:.4f},{pos_base_1[1]:.4f},{pos_base_1[2]:.4f}) m"
+                          f" ABC={tuple(round(x,1) for x in band_abc)}", flush=True)
                 else:
                     # 旧链: ee 系减 t_handle_effective + 固定 ABC
                     h_pos_ee_compensated = np.array(mean_pos_ee) - t_handle_effective
@@ -846,8 +1026,8 @@ class HandleCupSM:
                     pos_ee_pre = h_pos_ee_compensated + R_grasp_ee @ self._handle_pre_t_offset
                     pos_base_2 = transform_pose_to_base(pos_ee_pre, robot_xyz, robot_ABC)
 
-                A1, B1, C1 = self._handle_fixed_abc
-                A2, B2, C2 = self._handle_fixed_abc
+                A1, B1, C1 = band_abc
+                A2, B2, C2 = band_abc
 
                 R_target_ee = R_grasp_ee @ euler_to_rotation_matrix(
                     *self._handle_target_r_offset, order="zyx")
@@ -958,7 +1138,9 @@ class HandleCupSM:
                 print(f"[WARN] Phase B: 超时 {self._phase_b_timeout:.0f}s 未获得稳定位姿")
                 return
 
-            # Camera A 引用置空, 通知 daemon 线程已完成检测阶段
+            # Camera A 检测暂停: Phase B 完成 → 停止 Handle/Cup 检测, socket 断开后恢复
+            self._detect_active = False
+            print("[CAM-A] Phase B 完成 → 停止 Handle/Cup 检测 (socket 断开后恢复)")
             print("[INFO] Phase B 完成, 进入 Phase C")
 
             # ================================================================
@@ -974,6 +1156,8 @@ class HandleCupSM:
             traceback.print_exc()
         finally:
             PoseStabilizer.on_disconnect()
+            self._detect_active = True   # socket 断开 → 恢复 Camera A 检测 (下个 session)
+            print("[CAM-A] socket 断开 → 恢复 Handle/Cup 检测")
             if det is not None:
                 det.last_known_pose = None
                 det.last_known_cup_pose = None
@@ -1086,17 +1270,24 @@ class HandleCupSM:
                         if self._hand_in_cup_detector is not None:
                             self._hand_in_cup_detector.reset()
                         _hic_start = time.time()
+                        _hic_warned = False
                         # 等待 HandInCup 结果
                         while not self._stop_event.is_set():
                             with self._hand_in_cup_lock:
                                 if self._hand_on_cup is True:
-                                    print("[INFO] HandInCup: TRUE")
+                                    print(f"[INFO] HandInCup: TRUE ({(time.time()-_hic_start):.1f}s)")
                                     break
-                            if time.time() - _hic_start > _hic_timeout:
+                            _hic_elapsed = time.time() - _hic_start
+                            if _hic_elapsed > _hic_timeout:
                                 with self._hand_in_cup_lock:
                                     self._hand_on_cup = False
-                                print(f"[INFO] HandInCup: 超时 → FALSE")
+                                print(f"[INFO] HandInCup: 超时 ({_hic_timeout:.0f}s) → FALSE")
                                 break
+                            # CRP SocketReadStr(20s) 窗口预警: 超过则 CRP 先超时 (Phase D 疑点)
+                            if not _hic_warned and _hic_elapsed > 18.0:
+                                print(f"[WARN] HandInCup 已 {_hic_elapsed:.1f}s, "
+                                      f"逼近 CRP SocketReadStr 20s 窗口 → CRP 可能先超时", flush=True)
+                                _hic_warned = True
                             time.sleep(0.05)
 
                 elif cmd == "RELEASE":

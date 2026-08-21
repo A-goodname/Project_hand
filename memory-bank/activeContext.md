@@ -14,6 +14,15 @@
 
 ## 最近变更
 
+### Cup 状态机同步 data_sm: CRP + py (2026-08-21, Phase D 排查前置)
+
+1. **CRP (`doc/estun_handle_cup_sm.crp`, sha256 `41e7e147`)**: ①H_P3 倒水后 wait 1000→**3000ms** ②`movl H_P2`×2 + `movl Home(sudu2)` → **MovJ**(mblendtype→mjblendtype); 旧版 `.bak`
+2. **py (`estun_handle_cup_sm.py`)**: ①**修 skip_frames 双计数** — `_detect` 删 `frame_counter+=1`(run 保留; 消除偶数 skip 永不 detect 隐患, 与 data_sm 对齐) ②**PoseStabilizer 升级增强版** — θ 并入窗口(仅收 pos/euler/θ 齐全帧, θ 极差<5°, 取 θ 中位数→band), get_mean 返回 3 元组 ③**_detect Handle 段** 加 θ 稳定/代际失效作废/`_resolve_rot_band` 判档; Cup 段 get_mean 兼容 3 元组 ④**新增** `_resolve_rot_band`/`_resolve_p1_offsets`/`_interp_p1_offset`/`_clamp_p1_z` ⑤config `handle_teach.p1_offsets`/`p1_z_check` 加载 ⑥**Phase B 抓取策略同步 data_sm** — θ 插值 offset + `C=C0-θ` 解析式 + P1 Z 钳位[0.360,0.362] + B3 无有效 band REJECT(不得默认 0°)
+3. **验证**: py_compile + import OK + 全量 **142 测试绿**
+4. **Camera A 生命周期 (2026-08-21)**: `_detect_active` 标志 — Phase B 完成 → `False` 停 Handle/Cup 检测(`[CAM-A] Phase B 完成 → 停止...`); socket 断开(finally) → `True` 恢复(`[CAM-A] socket 断开 → 恢复...`); run 主循环条件调用 `_detect`
+5. **Phase D 排查打印增强**: HandInCup 结果打印耗时(`[INFO] HandInCup: TRUE (X.Xs)` / 超时); `[WARN] HandInCup 已 18s+ → 逼近 CRP 20s 窗口` 预警(直接验证 25s vs 22s 疑点)
+6. **待办**: Phase D 根因实机重测 — 观察 `[CAM-A]` 停/开时序 + `[WARN] HandInCup 18s` + `[RECV] READY` 是否出现; 关键疑点: CRP socketreadstr 20s(总22s) < py HandInCup 25s; READY↔RELEASE 1s(参考 SKILL 应 2s)
+
 ### Phase 0 实机验证通过 (2026-08-21)
 
 1. **实机 4 步走通**: 示教器导入 `doc/estun_greeting_phase0.crp` (3c3f2bf5) + PC `python Estun/estun_greeting_phase0.py` — Step1 初始位姿→回 ZHAOSHOU1→MovL / Step2 等人进门→回 ZHAOSHOU2→MovL / Step3 挥手→回 WOSHOU→MovL / Step4 握手→回 Home→MovL+SocketClose, 全程正常
