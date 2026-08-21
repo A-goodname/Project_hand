@@ -125,6 +125,59 @@ ROT_THETA_SPREAD_MAX = 5.0   # 窗口内 θ 分歧上限 (deg, B3: 极差超限 
 ROT_THETA_FRESH_S = 1.5      # θ 观测新鲜窗口 (s, B3: 超期 → REJECT)
 
 
+class _HandoverClient:
+    """最小语音门禁 TCP client (内联, 原同事 /data/Speech/handover_voice_client.py, 2026-08-21).
+
+    连 8770 语音门禁 (由 /data/Speech/realtime_voice.py 直接跑提供, 与 cup_sm 共存):
+      HANDOVER_START → WAITING_HAND;  HAND_DETECTED → WAITING_CONFIRMATION;
+      STATUS 轮询 confirmed;  CANCEL → IDLE.
+    确认词 ("拿好了/接住了" 等) 由服务端 ASR 识别, client 只发命令/轮询状态.
+    """
+
+    def __init__(self, host="127.0.0.1", port=8770, timeout=2.0):
+        self.host = host
+        self.port = int(port)
+        self.timeout = float(timeout)
+
+    def command(self, command: str) -> dict:
+        import json as _json
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            sock.sendall((command.strip() + "\n").encode("utf-8"))
+            sock.settimeout(self.timeout)
+            response = bytearray()
+            while not response.endswith(b"\n"):
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response.extend(chunk)
+        if not response:
+            raise RuntimeError("Speech handover server closed without a response")
+        result = _json.loads(response.decode("utf-8"))
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error", "handover command failed"))
+        return result
+
+    def start(self) -> dict:
+        return self.command("HANDOVER_START")
+
+    def hand_detected(self) -> dict:
+        return self.command("HAND_DETECTED")
+
+    def status(self) -> dict:
+        return self.command("STATUS")
+
+    def cancel(self) -> dict:
+        return self.command("CANCEL")
+
+    def wait_confirmed(self, timeout: float, poll_interval: float = 0.1) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            if bool(self.status().get("confirmed")):
+                return True
+            time.sleep(max(0.02, float(poll_interval)))
+        return False
+
+
 # ============================================================
 #  工具函数 (与 state_machine.py 相同)
 # ============================================================
@@ -268,6 +321,10 @@ class HandleCupSM:
         self._is_person_seated = False  # 人就位 (PersonDetector)
         self._hand_on_cup = None        # True/False/None (HandInCupDetector, None=未启动/未决)
         self._hic_active = False        # HandInCup 检测激活标志 (Camera B 线程 gate; READY 激活后 True)
+        # 语音门禁 (同事 HANDOVER 方案 2026-08-20, /data/Speech; 服务不可用回退纯视觉)
+        self._handover_voice = None         # HandoverVoiceClient (TCP 127.0.0.1:8770)
+        self._voice_gate_enabled = False    # 语音门禁服务可用时 True
+        self._handover_voice_timeout = 30.0 # 语音确认超时 (s)
         self._hand_in_cup_lock = threading.Lock()
         self._camera_b_thread = None
         self._last_frame_b = None       # Camera B 最近帧缓存 (线程写, 主循环 imshow, 2026-08-21)
@@ -649,6 +706,26 @@ class HandleCupSM:
             target=self._camera_b_loop, daemon=True)
         self._camera_b_thread.start()
         print("[INFO] Camera B 线程已启动")
+
+    def _init_handover_voice(self):
+        """初始化语音门禁客户端 (内联 _HandoverClient, TCP 8770; 服务由 /data/Speech/realtime_voice.py 提供).
+
+        服务不可用时回退纯视觉 (不阻塞主流程). 返回 True=语音门禁启用.
+        """
+        if self._voice_gate_enabled:
+            return True
+        try:
+            client = _HandoverClient(host="127.0.0.1", port=8770, timeout=2.0)
+            client.start()   # 连接 + HANDOVER_START, 确认服务可用
+            self._handover_voice = client
+            self._voice_gate_enabled = True
+            print("[VOICE-GATE] 语音门禁已启用 (127.0.0.1:8770, 视觉命中后需语音确认才松手)")
+            return True
+        except Exception as e:
+            self._handover_voice = None
+            self._voice_gate_enabled = False
+            print(f"[VOICE-GATE] 语音门禁不可用 ({e}) → 回退纯视觉 (检测到即松手)")
+            return False
 
     def _camera_b_loop(self):
         """Camera B 独立线程: 持续读帧 → PersonDetector → HandInCupDetector.
@@ -1178,6 +1255,8 @@ class HandleCupSM:
             except Exception:
                 pass
             print(f"[INFO] 客户端已断开: {addr}")
+            # 单次执行模式 (2026-08-21): socket 断开(CRP 一轮结束) → 停止主循环, cup_sm 自动退出
+            self._stop_event.set()
 
     # ================================================================
     #  Phase A: 接收机器人初始末端位姿
@@ -1283,6 +1362,8 @@ class HandleCupSM:
                             self._hic_active = True   # 激活检测 (Camera B 线程 gate)
                         if self._hand_in_cup_detector is not None:
                             self._hand_in_cup_detector.reset()
+                        # 语音门禁 (同事方案): 服务可用则启动, 不可用回退纯视觉
+                        self._init_handover_voice()
                         _hic_start = time.time()
                         _hic_warned = False
                         # 等待 HandInCup 结果
@@ -1290,6 +1371,12 @@ class HandleCupSM:
                             with self._hand_in_cup_lock:
                                 if self._hand_on_cup is True:
                                     print(f"[INFO] HandInCup: TRUE ({(time.time()-_hic_start):.1f}s)")
+                                    if self._voice_gate_enabled and self._handover_voice is not None:
+                                        try:
+                                            self._handover_voice.hand_detected()
+                                            print("[VOICE-GATE] 视觉命中已通知语音门禁")
+                                        except Exception as _e:
+                                            print(f"[VOICE-GATE] hand_detected 异常: {_e}")
                                     break
                             _hic_elapsed = time.time() - _hic_start
                             if _hic_elapsed > _hic_timeout:
@@ -1319,13 +1406,27 @@ class HandleCupSM:
                             release_object()
                         print("[INFO] RELEASE (松把手)")
                     elif not hand_judged:
-                        # ---- Phase D 第一次 RELEASE: Hand-in-cup 判定 ----
+                        # ---- Phase D 第一次 RELEASE: 语音门禁优先, 视觉兜底 (2026-08-21 用户定) ----
                         hand_ok = hic
                         print(f"[INFO] Hand-in-cup 判定: {'TRUE' if hand_ok else 'FALSE'}")
                         hand_judged = True
 
-                        if hand_ok:
-                            # TRUE: 松手 → CONTINUE
+                        # 语音门禁优先: 语音确认 → 松手, 即使视觉未命中 (语音高于视觉)
+                        if self._voice_gate_enabled and self._handover_voice is not None:
+                            try:
+                                confirmed = self._handover_voice.wait_confirmed(
+                                    timeout=self._handover_voice_timeout, poll_interval=0.10)
+                                print(f"[VOICE-GATE] 语音确认: {'CONFIRMED' if confirmed else '未确认/超时'} "
+                                      f"(视觉={'命中' if hand_ok else '未命中'})")
+                            except Exception as _e:
+                                print(f"[VOICE-GATE] wait_confirmed 异常: {_e} → 按未确认处理 (ABORT)")
+                                confirmed = False
+                        else:
+                            # 纯视觉回退 (语音门禁不可用): 视觉命中才松手
+                            confirmed = hand_ok
+
+                        if confirmed:
+                            # 语音已确认 (或纯视觉命中) → 松手 → CONTINUE
                             if self._hand_available:
                                 release_object()
                             print("[INFO] RELEASE (松杯)")
@@ -1337,9 +1438,14 @@ class HandleCupSM:
                                 print(f"[WARN] 发送 CONTINUE 失败: {e}")
                                 break
                         else:
-                            # FALSE: 不松手 → ABORT
-                            print("[INFO] 无人接杯 → ABORT")
+                            # 未确认 → 保持夹持 → ABORT (绝不 release_object)
+                            print("[VOICE-GATE] 未确认 → 保持夹持, ABORT")
                             abort_mode = True
+                            if self._handover_voice is not None:
+                                try:
+                                    self._handover_voice.cancel()
+                                except Exception:
+                                    pass
                             try:
                                 sig = f"[{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}]"
                                 conn.sendall(sig.encode("utf-8"))

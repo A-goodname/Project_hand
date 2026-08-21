@@ -29,7 +29,18 @@
 8. **同事 HANDOVER 方案 (/data/Speech/)**: Phase D 视觉(计分制连续5帧命中)之上加**语音门禁** — 状态机 IDLE→WAITING_HAND→WAITING_CONFIRMATION→CONFIRMED; 视觉命中后仍需语音确认("拿好了/接住了"等)才 release permission; 未确认/超时 → 保持夹持 → 返回 `[位姿]` ABORT 路径。**接入点**: cup_sm READY 后 `HandoverVoiceClient(127.0.0.1:8770)` start, 视觉 True → hand_detected, RELEASE 时 `wait_confirmed` → confirmed 才 `release_object()`(PROJECT_HAND_PHASE_D_PATCH.md 最小接入)。待确认是否接入
 9. **cup 检测优化 (2026-08-21, 裁剪+杯壁)**: `_compute_cup_3d` 裁剪宽度 `2×rim_px` → **+杯壁 5mm 像素**(thick_px, config `cup_wall_thickness: 0.005`); 解决 **bbox 靠近杯缘/把手非正对左侧时采样偏窄 → 杯体被裁 → 倒水点偏**。142 测试绿
 10. **P3 已调 (2026-08-21, 用户定)**: `p3_teach_offset.left.30.t_offset` X 0.0686→**0.0886**(+2cm), Z 0.2536→**0.2636**(+1cm) — 若裁剪+杯壁仍偏, P3 前移补偿
-11. **待办**: ①**实机测试完整流程**(P3 已改: 倒水点是否正对杯口) ②重测 HandInCup 视觉(gate fix `_hic_active`) ③接入语音门禁(同事方案, 待定)
+11. **Phase D 打通 (2026-08-21, 用户确认)**: 完整流程成功 — cup 裁剪+杯壁 + P3 X+2cm/Z+1cm + HandInCup gate fix(`_hic_active`)三处生效。**Camera B 实时显示**: 线程缓存 `_last_frame_b` + 主循环 imshow `HandleCupSM | Camera B`
+12. **语音门禁接入 (2026-08-21, 同事方案 /data/Speech, 方案B=cup_sm+独立门禁, 最终定案)**: 
+    - cup_sm 接入 `HandoverVoiceClient`(127.0.0.1:8770): READY 时 `_init_handover_voice()`(**服务不可用回退纯视觉**); 视觉 True → `hand_detected()`; RELEASE 时 `wait_confirmed(30s)` → **confirmed 才 release + CONTINUE**, 未确认 → 保持夹持 + ABORT
+    - **client 内联进 cup_sm**(`_HandoverClient` 类, 无独立文件/文件夹; Handover/ 已删) — 最小 TCP client(发命令/轮询确认)
+    - **8770 服务端 = 绝对路径直接跑同事的 `realtime_voice.py`**(= gate-only, 不开机器人/相机, 与 cup_sm 共存):
+      `/data/xilu/conda-envs/VLA/bin/python /data/Speech/realtime_voice.py --config /data/Speech/config.json`
+    - **验证通过 (2026-08-21)**: realtime_voice 直接跑 → 8770 监听; client(Proj)协议 `HANDOVER_START`→WAITING_HAND / `STATUS`→confirmed=False / `CANCEL`→IDLE 全对
+    - **语音优先 (2026-08-21 用户定)**: RELEASE 判定改为**语音门禁优先, 视觉兜底** — 语音 confirmed → 松手(**即使视觉未命中**, WAITING_HAND 状态也接受确认词); 语音未确认/门禁不可用 → 才看视觉
+    - **单次执行模式 + 一键脚本 (2026-08-21)**: cup_sm `_handle_session` finally 设 `_stop_event` — **一轮 CRP socket 断开后自动退出**; `start_cup_handover.sh` 一键启动(门禁弹 gnome-terminal 窗口, **cup_sm 本终端**)
+    - **实机测试通过 (2026-08-21, 用户确认)**: 语音门禁流程通(含语音优先: 视觉未命中 + 喊"拿好了" → 松手)
+13. **RPS 了解 (2026-08-21, /data/Speech/RPS_SERVICE_HANDOVER.md)**: RPS 剪刀石头布 = `realtime_voice.py --rps-game` + HTTP 8768 + `rps_stream.py`(唯一持摄像头/MediaPipe/手势动作队列); 统一启动 `start_rps_voice.sh`; 邀请→倒计时→视觉判断→结算; 与递杯(8770 门禁)是 realtime_voice 不同模式(--rps-game 切换), 完整服务 run_handover_service 整合递杯; **RPS 接入 Project_hand 待定**
+14. **待办**: ①提交语音门禁这批改动 ②若语音确认慢 > CRP 20s 窗口需评估 CRP 超时(confirmed 在视觉命中前可能已达成, WAITING_HAND 即收确认) ③RPS 接入 Project_hand 待定
 
 ### Phase 0 实机验证通过 (2026-08-21)
 
