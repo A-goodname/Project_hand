@@ -15,11 +15,12 @@
 ### Phase 0 打招呼独立交付: py + CRP (2026-08-20)
 
 1. **更新 doc CRP (状态机单独保存)**: `doc/state_machine_reference.crp` ← 示教器下载 `~/下载/IDLEtemp-Down-645.crp` (sha256 `a8a8ee00...`, 80块/22点, 含 GH_* 与双 Socket); 旧版备份 `.bak` (`4d92f70d`); `data_sm-Down-946.crp` 与 `doc/estun_handle_data_sm.crp` **sha256 相同** (`4227c66b`) 已是最新未动
-2. **抽取独立 Phase 0 CRP**: `scripts_gen/gen_greeting_phase0_crp.py` → `doc/estun_greeting_phase0.crp` (sha256 `d0dcdd5b`, 26 块/6 点)。Phase 0 = blocks 0-25 (Socket1:8600 四步协议, 超时 10/130/30/90s, MovL GH_ZHAOSHOU1/2/WOSHOU/Home, socketclose); 点位只留 GH_CUR/ZHAOSHOU1/ZHAOSHOU2/WOSHOU/HOME2 + Home; vars.project 清空 (Phase 0 全用系统变量); Socket0 系统声明保留 (惰性无害)
-3. **新建独立 py**: `Estun/estun_greeting_phase0.py` — 抽取 state_machine GreetingHandler 独立化 (无 SharedContext/协作线依赖)。**相机=迎宾 UGREEN `usb-0:4.1`** (EyeToHand UGreenCamera 按路径枚举, 人进门检测, 非 D435i); `--mock` 模拟灵巧手; `--camera-path/--port` 可覆写; 4 步 TCP + YOLO 人检测 + Gesture 挥手/握手 + 压力双阈值
-4. **config**: `Estun/estun_config.yaml greeting.camera_path: usb-0:4.1`; **2026-08-20 重新示教三个打招呼位姿** (取代同事值): Z1 `[-239.73,339.759,852.73,-89.008,1.6,11.114]` / Z2 `[-204.105,204.746,928.191,-46.92,-3.076,3.518]` / WS `[-206.149,809.121,602.386,-173.773,65.873,-87.126]`; 单位 mm/deg; CRP 内 GH_* 点全零占位运行时被 PC 下发覆盖, 无需改 CRP
-5. **验证**: py_compile + 离线 mock TCP 4 步回复全对 (ZHAOSHOU1/2/WOSHOU/Home) + **142 测试绿**
-6. **待办**: 实机验证 — 示教器导入 `estun_greeting_phase0.crp` 运行 + PC 跑 `estun_greeting_phase0.py`, 走通 4 步 (等人→挥手→握手)
+2. **独立 Phase 0 CRP**: `scripts_gen/gen_greeting_phase0_crp.py` 抽取 → 后被**示教器导出版 `Phase0-Down-224.crp` 取代** (用户实机改过) → **socket IP 修正** `192.168.101.2 → 192.168.101.96:8600` (旧 IP 通信失败根因) → **GH_* 存储坐标同步为新示教值** → 当前 `doc/estun_greeting_phase0.crp` sha256 **`3c3f2bf5`** (26 块: Socket1:8600 四步, 超时 10/130/30/90s, MovL GH_*/Home, socketclose; 6 点: GH_CUR/Z1/Z2/WS/HOME2/Home)。旧版 `.bak` (`97b2c2e0`)
+3. **独立 py**: `Estun/estun_greeting_phase0.py` — 抽取 state_machine GreetingHandler 独立化 (无 SharedContext/协作线依赖)。**相机=迎宾 UGREEN `usb-0:4.1`** (EyeToHand UGreenCamera 按路径枚举, 人进门检测, 非 D435i); `--mock` 模拟灵巧手; `--camera-path/--port` 覆写; 4 步 TCP + YOLO 人检测 + Gesture 挥手/握手 + 压力双阈值
+4. **config**: `Estun/estun_config.yaml greeting.camera_path: usb-0:4.1`; **2026-08-20 重新示教三打招呼位姿** (取代同事值, mm/deg): Z1 `[-239.73,339.759,852.73,-89.008,1.6,11.114]` / Z2 `[-204.105,204.746,928.191,-46.92,-3.076,3.518]` / WS `[-206.149,809.121,602.386,-173.773,65.873,-87.126]` — **CRP GH_* 存储坐标已同步同值** (通信失败兜底一致)
+5. **排坑 (socket 通信失败)**: CRP socketcreate IP 是 `192.168.101.2` (旧) 而 PC 是 `192.168.101.96` → 机器人连不上, TranStrToCpos 拿不到数据回退 CRP 存储旧坐标 → 表现"Z1 还是旧位姿"。已改 .96
+6. **验证**: py_compile + 离线 mock TCP 4 步回复全对 + **142 测试绿**
+7. **待办 (实机)**: 示教器导入 `doc/estun_greeting_phase0.crp` 运行 + PC `python Estun/estun_greeting_phase0.py`, 走通 4 步 (等人→挥手→握手)
 
 ### config: 稳定窗口 5→10 + 跳帧 5→3 (2026-08-20, 保险定案)
 

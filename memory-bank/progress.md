@@ -3,10 +3,11 @@
 ### Phase 0 打招呼独立交付: py + CRP (2026-08-20)
 - [x] 更新 doc/state_machine_reference.crp ← IDLEtemp-Down-645 (sha256 a8a8ee00, 状态机单独保存, 旧版 .bak)
 - [x] data_sm-Down-946 与 doc/estun_handle_data_sm.crp sha256 相同 (4227c66b) — 已最新
-- [x] 抽取独立 Phase 0 CRP: gen_greeting_phase0_crp.py → doc/estun_greeting_phase0.crp (sha256 d0dcdd5b, 26块/6点, Socket1:8600 四步)
+- [x] 独立 Phase 0 CRP: 由示教器导出版取代 (socket IP 192.168.101.2→.96 修正), GH_* 存储坐标同步新示教值 → doc/estun_greeting_phase0.crp sha256 3c3f2bf5
 - [x] 新建 Estun/estun_greeting_phase0.py: 独立 4 步 TCP, 人检测用迎宾 UGREEN usb-0:4.1, --mock 模拟
 - [x] config greeting.camera_path: usb-0:4.1
-- [x] 重新示教三个打招呼位姿 (2026-08-20): Z1/Z2/WS 已更新入 estun_config.yaml (CRP GH_* 零占位无需改)
+- [x] 重新示教三个打招呼位姿 (2026-08-20): Z1/Z2/WS 更新入 estun_config.yaml + CRP GH_* 存储坐标同步
+- [x] 排坑: socket 通信失败 = CRP socketcreate IP 旧 (192.168.101.2), 已改 .96; 通信失败时机器人回退 CRP 存储旧坐标
 - [x] py_compile + mock TCP 4 步回复全对 + 142 测试绿
 - [ ] 实机验证: 示教器导入 estun_greeting_phase0.crp + PC 跑 estun_greeting_phase0.py 走通 4 步
 
