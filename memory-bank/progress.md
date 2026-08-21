@@ -39,7 +39,8 @@
 - [x] log 分析 (2026-08-20): band0 主信号近白噪声 σ0.5°, 5帧稳定窗口中位与全程均值 |偏差|≤0.4°、band 判对率 100%; band-15 单峰无抖档; band0 双峰 = 正侧 8° 接缝不连续 (非窗口问题, 待修)
 - [x] config 定案 (2026-08-20): skip_frames 5→3 + stabilization.window 5→10 (保险; 4 SM 共享, cup/state_machine 亦变; 稳定耗时 0.83s→1s)
 - [x] ROT_THETA_WIN 对齐 10 (2026-08-20, 用户定): 证据 sample 快照/theta_samples 5→10 样本, 18 回合证据合同随之变更 (采集前需训练侧知晓)
-- [ ] 实机验证 10 帧窗口稳定行为; 训练侧申报证据合同 5→10
+- [x] 实机验证 10 帧窗口稳定行为 (2026-08-21, 用户确认通过)
+- [ ] 训练侧申报证据合同 5→10 (随 18 回合采集一并申报, 协作线)
 
 ### pos_side v2: 双阈值 + 分段线性连续角度 (2026-08-20, 待实机)
 - [x] v1 中间角度二值化问题: +15~+30 之间的实际摆位被强判 15/30, 正侧不连续
@@ -49,16 +50,16 @@
 - [x] 效果: +20 摆位解算 19.96° (连续), 中间 rd 0.318→22.7°, +30 仿射 30.52, 判档 15/16
 - [x] config pos_side 改 rd_a/rd_b/rd30/k/nodes; detector _interp_pos + 双阈值判档
 - [x] 全量 135 测试全绿
-- [ ] 实机只读验证各档 band/θ_med (尤其中间角度)
-- [ ] 中间角度精度受 rd 噪声限制 (物理天花板, 需补中间摆位数据才更准)
-- [ ] 异常点 110950 (d=0.531 近距) 重采确认
+- [x] 实机只读验证各档 band/θ_med (2026-08-21, 用户确认通过: data_sm 测试 + phaseA2D 复测)
+- [x] 中间角度精度受 rd 噪声限制 (物理天花板, 已确认, 非缺陷)
+- [ ] 异常点 110950 (d=0.531 近距) 重采确认 (可随 18 回合采集顺带)
 
 ### v2 模型重拟合 + g 校正 (2026-08-20, g 校正已被 pos_side 替代)
 - [x] `_detect_tag_region` 区域百分比化按 handle_side: 右侧 [70,110]% / 左侧 [-10,30]% (删 HANDLE_SIDE_RATIO)
 - [x] clamp 图像边界 + 空区域 None; detect() 传 self._handle_side
 - [x] test_tag_points.py 独立副本同步同区间
 - [x] 新测试 6 例 + 全量 130 全绿
-- [ ] 实机只读对比扩前后各朝向 ratio/θ/band (B2 后 +45 已工艺排除 θ∈[-35,+35], 正常摆位 ratio 回落更准; 确认不触发 0.34 REJECT)
+- [x] 实机只读对比扩前后各朝向 ratio/θ/band (2026-08-21, 用户确认通过: 不触发 0.34 REJECT, 随 data_sm/pos_side 实机验证覆盖)
 
 ### PoseStabilizer 合并 θ 稳定窗口 (2026-08-19, 待实机)
 - [x] θ 并入 PoseStabilizer: 每帧 pos+euler+θ 同窗, 稳定判定含 θ 极差 (<5°), 直接取窗口 θ 中位数 → band; 删独立 θ deque + spread 手检查
@@ -66,7 +67,7 @@
 - [x] 删 _detect 双计数 (run 保留, frame_idx 每帧+1; 消除偶数 skip 陷阱)
 - [x] B3 契约保持: 恰满窗/θ 分歧 REJECT/代际失效/禁 0° 回退/1.5s 新鲜度
 - [x] 新测试 9 例 + 全量 101 全绿
-- [ ] 实机只读验证: [Handle STABLE] θ_med/band + 稳定耗时 (3→5 帧 ~0.83s)
+- [x] 实机只读验证: [Handle STABLE] θ_med/band + 稳定耗时 (2026-08-21, 用户确认通过, 窗口已 10 帧 ~1s)
 
 ### Cup 阶段移植 + Camera B + Phase D (2026-08-18)
 - [x] estun_teach_cup.py 新建 (Cup P1 示教工具, 镜像 teach_handle_p1)
@@ -79,9 +80,10 @@
 - [x] Phase D py 逻辑 (READY/RELEASE/CONTINUE/ABORT, 镜像 state_machine.py)
 - [x] CRP Phase D blocks 添加 (TranStrToCpos + If 分支 + sudu2 + 新 points)
 - [x] Phase A-C 实机验证通过 (Handle→倒水→Cup 抓取→递送)
-- [ ] **Phase D 失败**: CRP 到 C_P3 后停止运动, 未发送 READY, 连接关闭 — 根因待查
+- [x] **Phase D 失败已修复** (2026-08-21 打通): 根因=HandInCup gate bug (`_hic_active`) + cup 裁剪/杯壁 + P3 前移; 完整流程成功
   - [x] (2026-08-21 前置同步): CRP H_P3 后 wait 3s + H_P2/Home 改 MovJ; py 修 skip_frames 双计数 + PoseStabilizer θ 升级 + Phase B θ 插值/C 解析式/Z 钳位同步 data_sm (142 测试绿) — 待实机重测
   - [x] (2026-08-21 Camera A 生命周期 + 打印): Phase B 完成 → `_detect_active=False` 停检测; socket 断开 → True 恢复; HandInCup 耗时/18s 预警打印
+  - [x] (2026-08-21 打通三件套): cup 裁剪+杯壁 + P3 X+2cm/Z+1cm + HandInCup gate fix(`_hic_active`); 语音门禁 (8770, 语音优先/视觉兜底) 实机测试通过
 - [x] P3 X+1cm 微调 (0.0686 → 0.0786 m)
 - [x] doc 清理 (删除旧 session-barrier 文件, 更新 CRP)
 
@@ -199,23 +201,20 @@
 - [x] **data_sm band 查表 t_offset (2026-08-19, task #4 纯查表版)**: θ 5 帧中位数 → band → p1_offsets[band] (p1_offset + p1_abc); `_resolve_rot_band`/`_resolve_p1_offsets` 新增; Phase B P1 用 band 查表, 旧链回退固定 ABC
   - 子 agent 分析: X 对称线性 -1.72mm/°, Y 不对称弯曲 (线性 R²=0.82 失败), C 严格线性 C=C0-θ (R²=0.99998), Z 小量
   - 后续增强 (已实装 2026-08-19): **θ 档内线性插值** (`_interp_p1_offset`) + **C 解析式** (C=C0-θ); Z 钳位范围收紧 [0.360,0.362]
-- [ ] 实机验证 data_sm (θ 插值 + C 解析式 + Z 钳位): 各档 P1 落点对比 → +15 档 Z 天然 364mm 超限观察钳位效果
-- [ ] 多朝向示教: 旋转检测就绪后，各朝向（±30°/±60°等）示教 → abc_offset/detect_C 变化曲线验证
+- [x] 实机验证 data_sm (θ 插值 + C 解析式 + Z 钳位): 各档 P1 落点对比 + +15 档 Z 超限钳位效果 (2026-08-21, 用户确认通过: data_sm 测试 + phaseA2D 复测)
+- [x] 多朝向示教 ❌ 过时: 5 档简化定案后 ±60° 示教无意义 (物理摆位限定 [-35,+35], 已随 P1 复测覆盖)
 
 ## 待完成
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 **Phase D 失败根因待查** | CRP 到 C_P3 后 ~2s 自动停、READY 未发、连接关闭; 查 SocketSendStr/SocketReadStr 配置或时序 |
-| 🔴 **data_sm 实机复测各档 P1** | θ 插值 + C 解析式 + Z 钳位链路落地验证; +15 档 Z 天然 364mm 观察钳位 |
-| 🔴 **pos_side 实机只读验证** | 中间角度连续解算; 异常点 110950 (d=0.531 近距) 重采 |
-| 🟡 实机验证 10 帧稳定窗口 | config 5→10 已定案; 训练侧申报证据合同 5→10 |
-| 🟡 θ 稳定性记录工具实机逐档运行 | 分析 θ 逐帧 std → 再定稳定窗口/skip |
+| 🔴 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
+| 🟡 证据合同 5→10 申报 (训练侧) | ROT_THETA_WIN 对齐 10; 随 18 回合采集一并申报 (协作线) |
+| 🟡 异常点 110950 重采 | pos_side 数据点 d=0.531 近距; 可随 18 回合采集顺带 |
 | 🟡 Phase 0 握手超时备选 | 若握手变慢: 方案A=CRP 90→110~120s / 方案B=py force_release_timeout 60→45s (现冗余足够) |
-| 🟡 CRP 实机导入测试 | `estun_handle_sm.crp` + `estun_handle_cup_sm.crp` (遗留) |
-| 🟡 单相机 SM 实机联调 | `estun_handle_sm.py` + `estun_handle_cup_sm.py` (遗留) |
-| 🟡 豆包实机联调 (1/2/3) + MiMo 对比 | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色; 延迟对比 (遗留) |
-| 🟢 sudu2 实机验证 | CRP 导入示教器 (遗留) |
+| 🟡 豆包实机联调 (1/2/3) + MiMo 对比 | 无手对话 → 空载手势 → 握手/急停/抢话/断网/音色; 延迟对比 (遗留, 去留待定) |
+
+已通过/已闭环 (2026-08-21 用户确认): Phase E 单局 + 多局制复测 ✅ (de143d1) · data_sm 各档 P1 复测 ✅ · pos_side 只读验证 ✅ · 10 帧稳定窗口实机验证 ✅ · θ 稳定性记录工具逐档运行 ✅ · Phase D 失败根因 ✅ (cup 裁剪+杯壁 + P3 前移 + HandInCup gate fix + 语音门禁) · sudu2 实机验证 ✅ (随 Phase D CRP 实机覆盖) · 单相机 SM 联调 ❌ 排除 · CRP 实机导入测试 ❌ 过时 (estun_handle_cup_sm.crp 已实机走通)
 
 ## 已知问题
 - RealSense_R rs.align 不可用 (内参损坏)

@@ -6,13 +6,13 @@
 
 **Phase 0 打招呼独立交付(✅ 已完成 2026-08-21)** — `Estun/estun_greeting_phase0.py` + `doc/estun_greeting_phase0.crp` 实机 4 步走通(等人→挥手→握手→Home)。时序核对:CRP SocketReadStr 10/130/30/90s vs py recv 5/130/30/90s;Step 4 py 握手最坏 92.5s 略超 CRP 90s(~2.5s 缺口),实机握手几秒内完成,用户判定冗余足够,暂不改(方案 A=CRP 90→110~120s / 方案 B=py force_release_timeout 60→45s 备选)。
 
-**传统路线 Cup 阶段移植** — `estun_handle_cup_sm.py` + CRP 移植 Handle+Cup 全流程。Phase A-C（Handle 抓取→倒水→Cup 抓取→递送）已成功实机运行；**Phase D（READY→HandInCup→CONTINUE/ABORT）失败** — CRP 到 C_P3 后 ~2s 自动停止运动，未发送 READY 到 Python，连接关闭。根因待查（CRP SocketSendStr/SocketReadStr 配置或时序问题）。
+**传统路线 Cup 阶段移植（✅ 全部打通 2026-08-21）** — `estun_handle_cup_sm.py` + CRP 移植 Handle+Cup 全流程。Phase A-C（Handle 抓取→倒水→Cup 抓取→递送）已成功实机运行；**Phase D（READY→HandInCup→CONTINUE/ABORT）已修复** — 根因 = HandInCup gate bug（`_hic_active`）+ cup 裁剪/杯壁 + P3 前移三处生效，语音门禁（8770，语音优先/视觉兜底）实机测试通过。
 
-**多视角朝向示教（本地主线，抓取链路已打通）** — 旋转判档定版（2026-08-19）：纯 θ 区间 **5 档** `[-8,8]=0, (8,22]=15, >22=30`（负侧对称，无 ±45，+45 统一落 +30）。检测链 `handle_cup_detector.py`：HSV 青色贴纸 → ratio → θ 反解 → band，模型/门限在 `Orchestrator/config.yaml handle_rotation`。**抓取姿态规律**：绕竖直轴旋转只改 C（`C=C0-θ`，误差<0.2°），A/B 恒定，姿态不逐档示教。**t_offset 5 档示教完成**（p1_offsets 表 -30/-15/0/+15/+30）。**data_sm 已接入**：θ 稳定窗口中位数 → band → 查 p1_offsets + θ 档内线性插值（`_interp_p1_offset`）+ C 解析式 + P1 Z 钳位 [0.360,0.362]。稳定窗口 5→10 / skip 3（2026-08-20，4 SM 共享，稳定耗时 ~1s）。pos_side v2（08-20）：双阈值 rd_a/rd_b + 分段线性连续角度，中间角度不再二值化。待办：实机复测各档 P1 落点（尤其 +15 档 Z 天然 364mm 观察钳位）、pos_side 只读验证、异常点 110950 重采。
+**多视角朝向示教（本地主线，抓取链路已打通）** — 旋转判档定版（2026-08-19）：纯 θ 区间 **5 档** `[-8,8]=0, (8,22]=15, >22=30`（负侧对称，无 ±45，+45 统一落 +30）。检测链 `handle_cup_detector.py`：HSV 青色贴纸 → ratio → θ 反解 → band，模型/门限在 `Orchestrator/config.yaml handle_rotation`。**抓取姿态规律**：绕竖直轴旋转只改 C（`C=C0-θ`，误差<0.2°），A/B 恒定，姿态不逐档示教。**t_offset 5 档示教完成**（p1_offsets 表 -30/-15/0/+15/+30）。**data_sm 已接入**：θ 稳定窗口中位数 → band → 查 p1_offsets + θ 档内线性插值（`_interp_p1_offset`）+ C 解析式 + P1 Z 钳位 [0.360,0.362]。稳定窗口 5→10 / skip 3（2026-08-20，4 SM 共享，稳定耗时 ~1s）。pos_side v2（08-20）：双阈值 rd_a/rd_b + 分段线性连续角度，中间角度不再二值化。**实机验证已过（2026-08-21，用户确认）**：data_sm 各档 P1 复测通过（θ 插值 + C 解析式 + Z 钳位链路，含 +15 档 Z 钳位）+ pos_side 只读验证通过（data_sm 测试 + phaseA2D 复测）+ 10 帧稳定窗口 + θ 稳定性记录工具逐档运行全部通过。仅剩：异常点 110950（d=0.531 近距）重采，可随 18 回合采集顺带。
 
 训练侧线（**已完成**）：P2/P1 双确认协议适配（D0 门禁）协作线已交付完毕。
 
-**Phase E RPS 接入（2026-08-21，单局已走通 + 多局制/收尾代码完成待实机）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `a5054c91`，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付。**完整单局已实机走通**（臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home）；**多局制 rounds=0 等人退出**（"退出游戏/不玩了"→日志裸"退出"行→DONE）+ **RPS 服务优雅收尾** 代码完成，153 测试绿。排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。待办：多局制实机复测、三 CRP 融合。
+**Phase E RPS 接入（✅ 全部完成 2026-08-21）** — `/data/Speech` RPS 服务（语音/视觉/灵巧手出拳）之上，机械臂负责端手到 P1 示教点位 + 游戏保持 + 回 Home。用户写 CRP → `doc/estun_rps_phaseE.crp`（sha `a5054c91`，端口 8700）：open→P1→While(独立 whileflag)→Home(存储点)→close；**位姿米/度**。py 单一入口 `Estun/estun_rps_phaseE.py` + config + `start_rps_phaseE.sh` 已交付。**完整单局已实机走通**（臂到位→auto-invite→JBL 播邀请→"开始"→判拳→结算→DONE→Home）；**多局制 rounds=0 等人退出**（"退出游戏/不玩了"→日志裸"退出"行→DONE）+ **RPS 服务优雅收尾**（de143d1, 153 测试绿），**实机复测通过（用户 2026-08-21 确认，1→2 局→退出→DONE→Home→RPS 自动收尾）**。排坑全记录：while 独立标志法 / 相机 EyeToHand 路径解析 / 音响双 PipeWire + pw-cat default sink。待办：仅剩三 CRP 融合。
 
 ## 最近变更
 
@@ -262,14 +262,10 @@
 
 | 优先级 | 任务 | 说明 |
 |:---:|------|------|
-| 🔴 | **Phase E 多局制实机复测** | rounds=0 等人退出已实现: 第 1 局→"开始"→第 2 局→"退出游戏"→DONE→Home→RPS 服务自动收尾；单局 demo 已走通 (2026-08-21) |
-| 🟡 | 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
-| 🔴 | **Phase D 失败根因待查** | CRP 到 C_P3 后 ~2s 自动停、READY 未发、连接关闭；查 SocketSendStr/SocketReadStr 配置或时序 |
-| 🔴 | **data_sm 实机复测各档 P1** | θ 插值 + C 解析式 + Z 钳位链路落地验证；尤其 +15 档 Z 天然 364mm 超限观察钳位 |
-| 🔴 | **pos_side v2 实机只读验证** | 中间角度连续解算；异常点 110950 重采 |
-| 🟡 | 实机验证 10 帧稳定窗口 | config 5→10 已定案；训练侧申报证据合同 5→10 |
-| 🟡 | θ 稳定性记录工具实机逐档运行 | 分析 θ 逐帧 std → 再定稳定窗口/skip |
+| 🔴 | 三 CRP 融合 | Phase0(8600)+A2D(8080)+PhaseE(8700) 融合一个, 段间 wait 1s; 串口归属交接 (cup_sm→RPS 服务) 是难点 |
+| 🟡 | 证据合同 5→10 申报（训练侧） | ROT_THETA_WIN 对齐 10 已定案；随 18 回合采集一并申报（协作线，非实机新动作） |
+| 🟡 | 异常点 110950 重采 | pos_side 数据点 d=0.531 近距；可随 18 回合采集顺带 |
 | 🟡 | Phase 0 握手超时备选 | 若握手场景变慢：方案A=CRP 90→110~120s / 方案B=py force_release_timeout 60→45s（现冗余足够，未触发） |
-| 🟡 | CRP 实机导入测试 | estun_handle_sm.crp + estun_handle_cup_sm.crp（遗留） |
-| 🟡 | 单相机 SM 实机联调 | estun_handle_sm.py + estun_handle_cup_sm.py（遗留） |
-| 🟡 | 豆包实机联调 + MiMo 对比 | 阶段 1/2/3 实机 + 延迟对比（遗留，非主线） |
+| 🟡 | 豆包实机联调 + MiMo 对比 | 阶段 1/2/3 实机 + 延迟对比（遗留，非主线，去留待定） |
+
+已通过/已闭环（2026-08-21 用户确认）：Phase E 单局 + 多局制复测 ✅ · data_sm 各档 P1 复测 ✅ · pos_side 只读验证 ✅ · 10 帧稳定窗口实机验证 ✅ · θ 稳定性记录工具逐档运行 ✅ · Phase D 失败根因 ✅ · 单相机 SM 联调 ❌ 排除 · CRP 实机导入测试 ❌ 过时（Cup 阶段已实机走通） · sudu2 实机验证 ✅（随 Phase D CRP 实机已覆盖）
