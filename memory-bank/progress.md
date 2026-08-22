@@ -38,6 +38,20 @@
 - [x] 防接着跑 Phase E RPS 撞"门禁→RPS voice 回声自打断"同款竞态
 - [x] bash -n + GATE_PATTERN 命中断言 + trap 结构 PASS
 
+### Phase0 语音欢迎出声修复: greeting_announcer 去 pipewire_target (2026-08-22)
+- [x] 现象: Phase0 人进门语音欢迎 JBL 无声, 但 paplay/pw-cat 直连都能出声
+- [x] 根因: greeting_announcer 用默认 config(带 pipewire_target=JBL) → `pw-cat --target` 在 A2DP sink 静默失败 (同 realtime_audio 已知坑)
+- [x] 修复: `estun_greeting_phase0.py _announce_voice` 复制 config 清空 pipewire_target → `--config /tmp/greet_config.json` 走 default sink=JBL
+- [x] py_compile + 实测: `start_greeting.sh --no-enter --config <去target> ` 再播 问候语可听到 (2026-08-22)
+- [ ] 实机融合: Phase0 人进门 JBL 播"来自同济大学的各位老师晚上好呀！"
+
+### PhaseD 门禁(8770) TTS 出声修复: 同 pw-cat --target 坑 (2026-08-22)
+- [x] 现象: 门禁 TTS("拿稳了吗？/快来接一下。/收到。") JBL 无声; RPS voice(--rps-game) 正常 (已用去 target config)
+- [x] 根因: 门禁启动用 --config /data/Speech/config.json (带 pipewire_target=JBL) → realtime_audio pw-cat --target 在 A2DP 静默失败
+- [x] 修复: 门禁改 --config /tmp/gate_config.json (复制 config.json 清空 pipewire_target, 走 default sink=JBL); cup_sm _spawn_handover_gate + start_cup_handover.sh 预启都改; GATE_PATTERN 同步改成 /tmp/gate_config.json (唯一匹配不误伤 RPS voice)
+- [x] bash -n ×2 + py_compile + 无残留旧 pattern
+- [ ] 实机融合: 门禁提示音可听到
+
 ### 融合运行前音频检查 check_audio (2026-08-22, 不 sudo)
 - [x] 现象: 融合 demo 音响没声音; 根因 = ①蓝牙音箱关机 (JBL sink 消失) ②双 PipeWire (user + wangxilu) 抢 A2DP
 - [x] 手动修复验证: 停 wangxilu 音频 (sudo pkill -u wangxilu -x pipewire/wireplumber/pipewire-pulse, 需 sudo) + JBL 开机 + bluetoothctl connect → JBL 回 user 实例, api.bluez5.profile=a2dp-sink, 默认 sink=JBL, paplay 测试音可出声 (实测)

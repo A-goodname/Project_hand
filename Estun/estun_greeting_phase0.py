@@ -225,15 +225,31 @@ class Phase0Greeting:
         /data/Speech/config.json 的 greeting.message (对方改文案我方自动跟随).
         不阻塞 TCP 协议 (subprocess.Popen 非等待); 独立进程组防与 phase0 同组被误杀.
         """
-        import subprocess
+        import subprocess, json
         script = self._voice_script
         if not os.path.exists(script):
             print(f"[GREETING] 语音脚本不存在: {script} → 跳过播报")
             return
-        print("[GREETING] 语音播报: 复用 /data/Speech 问候文案 (config.json greeting.message)")
+        # 2026-08-22: greeting_announcer 默认用 config.json 的 pipewire_target(显式 JBL target),
+        # 但 pw-cat --target 在 A2DP sink 上静默失败 → JBL 无声. 故复制 config 清空 pipewire_target,
+        # 让 pw-cat 走 default sink(=JBL, 由 start_phase_all.sh pactl set-default-sink 设定) 才出声.
+        greet_config = "/tmp/greet_config.json"
+        try:
+            src = "/data/Speech/config.json"
+            d = json.load(open(src, encoding="utf-8"))
+            d.get("realtime", {}).pop("pipewire_target", None)
+            with open(greet_config, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False, indent=1)
+        except Exception as e:
+            print(f"[GREETING] 语音 config 复制失败: {e} → 走默认(可能无声)")
+            greet_config = None
+        print("[GREETING] 语音播报: 复用 /data/Speech 问候文案 (config.json greeting.message, 走 default sink=JBL)")
+        cmd = ["bash", script, "--no-enter"]
+        if greet_config:
+            cmd += ["--config", greet_config]
         try:
             subprocess.Popen(
-                ["bash", script, "--no-enter"],
+                cmd,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,   # 独立进程组, 不与 phase0 同组被误杀
             )

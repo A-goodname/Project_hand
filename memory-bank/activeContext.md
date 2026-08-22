@@ -21,6 +21,13 @@
 3. **验证**: bash -n ×2 + py_compile + **全量 168 测试绿** (无回归)
 4. **待实机** (需训练侧批准): 融合 demo RPS 交接不再"只吐两字"
 
+### Phase0 语音欢迎出声修复 (2026-08-22)
+
+1. **现象**: Phase0 人进门语音欢迎 JBL 无声, 但 paplay/pw-cat 直连都能出声
+2. **根因**: greeting_announcer 用默认 config(带 pipewire_target=JBL) → `pw-cat --target` 在 A2DP sink 静默失败 (同 realtime_audio 坑)
+3. **修复**: `estun_greeting_phase0.py _announce_voice` 复制 config 清空 pipewire_target → `--config /tmp/greet_config.json` 走 default sink=JBL; py_compile + 实测 (start_greeting.sh --no-enter --config 去target 可听到)
+4. **待实机**: 融合 Phase0 人进门 JBL 播问候
+
 ### 融合运行前音频检查 check_audio (2026-08-22, 不 sudo)
 
 1. **现象**: 融合 demo 音响无声; 根因 = 蓝牙音箱关机 (JBL sink 消失) + 双 PipeWire (user + wangxilu) 抢 A2DP

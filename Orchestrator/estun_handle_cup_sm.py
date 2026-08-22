@@ -816,12 +816,26 @@ class HandleCupSM:
 
     def _spawn_handover_gate(self):
         """自启 8770 门禁服务 (realtime_voice --config, gate-only, 不开机器人/相机)."""
-        import subprocess
+        import subprocess, json
+        # 2026-08-22: config.json 带 pipewire_target(显式 JBL target) → realtime_audio 用 pw-cat --target,
+        # 在 A2DP sink 上静默失败 → 门禁 TTS 无声 (同 greeting/RPS 坑). 复制 config 清空 pipewire_target →
+        # 走 default sink(=JBL, 由 start_phase_all.sh set-default-sink) 才出声. 独立路径 /tmp/gate_config.json
+        # 以便 GATE_PATTERN 唯一匹配门禁 (不误伤 --rps-game 的 RPS voice).
+        gate_config = "/tmp/gate_config.json"
+        try:
+            with open("/data/Speech/config.json", encoding="utf-8") as f:
+                d = json.load(f)
+            d.get("realtime", {}).pop("pipewire_target", None)
+            with open(gate_config, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False, indent=1)
+        except Exception as e:
+            print(f"[VOICE-GATE] 门禁 config 复制失败: {e} → 用默认(门禁 TTS 可能无声)")
+            gate_config = "/data/Speech/config.json"
         try:
             self._gate_proc = subprocess.Popen(
                 ["/data/xilu/conda-envs/VLA/bin/python",
                  "/data/Speech/realtime_voice.py",
-                 "--config", "/data/Speech/config.json"],
+                 "--config", gate_config],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             print(f"[VOICE-GATE] 门禁服务已自启 (pid={self._gate_proc.pid})")

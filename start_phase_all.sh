@@ -27,8 +27,9 @@ GATE_AUDIO_SETTLE="${GATE_AUDIO_SETTLE:-2}"
 A2D_PATTERN="^${PROJ_PY} .*estun_handle_cup_sm\.py"
 PHASE0_PATTERN="^${PROJ_PY} .*estun_greeting_phase0\.py"
 PHASEE_PATTERN="^${PROJ_PY} .*estun_rps_phaseE\.py"
-# 8770 语音门禁进程匹配模式 (gate-only: realtime_voice --config)
-GATE_PATTERN="realtime_voice.py --config /data/Speech/config.json"
+# 8770 语音门禁进程匹配模式 (gate-only: realtime_voice --config /tmp/gate_config.json)
+# 门禁 config 已去 pipewire_target (走 default sink 出声); 独立路径保证唯一匹配门禁、不误伤 --rps-game 的 RPS voice
+GATE_PATTERN="realtime_voice.py --config /tmp/gate_config.json"
 
 # ---- 清理残留 (端口 + RPS 进程 + 临时文件) ----
 echo "[清理] 检查残留端口/进程..."

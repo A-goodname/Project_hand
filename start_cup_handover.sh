@@ -16,13 +16,19 @@ PROJ_PY="/home/user/miniconda3/envs/Proj/bin/python"
 SPEECH_DIR="/data/Speech"
 PROJECT_DIR="/data/VLA/Project_hand"
 # 门禁 process 匹配模式 (与 start_phase_all.sh wait_gate_gone / cup_sm 自启 一致)
-GATE_PATTERN="realtime_voice.py --config /data/Speech/config.json"
+GATE_PATTERN="realtime_voice.py --config /tmp/gate_config.json"
 
 # ---- ① 门禁: 新终端窗口 (独立, 便于看门禁日志); 门禁退出 → 窗口自动关 (无 exec bash) ----
+# 2026-08-22: config.json 带 pipewire_target(显式 JBL target) → realtime_audio 用 pw-cat --target 在
+# A2DP 静默失败 → 门禁 TTS 无声. 复制 config 清空 pipewire_target → 走 default sink(=JBL) 才出声.
+# 独立路径 /tmp/gate_config.json 供 GATE_PATTERN 唯一匹配门禁 (不误伤 --rps-game 的 RPS voice).
+GATE_CONFIG="/tmp/gate_config.json"
+"$PROJ_PY" -c "import json; d=json.load(open('$SPEECH_DIR/config.json',encoding='utf-8')); d.get('realtime',{}).pop('pipewire_target',None); json.dump(d, open('$GATE_CONFIG','w',encoding='utf-8'), ensure_ascii=False, indent=1)" \
+  || echo "[WARN] 门禁 config 复制失败 → 用默认(门禁 TTS 可能无声)"
 echo "开 8770 门禁窗口..."
 gnome-terminal --title="8770 语音门禁" -- bash -c "\
     echo '======== 8770 语音门禁 (realtime_voice) ========'; \
-    '$VLA_PY' '$SPEECH_DIR/realtime_voice.py' --config '$SPEECH_DIR/config.json'; \
+    '$VLA_PY' '$SPEECH_DIR/realtime_voice.py' --config '$GATE_CONFIG'; \
     echo '门禁已退出 (code='\$?')'"
 
 # ---- ② cup_sm 退出后清理门禁 (trap: 无论 cup_sm 成功/失败都执行) ----
