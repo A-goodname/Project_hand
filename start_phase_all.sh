@@ -52,6 +52,44 @@ pkill -KILL -f 'estun_rps_phaseE.py' 2>/dev/null || true
 sleep 0.5
 rm -f "$VOICE_LOG" "$HELPER" "$FIFO" /tmp/rps_voice_stdin 2>/dev/null || true
 
+# ---- 运行前环境检查: 音频 (2026-08-22) ----
+# 不用 sudo (杀不了其它用户的进程). 只做检测: 发现音频异常(多套声音服务器 / 无 JBL sink) →
+# 打印说明 + 停止启动 (exit), 由用户手动修复后重跑; AUDIO_CHECK=0 可跳过停止(仍打印, 可能无声).
+JBL_SINK=bluez_output.78_44_05_FA_12_B9.1
+JBL_MAC=78:44:05:FA:12:B9
+check_audio() {
+  local me="$(id -un)"
+  echo "[音频检查] 前置环境检查 (不用 sudo, 仅检测)..."
+  # 1) 多套 PipeWire 实例并存 → 抢蓝牙 A2DP → JBL 挂不上高清 profile → 音响无声
+  local extras
+  extras=$(ps -o user= -C pipewire,wireplumber,pipewire-pulse 2>/dev/null | sort -u \
+             | grep -v "^${me}$" | grep -v '^root$' | tr '\n' ' ')
+  if [ -n "$extras" ]; then
+    echo "[音频检查] ❌ 检测到多套声音服务器实例并存: 当前=$me, 多余=[$extras]"
+    return 1
+  fi
+  # 2) JBL 蓝牙 sink 是否在 (音箱开机 + 已连接, 由当前 user 实例接管)
+  if ! XDG_RUNTIME_DIR=/run/user/1000 pactl list short sinks 2>/dev/null | grep -q "$JBL_SINK"; then
+    echo "[音频检查] ❌ 找不到 JBL 蓝牙 sink ($JBL_SINK) — 音箱可能未开机/未连接"
+    return 1
+  fi
+  echo "[音频检查] ✓ 音频环境正常 (单一声音服务器 + JBL sink 存在)"
+  return 0
+}
+
+if ! check_audio; then
+  echo "[音频检查] ⚠ 音频环境异常 → 请手动修复 (需 sudo/蓝牙, sh 不代劳), 修好重跑, 或用 AUDIO_CHECK=0 跳过:"
+  echo "   ① 多套声音服务器: 停多余那套 (需 sudo)   e.g.  sudo pkill -u <多余用户> -x pipewire; sudo pkill -u <多余用户> -x wireplumber; sudo pkill -u <多余用户> -x pipewire-pulse"
+  echo "      (停掉后 JBL 蓝牙可能需重连:  bluetoothctl connect $JBL_MAC)"
+  echo "   ② JBL sink 不在: 打开蓝牙音箱电源 → bluetoothctl connect $JBL_MAC → 确认 pactl 出现 $JBL_SINK"
+  echo "   ③ 确认默认 sink 是 $JBL_SINK:  XDG_RUNTIME_DIR=/run/user/1000 pactl set-default-sink $JBL_SINK"
+  if [ "${AUDIO_CHECK:-1}" != "0" ]; then
+    echo "[音频检查] 中断启动 (音频环境异常)"
+    exit 3
+  fi
+  echo "[音频检查] AUDIO_CHECK=0 → 已跳过中断, 继续启动 (可能无声)"
+fi
+
 # ---- 读 config auto_invite.enabled ----
 read_auto_invite() {
   "$PROJ_PY" -c "

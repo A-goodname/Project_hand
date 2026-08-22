@@ -21,6 +21,12 @@
 3. **验证**: bash -n ×2 + py_compile + **全量 168 测试绿** (无回归)
 4. **待实机** (需训练侧批准): 融合 demo RPS 交接不再"只吐两字"
 
+### 融合运行前音频检查 check_audio (2026-08-22, 不 sudo)
+
+1. **现象**: 融合 demo 音响无声; 根因 = 蓝牙音箱关机 (JBL sink 消失) + 双 PipeWire (user + wangxilu) 抢 A2DP
+2. **修复**: `start_phase_all.sh` 加 `check_audio` 前置检查 — 不 sudo (杀不了别人进程): 检测"多套声音服务器并存 / JBL sink 不存在" → 打印说明 + 手动修复法 → `exit 3` 停止启动 (AUDIO_CHECK=0 跳过)
+3. **实机验证 (2026-08-22)**: 停 wangxilu + JBL 开机/重连 → `api.bluez5.profile=a2dp-sink` + 默认 sink=JBL, paplay 测试音确认可出声
+
 ### 三 CRP 融合 + RPS 交接 (2026-08-21, 代码完成待实机)
 
 1. **交付物**: `doc/estun_fused_phase_all.crp` (sha `2a2ab984`) + `start_phase_all.sh` + `scripts_gen/fuse_three_crp.py`; Phase0(8600)→wait3s→A2D(8080)→wait3s→E(8700); **159 测试绿**。详细约束/端口/设备串行/进程判断见 `techContext.md` 融合段

@@ -38,6 +38,13 @@
 - [x] 防接着跑 Phase E RPS 撞"门禁→RPS voice 回声自打断"同款竞态
 - [x] bash -n + GATE_PATTERN 命中断言 + trap 结构 PASS
 
+### 融合运行前音频检查 check_audio (2026-08-22, 不 sudo)
+- [x] 现象: 融合 demo 音响没声音; 根因 = ①蓝牙音箱关机 (JBL sink 消失) ②双 PipeWire (user + wangxilu) 抢 A2DP
+- [x] 手动修复验证: 停 wangxilu 音频 (sudo pkill -u wangxilu -x pipewire/wireplumber/pipewire-pulse, 需 sudo) + JBL 开机 + bluetoothctl connect → JBL 回 user 实例, api.bluez5.profile=a2dp-sink, 默认 sink=JBL, paplay 测试音可出声 (实测)
+- [x] start_phase_all.sh 加 check_audio 前置检查: 不用 sudo — 检测"多套声音服务器并存 / JBL sink 不存在" → 打印说明 + 手动修复法 + exit 3 停止启动 (AUDIO_CHECK=0 可跳过)
+- [x] bash -n + 检测逻辑干跑验证 (正确识别多余实例/排除当前 user)
+- [ ] 实机融合: 音频修复后重跑 start_phase_all.sh 确认 Phase0 语音欢迎 + RPS voice 正常出声
+
 ### 融合语音截断根修: 门禁 SIGINT 优雅关停 (2026-08-22, 方案A)
 - [x] 原理: 半双工麦克风门控 (TTS 播放时 _mic_enabled.clear, 播放完 tail_guard 1000ms 重开); interrupt 由游戏/ASR 触发
 - [x] cup_sm stop() 门禁 terminate()(SIGTERM)→send_signal(SIGINT) (触发 KeyboardInterrupt→audio.close 干净释放; SIGTERM/SIGKILL 兜底)
