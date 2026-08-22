@@ -487,8 +487,21 @@ class HandleCupSM:
 
         if self._gate_proc is not None:
             try:
-                self._gate_proc.terminate()
-                print("[VOICE-GATE] 自启门禁服务已停止")
+                # 2026-08-22: 门禁须"优雅关停"(SIGINT) — realtime_voice 只捕 KeyboardInterrupt,
+                # SIGTERM 会跳过 finally:audio.close() → 其 pw-cat speaker 子进程孤儿化 + 音频图不释放,
+                # RPS voice 接手同一麦克风时回声自打断 (只吐两字). SIGINT → KeyboardInterrupt → audio.close()
+                # 干净释放麦克风/pw-cat. 保留 SIGTERM/SIGKILL 兜底 (防 gate 卡死).
+                import signal, subprocess
+                self._gate_proc.send_signal(signal.SIGINT)
+                try:
+                    self._gate_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._gate_proc.terminate()   # SIGTERM 兜底
+                    try:
+                        self._gate_proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self._gate_proc.kill()     # SIGKILL 兜底
+                print("[VOICE-GATE] 自启门禁服务已优雅停止 (SIGINT, 音频已释放)")
             except Exception as e:
                 print(f"[WARN] 门禁服务停止异常: {e}")
             self._gate_proc = None

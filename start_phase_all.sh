@@ -19,10 +19,16 @@ FIFO="/tmp/rps_voice_stdin"
 HELPER="/tmp/rps_phaseE_service.sh"
 PREVIEW="${PREVIEW:-0}"   # 1=开 cv2 预览窗口 (调试); 0=headless (默认, GPU 不支持渲染省 CPU)
 RPS_SETTLE="${RPS_SETTLE:-5}"   # A2D 退出后到 RPS 启动的沉降秒数 (用户实测 hand_in_cup→PhaseE 0s 即可起; 留 5s 余量, 可 env 覆盖)
+# 门禁→RPS voice 的音频交接沉降 (2026-08-22, 方案A): 8770 门禁 (realtime_voice --config, 半双工+麦克风门控)
+# 用 SIGINT 优雅关停 (触发 finally:audio.close() 干净释放麦克风/pw-cat), 此处再沉降几分钟给 PipeWire/ALSA
+# 音频图彻底释放 JBL sink 与麦克风, RPS voice 接手才干净 (防回声自打断 "只吐两字"). 可 GATE_AUDIO_SETTLE env 覆盖.
+GATE_AUDIO_SETTLE="${GATE_AUDIO_SETTLE:-2}"
 # 各阶段 py 进程匹配模式 (pgrep -f 锚定真实命令行, 用于"等进程退出"交接判断)
 A2D_PATTERN="^${PROJ_PY} .*estun_handle_cup_sm\.py"
 PHASE0_PATTERN="^${PROJ_PY} .*estun_greeting_phase0\.py"
 PHASEE_PATTERN="^${PROJ_PY} .*estun_rps_phaseE\.py"
+# 8770 语音门禁进程匹配模式 (gate-only: realtime_voice --config)
+GATE_PATTERN="realtime_voice.py --config /data/Speech/config.json"
 
 # ---- 清理残留 (端口 + RPS 进程 + 临时文件) ----
 echo "[清理] 检查残留端口/进程..."
@@ -262,17 +268,24 @@ echo "=============================================="
 # 否则残留门禁占着麦克风/音频, RPS voice 接手时出错.
 wait_gate_gone() {
   local timeout="${1:-10}"
-  pkill -TERM -f 'realtime_voice.py --config /data/Speech/config.json' 2>/dev/null || true
+  # 2026-08-22 (方案A): 门禁须"优雅关停" — realtime_voice 只捕 KeyboardInterrupt(SIGINT), SIGTERM
+  # 会跳过 finally:audio.close() → 其 pw-cat speaker 子进程孤儿化 + 音频图不释放 → RPS voice 接手
+  # 同一麦克风回声自打断 ("只吐两字"). 改 SIGINT 优先 (触发 audio.close 干净释放), SIGTERM/KILL 兜底.
+  pkill -INT -f "$GATE_PATTERN" 2>/dev/null || true
   for ((i = 0; i < timeout * 2; i++)); do
-    if ! pgrep -f 'realtime_voice.py --config /data/Speech/config.json' >/dev/null 2>&1 \
-       && ! ss -ltn | grep -q ':8770 '; then
-      echo "[门禁] 8770 已释放 (进程+端口均退出)"
+    if ! pgrep -f "$GATE_PATTERN" >/dev/null 2>&1 && ! ss -ltn | grep -q ':8770 '; then
+      echo "[门禁] 8770 已释放 (SIGINT 优雅退出, 进程+端口均无)"
       return 0
     fi
     sleep 0.5
   done
-  echo "[WARN] 门禁 ${timeout}s 内未退出 → fuser -k 8770 兜底"
-  fuser -k 8770/tcp 2>/dev/null || true
+  echo "[WARN] 门禁 ${timeout}s 内未响应 SIGINT (可能卡在 audio.close) → SIGTERM 兜底"
+  pkill -TERM -f "$GATE_PATTERN" 2>/dev/null || true
+  sleep 1
+  if pgrep -f "$GATE_PATTERN" >/dev/null 2>&1 || ss -ltn | grep -q ':8770 '; then
+    echo "[WARN] 门禁仍未退出 → fuser -k 8770 兜底"
+    fuser -k 8770/tcp 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -326,8 +339,12 @@ while true; do
     echo "[交接] A2D 已退出 → 沉降 ${RPS_SETTLE}s (余量, 实测 0s 即可起 RPS)..."
     sleep "$RPS_SETTLE"
     echo "[交接] 沉降完成 → 起 RPS 服务..."
-    # 兜底停门禁 (A2D py stop() 已 terminate 自启的 8770 门禁; 残留则此处清, 让麦克风给 RPS voice)
+    # 兜底停门禁 (A2D py stop() 已优雅关停自启的 8770 门禁; 残留则此处清, 让麦克风给 RPS voice)
     wait_gate_gone 20
+    # 音频交接沉降 (2026-08-22, 方案A): 门禁 SIGINT 优雅关停后, 再给 PipeWire/ALSA 音频图一点时间彻底
+    # 释放 JBL sink 与麦克风, RPS voice 开同一设备才干净 (防回声自打断). 可 GATE_AUDIO_SETTLE env 覆盖.
+    echo "[交接] 音频沉降 ${GATE_AUDIO_SETTLE}s (门禁→RPS voice 音频交接, 防回声自打断)..."
+    sleep "$GATE_AUDIO_SETTLE"
     open_term "RPS 服务 (8768)" "bash $HELPER"
     rps_started=1
   fi

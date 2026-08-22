@@ -32,10 +32,12 @@ Camera A (眼在手上, 手动像素映射)    Camera B (眼在手外, UGREEN 10
 
 ## 设计模式
 
-### 检测器基类模式
+### 检测器基类模式 (RealSense_R/RealSense 参考实现, 已非主线)
+
+> 当前单相机主线 = `handle_cup_detector.py` 的 HandleCupDetector (HSV 青色贴纸链, 见下"旋转判档检测链")。本小节为 RealSense_R/RealSense 的 BaseRealSenseDetector 参考基类; 其 `USE_SAM` / `USE_RED_TAPE` 开关已弃用 (08-17 弃 SAM, 改 HSV 贴纸)。
 
 - `BaseRealSenseDetector` (RealSense/realsense_shared.py) 为基类
-- 子类通过类属性开关控制: `USE_YOLO_WORLD`, `USE_FINETUNED_KETTLE`, `USE_SAM`, `USE_RED_TAPE`
+- 子类通过类属性开关控制: `USE_YOLO_WORLD`, `USE_FINETUNED_KETTLE`; (`USE_SAM` / `USE_RED_TAPE` 已弃用)
 - 检测与位姿计算分离: `Detector` 产出 mask/bbox, `6DDetector` 扩展位姿
 
 ### 共享工具库
