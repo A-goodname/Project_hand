@@ -113,9 +113,9 @@ class Phase0VoiceTest(unittest.TestCase):
     def test_stop_closes_hand(self):
         svc = self._svc()
         svc._hand = object()   # 模拟有灵巧手
-        with mock.patch("Estun.utils_shared.disable_hand") as dh:
+        with mock.patch("Estun.utils_shared.hand_reset") as hr:
             svc.stop()
-        dh.assert_called_once()
+        hr.assert_called_once()
         self.assertIsNone(svc._hand, "stop 后应置空 _hand")
 
     def test_stop_hand_close_failure_safe(self):

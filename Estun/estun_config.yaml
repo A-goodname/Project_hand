@@ -201,7 +201,7 @@ estun:
     voice_log_path: "/tmp/rps_voice_phaseE.log"  # realtime_voice stdout (start_rps_phaseE.sh 用 python -u 重定向; py tail 它等 [RPS][RESULT] / 退出裸行)
     done_flag: "DONE"                 # 游戏完成标志 (CRP 读到任意消息即 break, 内容不比; 此值仅作标识, 可随意)
     arm_settle_delay: 3.0             # 发 P1 后等机械臂到位再触发邀请 (秒)
-    max_game_wait: 180.0              # 等游戏结束总超时 (秒), 超时也发 DONE 回 Home (兜底)
+    max_game_wait: 3600.0             # 等游戏结束总超时 (秒), 超时也发 DONE 回 Home (兜底) — 2026-08-22 实机改大(玩几局易超 180s)
     rounds: 0                         # 多局制: 0=等人退出 (推荐, 玩家说"退出游戏/不玩了"结束); N≥1=固定 N 局 RESULT 后 DONE. 臂全程保持 P1, 每局玩家说"开始"续局
     quit_keyword: "退出"              # 退出信号 = 语音日志中与退出关键词相等的裸行 (rps_voice_game.py 退出分支 print("退出"))
     poses:

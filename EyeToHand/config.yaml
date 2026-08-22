@@ -44,7 +44,7 @@ hand_in_cup:
   curled_min_fingers: 2
 cup_roi_fallback:
   enabled: true
-  x1: 327
-  y1: 133
-  x2: 394
-  y2: 210
+  x1: 315
+  y1: 166
+  x2: 403
+  y2: 258

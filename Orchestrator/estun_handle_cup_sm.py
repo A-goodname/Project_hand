@@ -43,7 +43,7 @@ from Estun.utils_shared import (
     transform_pose_to_base,
     compute_gripper_offset_transform,
     post_correct_angles,
-    init_hand, is_hand_available, disable_hand,
+    init_hand, is_hand_available,
     hand_pre_grip, hand_grip_done, hand_reset,
     grip_object, release_object,
 )
@@ -425,10 +425,10 @@ class HandleCupSM:
 
         if self._hand_available:
             try:
-                disable_hand()
-                print("[INFO] 灵巧手已关闭")
+                hand_reset()   # 2026-08-22 假失能: 只 RESET 不关串口, 让 merged 接手免重使能
+                print("[INFO] 灵巧手 RESET (假失能)")
             except Exception as e:
-                print(f"[WARN] 灵巧手关闭异常: {e}")
+                print(f"[WARN] 灵巧手 RESET 异常: {e}")
 
         if self._gate_proc is not None:
             try:
@@ -1277,16 +1277,16 @@ class HandleCupSM:
         """方案甲 (2026-08-22): 递杯段结束后的灵巧手交接.
 
         在 _handle_session finally (socket 断开 / CRP 一轮结束) 调用 —— 此时递杯段已真正结束,
-        灵巧手可安全关闭并交给 merged. 顺序(避免与 merged 抢串口): disable_hand → CANCEL 门禁 → 写触发文件.
+        灵巧手 RESET(假失能, 不关串口) 并交给 merged. 顺序: hand_reset → CANCEL 门禁 → 写触发文件.
         """
-        # 1) 关灵巧手 (内部会 RESET→disable→close; _hand_available 置 False 防 stop() 二次关)
+        # 1) 灵巧手假失能 (hand_reset=RESET 手势, 不 disable/close 串口 — 让 merged 接手免重使能)
         if self._hand_available:
             try:
-                disable_hand()
+                hand_reset()
                 self._hand_available = False
-                print("[HAND] 递杯段结束, 灵巧手已关闭 (串口交 merged / RPS 手势)")
+                print("[HAND] 递杯段结束, 灵巧手 RESET (假失能, 串口交 merged / RPS 手势)")
             except Exception as e:
-                print(f"[WARN] disable_hand 失败: {e}")
+                print(f"[WARN] 灵巧手 RESET 失败: {e}")
         # 2) CANCEL 门禁 (释放麦克风给 RPS 游戏)
         if self._handover_voice is not None:
             try:
