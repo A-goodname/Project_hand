@@ -6,14 +6,14 @@
 仅保留 estun_handle_cup_run.py 的运动流程 (Phase A-D 协议).
 
 Camera A:   HandleCupDetector (YOLO kettle + HSV + YOLO cup + 深度反投影)
-Camera B:   PersonDetector (人就位) + HandInCupDetector (手在杯判定)
+Camera B:   (方案甲 2026-08-22) usb-0:2 让给 merged 进程全程拥有 (HandInCup 递杯 + RPS), 本状态机不再打开
 位姿计算:   全部固定 ABC (Orchestrator/config.yaml), 与 state_machine 完全一致
 运动流程:   Phase A(接收位姿) → Phase B(计算+发送Handle) → Phase C(指令循环+CUP回复)
-            → Phase D(READY→HandInCup→CONTINUE/ABORT)
+            → Phase D(READY 后打开 merged HandInCup 检测 + 语音门禁确认"拿好了" → RELEASE→松夹→发结束串; 取消 ABORT/Continue 回退)
            Handle: Home → P2 → P1 → DCp1 → P3 → DCp1 → P1 → RESET → P2 → Home
-           Cup: P2 → P1 → GRIP → P3 → P1 → RELEASE → P2 → Home
+           Cup: P2 → P1 → GRIP → P3 → P1 → RELEASE →(递到玩家/PhaseE) RPSpos → Home
 
-传统路线 Camera B: usb-0:2 (非 VLA 的 usb-0:4.2).
+传统路线 Camera B: usb-0:2 (非 VLA 的 usb-0:4.2) — 交给 merged 进程.
 
 使用方法:
   python Orchestrator/estun_handle_cup_sm.py
@@ -37,9 +37,7 @@ if _project_root not in sys.path:
 
 from RealSense_R.realsense_shared import rotation_matrix_to_euler_angles, load_camera_serial
 from Orchestrator.handle_cup_detector import HandleCupDetector
-from EyeToHand.camera import UGreenCamera
-from EyeToHand.person_detector import PersonDetector
-from EyeToHand.hand_in_cup import HandInCupDetector
+# 方案甲 (2026-08-22): Camera B(usb-0:2)/PersonDetector/HandInCup 已交 merged 进程, 不再于此导入.
 from Estun.utils_shared import (
     euler_to_rotation_matrix,
     transform_pose_to_base,
@@ -319,23 +317,13 @@ class HandleCupSM:
         # ---- 退出信号 ----
         self._stop_event = threading.Event()
 
-        # ---- Camera B (传统路线: usb-0:2) + Phase D ----
-        self._camera_b = None           # UGreenCamera
-        self._camera_b_path = "usb-0:2"
-        self._person_detector = None
-        self._hand_in_cup_detector = None
-        self._is_person_seated = False  # 人就位 (PersonDetector)
-        self._hand_on_cup = None        # True/False/None (HandInCupDetector, None=未启动/未决)
-        self._hic_active = False        # HandInCup 检测激活标志 (Camera B 线程 gate; READY 激活后 True)
-        # 语音门禁 (同事 HANDOVER 方案 2026-08-20, /data/Speech; 服务不可用回退纯视觉)
+        # ---- Phase D 语音门禁 (方案甲 2026-08-22; Camera B/HandInCup 已交 merged 进程) ----
+        self._is_person_seated = True   # 人就位检测交 merged 进程, 假设在场; 实际由语音门禁"拿好了"确认
         self._handover_voice = None         # HandoverVoiceClient (TCP 127.0.0.1:8770)
         self._voice_gate_enabled = False    # 语音门禁服务可用时 True
         self._handover_voice_timeout = 30.0 # 语音确认超时 (s)
         self._gate_started = False          # 门禁已尝试启动 (READY 时异步触发, 防 Phase A/B 提前启动)
         self._gate_proc = None              # 自启的 8770 门禁子进程 (stop 时 terminate)
-        self._hand_in_cup_lock = threading.Lock()
-        self._camera_b_thread = None
-        self._last_frame_b = None       # Camera B 最近帧缓存 (线程写, 主循环 imshow, 2026-08-21)
 
     # ================================================================
     #  生命周期
@@ -354,7 +342,6 @@ class HandleCupSM:
         self._init_hand()
         self._init_detector()
         self._init_stabilizer_and_calib()
-        self._init_camera_b()
         self._init_tcp()
         print("[HandleCupSM] 状态机已启动, 等待机器人连接...")
 
@@ -365,7 +352,6 @@ class HandleCupSM:
         print("[HandleCupSM] 连接到达 → 打开设备 (灵巧手/Camera A/Camera B)...")
         self._init_hand()
         self._init_detector()
-        self._init_camera_b()
         self._devices_opened = True
         print("[HandleCupSM] 设备已就绪, 开始协议")
 
@@ -373,7 +359,6 @@ class HandleCupSM:
         """主循环: 帧获取 → 检测 → 可视化 → accept TCP. --no-preview 下不渲染窗口 (headless)."""
         if not self._no_preview:
             cv2.namedWindow("HandleCupSM | Camera A", cv2.WINDOW_NORMAL)
-            cv2.namedWindow("HandleCupSM | Camera B", cv2.WINDOW_NORMAL)
 
         try:
             while not self._stop_event.is_set():
@@ -398,10 +383,6 @@ class HandleCupSM:
                     # [Step 3] 可视化
                     self._visualize(color.copy(), depth_cmap)
 
-                    # [Step 3.5] Camera B 实时画面 (主线程 imshow, 线程只缓存帧)
-                    if self._last_frame_b is not None:
-                        cv2.imshow("HandleCupSM | Camera B", self._last_frame_b)
-
                     # [Step 4] 退出检测
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         print("[INFO] 用户按 q 退出")
@@ -423,8 +404,6 @@ class HandleCupSM:
     def stop(self):
         """清理所有资源."""
         self._stop_event.set()
-        with self._hand_in_cup_lock:
-            self._hic_active = False    # 停 Camera B 线程的 HandInCup 检测 (先关 native 使用)
         if not self._no_preview:
             cv2.destroyAllWindows()
 
@@ -442,41 +421,7 @@ class HandleCupSM:
             except Exception as e:
                 print(f"[WARN] 停止 pipeline 失败: {e}")
 
-        # ---- Camera B teardown (2026-08-21, 对齐状态机 main.py finally) ----
-        # 顺序: 先 release 解除可能阻塞的 V4L2 read → join 后台线程 → close HandInCup MediaPipe.
-        # 此前 stop() 只 release 相机, 未 join 线程/未 close detector → 融合下 RPS 交接时
-        # Camera B/MediaPipe native 资源未释放完, rps_stream 初始化崩溃 (同事 review 定位).
-        if self._camera_b is not None:
-            try:
-                self._camera_b.release()
-                print("[INFO] Camera B 已关闭")
-            except Exception as e:
-                print(f"[WARN] Camera B 关闭失败: {e}")
-            self._camera_b = None
-
-        if self._person_detector is not None:
-            try:
-                self._person_detector.stop()   # start_camera=False 下 camera 为 None, 安全
-            except Exception as e:
-                print(f"[WARN] PersonDetector 停止异常: {e}")
-            self._person_detector = None
-
-        if self._camera_b_thread is not None:
-            try:
-                self._camera_b_thread.join(timeout=5.0)
-                if self._camera_b_thread.is_alive():
-                    print("[WARN] Camera B 线程未在 5s 内退出")
-            except Exception as e:
-                print(f"[WARN] Camera B 线程 join 异常: {e}")
-            self._camera_b_thread = None
-
-        if self._hand_in_cup_detector is not None:
-            try:
-                self._hand_in_cup_detector.close()
-                print("[INFO] HandInCup 检测器已关闭")
-            except Exception as e:
-                print(f"[WARN] HandInCup 检测器关闭异常: {e}")
-            self._hand_in_cup_detector = None
+        # ---- Camera B/HandInCup teardown 已移除 (方案甲: 相机交给 merged 进程, 本状态机不再持有) ----
 
         if self._hand_available:
             try:
@@ -750,45 +695,7 @@ class HandleCupSM:
         self._server.listen(5)
         print(f"[INFO] TCP 服务器: {self._host}:{self._port}")
 
-    # ================================================================
-    #  Camera B (传统路线: usb-0:2) + PersonDetector + HandInCupDetector
-    # ================================================================
-
-    def _init_camera_b(self):
-        """初始化 Camera B (UGREEN) + 人就位/手在杯检测器, 启动独立线程."""
-        print(f"[INFO] 初始化 Camera B (path={self._camera_b_path})...")
-        try:
-            self._camera_b = UGreenCamera(
-                camera_id=-1,
-                camera_name="UGREEN",
-                camera_path=self._camera_b_path,
-                width=640, height=480, fps=30,
-            )
-            print(f"[INFO] Camera B 已打开 ({self._camera_b_path})")
-        except Exception as e:
-            print(f"[WARN] Camera B 打开失败: {e} — Phase D 将跳过")
-            self._camera_b = None
-            return
-
-        # PersonDetector (start_camera=False: 用已有 Camera B 帧, 不自开相机)
-        try:
-            self._person_detector = PersonDetector(start_camera=False)
-            print("[INFO] PersonDetector 已初始化")
-        except Exception as e:
-            print(f"[WARN] PersonDetector 初始化失败: {e}")
-
-        # HandInCupDetector (从 EyeToHand/config.yaml 内部加载参数)
-        try:
-            self._hand_in_cup_detector = HandInCupDetector(device="cuda")
-            print("[INFO] HandInCupDetector 已初始化 (CUDA)")
-        except Exception as e:
-            print(f"[WARN] HandInCupDetector 初始化失败: {e}")
-
-        # 启动 Camera B 线程
-        self._camera_b_thread = threading.Thread(
-            target=self._camera_b_loop, daemon=True)
-        self._camera_b_thread.start()
-        print("[INFO] Camera B 线程已启动")
+    # ---- 语音门禁 (方案甲; Camera B/HandInCup 已交 merged 进程) ----
 
     def _init_handover_voice(self):
         """初始化语音门禁 (异步; 用户定: 不在 Phase A/B 提前启动, READY 才尝试).
@@ -844,56 +751,24 @@ class HandleCupSM:
             print(f"[VOICE-GATE] 门禁服务自启失败: {e} → 回退纯视觉")
 
     def _gate_setup(self):
-        """后台线程: 尝试连接 8770 → 失败则自启服务 → 轮询等就绪."""
+        """后台线程: 尝试连接 8770 → 失败则自启服务 → 轮询等就绪.
+
+        方案甲 option(b): 融合(defer)模式不 spawn 门禁 —— 语音(内建 8770 门禁)由 sh 在
+        A2D READY 后拉起, 此处只重试连接; 非融合才走自启兜底."""
         if self._connect_handover_voice():
             return
-        print("[VOICE-GATE] 8770 未就绪 → 自启门禁服务并等待...")
-        self._spawn_handover_gate()
+        if self._defer_devices:
+            print("[VOICE-GATE] 融合模式: 等 sh 起 voice(内建 8770)后连接...")
+        else:
+            print("[VOICE-GATE] 8770 未就绪 → 自启门禁服务并等待...")
+            self._spawn_handover_gate()
         deadline = time.time() + 20.0
         while time.time() < deadline and not self._stop_event.is_set():
             time.sleep(0.5)
             if self._connect_handover_voice():
                 return
         if not self._voice_gate_enabled:
-            print("[VOICE-GATE] 门禁服务 20s 未就绪 → 回退纯视觉 (检测到即松手)")
-
-    def _camera_b_loop(self):
-        """Camera B 独立线程: 持续读帧 → PersonDetector → HandInCupDetector.
-        注意: cv2.imshow 不能在线程中调用 (Linux Qt 限制), 状态通过 print 输出."""
-        while not self._stop_event.is_set():
-            if self._camera_b is None:
-                time.sleep(0.1)
-                continue
-            try:
-                (frame,) = self._camera_b.read()
-                if frame is None:
-                    time.sleep(0.03)
-                    continue
-
-                self._last_frame_b = frame   # 缓存供主线程实时显示 (2026-08-21)
-
-                # PersonDetector: 人就位检测 (检测到人即可, 每帧)
-                if self._person_detector is not None:
-                    seated = self._person_detector.detect_person_only(frame)
-                    with self._hand_in_cup_lock:
-                        self._is_person_seated = seated
-
-                # HandInCupDetector: 手在杯检测 (仅在 HandInCup 激活时, _hic_active gate)
-                # 2026-08-21: 原 `_hand_on_cup is not None` 与 READY 激活(None)矛盾 → update 永不调用;
-                #            改独立 _hic_active 标志 (READY 激活置 True, 检测到/超时置 False)
-                if self._hand_in_cup_detector is not None:
-                    with self._hand_in_cup_lock:
-                        active = self._hic_active
-                    if active:
-                        self._hand_in_cup_detector.update(frame)
-                        with self._hand_in_cup_lock:
-                            if self._hand_in_cup_detector.is_hand_on_cup:
-                                self._hand_on_cup = True
-                                self._hic_active = False
-
-            except Exception as e:
-                print(f"[WARN] Camera B 线程异常: {e}")
-                time.sleep(0.5)
+            print("[VOICE-GATE] 门禁 20s 未就绪 → 回退纯视觉/放行 (检测到即松手)")
 
     def _accept_tcp(self):
         if self._server is None:
@@ -1377,6 +1252,13 @@ class HandleCupSM:
             import traceback
             traceback.print_exc()
         finally:
+            # 方案甲 (2026-08-22): 递杯段真正结束(socket 断开) → 才做灵巧手交接:
+            # disable_hand(reset+disable+close) → CANCEL 门禁 → 写触发文件(merged 切 RPS).
+            # 注意: 不能放在 RELEASE 指令处 —— CRP 递杯在 RELEASE 后还要 MovL/GRIP 用手.
+            try:
+                self._finalize_handover()
+            except Exception as _e:
+                print(f"[WARN] 递杯交接收尾异常: {_e}")
             PoseStabilizer.on_disconnect()
             self._detect_active = True   # socket 断开 → 恢复 Camera A 检测 (下个 session)
             print("[CAM-A] socket 断开 → 恢复 Handle/Cup 检测")
@@ -1390,6 +1272,35 @@ class HandleCupSM:
             print(f"[INFO] 客户端已断开: {addr}")
             # 单次执行模式 (2026-08-21): socket 断开(CRP 一轮结束) → 停止主循环, cup_sm 自动退出
             self._stop_event.set()
+
+    def _finalize_handover(self):
+        """方案甲 (2026-08-22): 递杯段结束后的灵巧手交接.
+
+        在 _handle_session finally (socket 断开 / CRP 一轮结束) 调用 —— 此时递杯段已真正结束,
+        灵巧手可安全关闭并交给 merged. 顺序(避免与 merged 抢串口): disable_hand → CANCEL 门禁 → 写触发文件.
+        """
+        # 1) 关灵巧手 (内部会 RESET→disable→close; _hand_available 置 False 防 stop() 二次关)
+        if self._hand_available:
+            try:
+                disable_hand()
+                self._hand_available = False
+                print("[HAND] 递杯段结束, 灵巧手已关闭 (串口交 merged / RPS 手势)")
+            except Exception as e:
+                print(f"[WARN] disable_hand 失败: {e}")
+        # 2) CANCEL 门禁 (释放麦克风给 RPS 游戏)
+        if self._handover_voice is not None:
+            try:
+                self._handover_voice.cancel()
+                print("[VOICE-GATE] 门禁已 CANCEL → 麦克风交还 RPS 游戏")
+            except Exception as e:
+                print(f"[VOICE-GATE] CANCEL 异常: {e}")
+        # 3) 写触发文件 → merged 切 RPS (视觉+灵巧手)
+        try:
+            with open("/tmp/rps_handover_trigger", "w", encoding="utf-8") as _tf:
+                _tf.write("trigger\n")
+            print("[TRIGGER] 已写触发文件 → merged 切 RPS")
+        except Exception as e:
+            print(f"[WARN] 写触发文件失败: {e}")
 
     # ================================================================
     #  Phase A: 接收机器人初始末端位姿
@@ -1425,14 +1336,11 @@ class HandleCupSM:
     def _phase_c(self, conn, cup_pose_data, robot_xyz, robot_ABC):
         """Phase C + D: PREGRIP / GRIPDONE / RESET / CUP / RELEASE / GRIP / READY.
         CUP 指令时回复 Cup P1/P2/P3.
-        READY → HandInCup 判定 → RELEASE → CONTINUE/ABORT (Phase D)."""
+        READY → 启用语音门禁; RELEASE → 语音确认拿好了 → 松夹 → 发结束确认串 (Phase D, 方案甲)."""
         conn.settimeout(2.0)
         print("[INFO] Phase C: 等待机器人指令...")
 
-        hand_judged = False     # Phase D 第一次 RELEASE 已处理
-        abort_mode = False      # TRUE=CONTINUE, FALSE→ABORT 放回模式
-        _hic_timeout = 25.0     # HandInCup 超时 (s)
-        _hic_start = 0.0
+        handover_ready = False  # READY 已到 → 后续 RELEASE 是"递杯交接"(第2次); 否则为"松杯"(第1次)
 
         try:
             while not self._stop_event.is_set():
@@ -1480,118 +1388,63 @@ class HandleCupSM:
                         print("[WARN] CUP: cup_pose_data 为 None, 忽略")
 
                 elif cmd == "READY":
-                    # Phase D: 人就位检查 → 启动 HandInCup
-                    with self._hand_in_cup_lock:
-                        seated = self._is_person_seated
-                    if not seated:
-                        print("[INFO] READY: 人未就位 → HandInCup=false")
-                        with self._hand_in_cup_lock:
-                            self._hand_on_cup = False
-                            self._hic_active = False
-                    else:
-                        print(f"[INFO] READY: 人就位 → 启动 HandInCup (≤{_hic_timeout:.0f}s)")
-                        with self._hand_in_cup_lock:
-                            self._hand_on_cup = None  # 未决
-                            self._hic_active = True   # 激活检测 (Camera B 线程 gate)
-                        if self._hand_in_cup_detector is not None:
-                            self._hand_in_cup_detector.reset()
-                        # 语音门禁 (同事方案): 服务可用则启动, 不可用回退纯视觉
-                        self._init_handover_voice()
-                        _hic_start = time.time()
-                        _hic_warned = False
-                        # 等待 HandInCup 结果
-                        while not self._stop_event.is_set():
-                            with self._hand_in_cup_lock:
-                                if self._hand_on_cup is True:
-                                    print(f"[INFO] HandInCup: TRUE ({(time.time()-_hic_start):.1f}s)")
-                                    if self._voice_gate_enabled and self._handover_voice is not None:
-                                        try:
-                                            self._handover_voice.hand_detected()
-                                            print("[VOICE-GATE] 视觉命中已通知语音门禁")
-                                        except Exception as _e:
-                                            print(f"[VOICE-GATE] hand_detected 异常: {_e}")
-                                    break
-                            _hic_elapsed = time.time() - _hic_start
-                            if _hic_elapsed > _hic_timeout:
-                                with self._hand_in_cup_lock:
-                                    self._hand_on_cup = False
-                                    self._hic_active = False
-                                print(f"[INFO] HandInCup: 超时 ({_hic_timeout:.0f}s) → FALSE")
-                                break
-                            # CRP SocketReadStr(20s) 窗口预警: 超过则 CRP 先超时 (Phase D 疑点)
-                            if not _hic_warned and _hic_elapsed > 18.0:
-                                print(f"[WARN] HandInCup 已 {_hic_elapsed:.1f}s, "
-                                      f"逼近 CRP SocketReadStr 20s 窗口 → CRP 可能先超时", flush=True)
-                                _hic_warned = True
-                            time.sleep(0.05)
+                    # 方案甲 (2026-08-22): 递杯视觉(HandInCup/人就位)由 merged 进程在 usb-0:2 上负责.
+                    # 收到 READY 后才打开 HandInCup 检测 (经 _init_handover_voice → 门禁 HANDOVER_START
+                    # 触发递杯确认; 本状态机只负责臂持杯 + 语音门禁确认拿好了). 不阻塞等待.
+                    # option(b): 写 /tmp/a2d_ready 通知 sh 起 RPS 服务 (voice + merged).
+                    handover_ready = True
+                    try:
+                        with open("/tmp/a2d_ready", "w", encoding="utf-8") as _rf:
+                            _rf.write("ready\n")
+                        print("[READY] 已写 /tmp/a2d_ready → sh 起 RPS 服务 (voice+merged)", flush=True)
+                    except Exception as _e:
+                        print(f"[WARN] 写 /tmp/a2d_ready 失败: {_e}")
+                    self._init_handover_voice()
+                    print("[INFO] READY: 进入递杯确认阶段 (READY 后打开 merged HandInCup 检测, 语音门禁确认拿好了)")
 
                 elif cmd == "RELEASE":
-                    with self._hand_in_cup_lock:
-                        hic = self._hand_on_cup
-                    if abort_mode:
-                        # ---- ABORT 路径第二次 RELEASE (放回后松杯) ----
+                    if not handover_ready:
+                        # 第1次 RELEASE = 松杯/松把手 (READY 前的 grip release), 不触发门禁交接
                         if self._hand_available:
                             release_object()
-                        print("[INFO] RELEASE (放回后松杯)")
-                    elif hic is None:
-                        # ---- Phase C: 松把手 (READY 之前, HandInCup 未启动) ----
-                        if self._hand_available:
-                            release_object()
-                        print("[INFO] RELEASE (松把手)")
-                    elif not hand_judged:
-                        # ---- Phase D 第一次 RELEASE: 语音门禁优先, 视觉兜底 (2026-08-21 用户定) ----
-                        hand_ok = hic
-                        print(f"[INFO] Hand-in-cup 判定: {'TRUE' if hand_ok else 'FALSE'}")
-                        hand_judged = True
+                            print("[INFO] RELEASE (松杯, READY 前)")
+                        continue
 
-                        # 语音门禁优先: 语音确认 → 松手, 即使视觉未命中 (语音高于视觉)
-                        if self._voice_gate_enabled and self._handover_voice is not None:
-                            try:
-                                confirmed = self._handover_voice.wait_confirmed(
-                                    timeout=self._handover_voice_timeout, poll_interval=0.10)
-                                print(f"[VOICE-GATE] 语音确认: {'CONFIRMED' if confirmed else '未确认/超时'} "
-                                      f"(视觉={'命中' if hand_ok else '未命中'})")
-                            except Exception as _e:
-                                print(f"[VOICE-GATE] wait_confirmed 异常: {_e} → 按未确认处理 (ABORT)")
-                                confirmed = False
-                        else:
-                            # 纯视觉回退 (语音门禁不可用): 视觉命中才松手
-                            confirmed = hand_ok
-
-                        if confirmed:
-                            # 语音已确认 (或纯视觉命中) → 松手 → CONTINUE
-                            if self._hand_available:
-                                release_object()
-                            print("[INFO] RELEASE (松杯)")
-                            try:
-                                sig = f"<{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}>"
-                                conn.sendall(sig.encode("utf-8"))
-                                print(f"[SEND] CONTINUE ({sig})")
-                            except Exception as e:
-                                print(f"[WARN] 发送 CONTINUE 失败: {e}")
-                                break
-                        else:
-                            # 未确认 → 保持夹持 → ABORT (绝不 release_object)
-                            print("[VOICE-GATE] 未确认 → 保持夹持, ABORT")
-                            abort_mode = True
-                            if self._handover_voice is not None:
-                                try:
-                                    self._handover_voice.cancel()
-                                except Exception:
-                                    pass
-                            try:
-                                sig = f"[{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}]"
-                                conn.sendall(sig.encode("utf-8"))
-                                print(f"[SEND] ABORT ({sig})")
-                            except Exception as e:
-                                print(f"[WARN] 发送 ABORT 失败: {e}")
-                                break
+                    # 第2次 RELEASE (READY 后) = 递杯交接: 语音门禁确认"拿好了" → 松夹 → 发结束确认串.
+                    # 取消 ABORT/Continue 回退; 门禁超时/不可用 → 放行 (用户定).
+                    # 先等门禁就绪 (voice 可能晚起; RELEASE 常先于 8770 到达 — 2026-08-22 实机).
+                    gate_deadline = time.time() + self._handover_voice_timeout
+                    while time.time() < gate_deadline \
+                            and not self._voice_gate_enabled \
+                            and not self._stop_event.is_set():
+                        time.sleep(0.2)
+                    confirmed = False
+                    if self._voice_gate_enabled and self._handover_voice is not None:
+                        try:
+                            confirmed = self._handover_voice.wait_confirmed(
+                                timeout=self._handover_voice_timeout, poll_interval=0.10)
+                            print(f"[VOICE-GATE] 语音确认: {'CONFIRMED' if confirmed else '未确认/超时 → 放行'}")
+                        except Exception as _e:
+                            print(f"[VOICE-GATE] wait_confirmed 异常: {_e} → 放行")
+                            confirmed = False
                     else:
-                        # ---- ABORT 路径第二次 RELEASE (放回后松杯) ----
-                        if abort_mode:
-                            if self._hand_available:
-                                release_object()
-                            print("[INFO] RELEASE (放回后松杯)")
+                        print("[VOICE-GATE] 门禁不可用 → 放行")
+
+                    # 松夹 (无 ABORT: 确认/超时均松)
+                    if self._hand_available:
+                        release_object()
+                        print("[INFO] RELEASE (递杯交接松夹)")
+
+                    # 发结束确认串 → CRP 读 60000ms 确认结束 (PhaseD 收尾, content 不校验)
+                    try:
+                        sig = (f"<{robot_xyz[0]:.3f},{robot_xyz[1]:.3f},{robot_xyz[2]:.3f},"
+                               f"{robot_ABC[0]:.2f},{robot_ABC[1]:.2f},{robot_ABC[2]:.2f}>")
+                        conn.sendall(sig.encode("utf-8"))
+                        print(f"[SEND] PhaseD 结束确认: {sig} (CRP 读到即 socketclose)")
+                    except Exception as e:
+                        print(f"[WARN] 发送结束确认失败: {e}")
+                        break
+                    handover_ready = False  # 仅第2次 (防后续重复)
 
                 else:
                     print(f"[INFO] 忽略: {cmd}")

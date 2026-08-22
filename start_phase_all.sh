@@ -18,18 +18,11 @@ VOICE_LOG="/tmp/rps_voice_phaseE.log"
 FIFO="/tmp/rps_voice_stdin"
 HELPER="/tmp/rps_phaseE_service.sh"
 PREVIEW="${PREVIEW:-0}"   # 1=开 cv2 预览窗口 (调试); 0=headless (默认, GPU 不支持渲染省 CPU)
-RPS_SETTLE="${RPS_SETTLE:-5}"   # A2D 退出后到 RPS 启动的沉降秒数 (用户实测 hand_in_cup→PhaseE 0s 即可起; 留 5s 余量, 可 env 覆盖)
-# 门禁→RPS voice 的音频交接沉降 (2026-08-22, 方案A): 8770 门禁 (realtime_voice --config, 半双工+麦克风门控)
-# 用 SIGINT 优雅关停 (触发 finally:audio.close() 干净释放麦克风/pw-cat), 此处再沉降几分钟给 PipeWire/ALSA
-# 音频图彻底释放 JBL sink 与麦克风, RPS voice 接手才干净 (防回声自打断 "只吐两字"). 可 GATE_AUDIO_SETTLE env 覆盖.
-GATE_AUDIO_SETTLE="${GATE_AUDIO_SETTLE:-2}"
 # 各阶段 py 进程匹配模式 (pgrep -f 锚定真实命令行, 用于"等进程退出"交接判断)
 A2D_PATTERN="^${PROJ_PY} .*estun_handle_cup_sm\.py"
 PHASE0_PATTERN="^${PROJ_PY} .*estun_greeting_phase0\.py"
 PHASEE_PATTERN="^${PROJ_PY} .*estun_rps_phaseE\.py"
-# 8770 语音门禁进程匹配模式 (gate-only: realtime_voice --config /tmp/gate_config.json)
-# 门禁 config 已去 pipewire_target (走 default sink 出声); 独立路径保证唯一匹配门禁、不误伤 --rps-game 的 RPS voice
-GATE_PATTERN="realtime_voice.py --config /tmp/gate_config.json"
+# 8770 语音门禁: 由 realtime_voice --rps-game 内建 (A2D 递杯确认用); 无需单独 spawn/匹配
 
 # ---- 清理残留 (端口 + RPS 进程 + 临时文件) ----
 echo "[清理] 检查残留端口/进程..."
@@ -40,7 +33,7 @@ for p in 8600 8080 8700 8768 8770; do
   fi
 done
 pkill -TERM -f 'realtime_voice.py --rps-game' 2>/dev/null || true
-pkill -TERM -f 'rps_stream.py' 2>/dev/null || true
+pkill -TERM -f 'rps_stream_merged.py' 2>/dev/null || true
 # 清理旧阶段实例 (review G 点, 2026-08-21): 多协调脚本残留会抢端口/串口/相机 → 组合启动不稳定
 pkill -TERM -f 'estun_greeting_phase0.py' 2>/dev/null || true
 pkill -TERM -f 'estun_handle_cup_sm.py' 2>/dev/null || true
@@ -52,6 +45,10 @@ pkill -KILL -f 'estun_handle_cup_sm.py' 2>/dev/null || true
 pkill -KILL -f 'estun_rps_phaseE.py' 2>/dev/null || true
 sleep 0.5
 rm -f "$VOICE_LOG" "$HELPER" "$FIFO" /tmp/rps_voice_stdin 2>/dev/null || true
+# 清手交接残留 (方案甲): 防止上次运行的 a2d_ready / merged ready+trigger 让 RPS 提前启动
+rm -f /tmp/a2d_ready /tmp/rps_handover_ready /tmp/rps_handover_trigger /tmp/rps_handover_released 2>/dev/null || true
+# 清阶段 py 运行日志 (调试用 tee): 每次从新日志开始
+rm -f /tmp/phase0_phase0.log /tmp/phase0_a2d.log /tmp/phase0_phaseE.log 2>/dev/null || true
 
 # ---- 运行前环境检查: 音频 (2026-08-22) ----
 # 不用 sudo (杀不了其它用户的进程). 只做检测: 发现音频异常(多套声音服务器 / 无 JBL sink) →
@@ -147,7 +144,7 @@ cat > "$HELPER" <<'EOS'
 #!/bin/bash
 set -Eeuo pipefail
 PYTHON=/data/xilu/conda-envs/VLA/bin/python
-RPS_SCRIPT=/data/xilu/rps_stream.py
+RPS_SCRIPT=/data/xilu/test/rps_stream_merged.py   # 方案甲: merged (HandInCup 递杯 + RPS) 同相机 usb-0:2
 VOICE_SCRIPT=/data/Speech/realtime_voice.py
 VOICE_LOG=/tmp/rps_voice_phaseE.log
 FIFO=/tmp/rps_voice_stdin
@@ -165,17 +162,49 @@ VOICE_PID=""
 cleanup() { trap - INT TERM EXIT; [[ -n "$VOICE_PID" ]] && kill -TERM "$VOICE_PID" 2>/dev/null || true; [[ -n "$RPS_PID" ]] && kill -TERM "$RPS_PID" 2>/dev/null || true; }
 trap cleanup INT TERM EXIT
 
+# RPS 语音服务先起 (提供 8770 门禁 + voice log; merged 依赖 RPS_HANDOVER_LOG) —
+# 否则 voice 晚起, A2D READY 后 20s 连不上 8770 门禁 (2026-08-22 实机定位).
+echo "[RPS] 启动语音服务 realtime_voice.py --rps-game (stdout→终端+日志)..."
+set +e
+if [ "$AUTO_INVITE" = "1" ]; then
+  echo "[RPS] 语音 stdin=FIFO (phaseE 自动邀请); 终端回车将不可用"
+  sudo -u user env -u PIPEWIRE_REMOTE -u PIPEWIRE_RUNTIME_DIR -u PULSE_SERVER -u PULSE_RUNTIME_PATH \
+    XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    "$PYTHON" "$VOICE_SCRIPT" --rps-game --config "$VOICE_CONFIG" < "$FIFO" > >(tee -a "$VOICE_LOG") 2>&1 &
+else
+  echo "[RPS] 语音 stdin=终端 (人工按回车邀请)"
+  sudo -u user env -u PIPEWIRE_REMOTE -u PIPEWIRE_RUNTIME_DIR -u PULSE_SERVER -u PULSE_RUNTIME_PATH \
+    XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    "$PYTHON" "$VOICE_SCRIPT" --rps-game --config "$VOICE_CONFIG" > >(tee -a "$VOICE_LOG") 2>&1 &
+fi
+VOICE_PID=$!
+set -e
+# 等 RPS 语音就绪 (日志出现 [System] Realtime voice started 或进程退出)
+for ((i = 0; i < 80; i++)); do
+  if ! kill -0 "$VOICE_PID" 2>/dev/null; then
+    echo "[RPS] 语音进程提前退出 (code=$?)"
+    break
+  fi
+  if grep -q "Realtime voice started" "$VOICE_LOG" 2>/dev/null; then
+    echo "[RPS] 语音服务就绪"
+    break
+  fi
+  sleep 0.25
+done
+
 # RPS 视觉服务 (8768) — 启动确认 + 失败重试 (review D 点, 2026-08-21):
 #   启动失败(进程早退/8768 未监听) → 清理 → 等 10s (设备沉降) → 重试; 最多 RPS_MAX_ATTEMPTS 次.
-#   兜底 RPS 服务晚起/交接未完全释放; 在 phaseE auto-invite 60s 窗口内足够.
 RPS_MAX_ATTEMPTS="${RPS_MAX_ATTEMPTS:-3}"
 rps_ready=0
 for ((attempt = 1; attempt <= RPS_MAX_ATTEMPTS; attempt++)); do
-  echo "[RPS] 启动视觉服务 (第 $attempt/$RPS_MAX_ATTEMPTS 次) rps_stream.py --enable-hand (/dev/video$RPS_CAM_INDEX, 8768)..."
+  echo "[RPS] 启动视觉服务 (第 $attempt/$RPS_MAX_ATTEMPTS 次) rps_stream_merged.py --enable-hand (/dev/video$RPS_CAM_INDEX, 8768)..."
   sudo -u user env -u PIPEWIRE_REMOTE -u PIPEWIRE_RUNTIME_DIR -u PULSE_SERVER -u PULSE_RUNTIME_PATH \
     XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
     PYTHONDONTWRITEBYTECODE=1 RPS_CAMERA_INDEX="$RPS_CAM_INDEX" RPS_WIDTH=640 RPS_HEIGHT=480 RPS_FPS=30 \
     RPS_STREAM_PORT=8768 RPS_STREAM_LABEL="Camera /dev/video$RPS_CAM_INDEX" \
+    RPS_HANDOVER_MODE=1 RPS_HANDOVER_LOG="$VOICE_LOG" \
     "$PYTHON" "$RPS_SCRIPT" --enable-hand > >(tee -a "$RPS_LOG") 2>&1 &
   RPS_PID=$!
 
@@ -211,36 +240,6 @@ fi
 if [ "${RPS_OPEN_BROWSER:-1}" = "1" ]; then
   xdg-open http://127.0.0.1:8768/ >/dev/null 2>&1 || true
 fi
-
-echo "[RPS] 启动语音服务 realtime_voice.py --rps-game (stdout→终端+日志)..."
-set +e
-if [ "$AUTO_INVITE" = "1" ]; then
-  echo "[RPS] 语音 stdin=FIFO (phaseE 自动邀请); 终端回车将不可用"
-  sudo -u user env -u PIPEWIRE_REMOTE -u PIPEWIRE_RUNTIME_DIR -u PULSE_SERVER -u PULSE_RUNTIME_PATH \
-    XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
-    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    "$PYTHON" "$VOICE_SCRIPT" --rps-game --config "$VOICE_CONFIG" < "$FIFO" > >(tee -a "$VOICE_LOG") 2>&1 &
-else
-  echo "[RPS] 语音 stdin=终端 (人工按回车邀请)"
-  sudo -u user env -u PIPEWIRE_REMOTE -u PIPEWIRE_RUNTIME_DIR -u PULSE_SERVER -u PULSE_RUNTIME_PATH \
-    XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
-    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    "$PYTHON" "$VOICE_SCRIPT" --rps-game --config "$VOICE_CONFIG" > >(tee -a "$VOICE_LOG") 2>&1 &
-fi
-VOICE_PID=$!
-set -e
-# 等 RPS 语音就绪 (日志出现 [System] Realtime voice started 或进程退出)
-for ((i = 0; i < 80; i++)); do
-  if ! kill -0 "$VOICE_PID" 2>/dev/null; then
-    echo "[RPS] 语音进程提前退出 (code=$?)"
-    break
-  fi
-  if grep -q "Realtime voice started" "$VOICE_LOG" 2>/dev/null; then
-    echo "[RPS] 语音服务就绪"
-    break
-  fi
-  sleep 0.25
-done
 
 # 保持前台运行 (等 phaseE 发 DONE 后由主脚本 SIGTERM 收尾)
 set +e
@@ -279,9 +278,10 @@ if [ "$PREVIEW" != "1" ]; then
   PHASE0_PREV="--no-preview"
   A2D_PREV="--no-preview"
 fi
-open_term "Phase0 (8600)" "$PROJ_PY $PROJECT_DIR/Estun/estun_greeting_phase0.py $PHASE0_PREV"
-open_term "A2D-defer (8080)" "$PROJ_PY $PROJECT_DIR/Orchestrator/estun_handle_cup_sm.py --defer-devices $A2D_PREV"
-open_term "phaseE (8700)" "$PROJ_PY $PROJECT_DIR/Estun/estun_rps_phaseE.py"
+# PYTHONUNBUFFERED=1: 否则 stdout 走 tee(pipe) 变块缓冲 → 终端日志延迟/变少
+open_term "Phase0 (8600)" "PYTHONUNBUFFERED=1 $PROJ_PY $PROJECT_DIR/Estun/estun_greeting_phase0.py $PHASE0_PREV > >(tee -a /tmp/phase0_phase0.log) 2>&1"
+open_term "A2D-defer (8080)" "PYTHONUNBUFFERED=1 $PROJ_PY $PROJECT_DIR/Orchestrator/estun_handle_cup_sm.py --defer-devices $A2D_PREV > >(tee -a /tmp/phase0_a2d.log) 2>&1"
+open_term "phaseE (8700)" "PYTHONUNBUFFERED=1 $PROJ_PY $PROJECT_DIR/Estun/estun_rps_phaseE.py > >(tee -a /tmp/phase0_phaseE.log) 2>&1"
 
 # ---- 等各端口 ready ----
 wait_port() {
@@ -308,51 +308,24 @@ echo " 流程: Phase 0 打招呼 → A2D 递杯 → E 石头剪刀布 (段间各
 echo " 本终端监控设备交接并自动收尾 (Ctrl+C 可中止)"
 echo "=============================================="
 
-# ---- 监控循环: 设备交接 (端口释放 = 该段 py 退出 = 设备已释放) ----
-# 停 8770 门禁并确认退出 (review F 点, 2026-08-21): 不只用 sleep 1, 轮询确认进程和端口都消失,
-# 否则残留门禁占着麦克风/音频, RPS voice 接手时出错.
-wait_gate_gone() {
-  local timeout="${1:-10}"
-  # 2026-08-22 (方案A): 门禁须"优雅关停" — realtime_voice 只捕 KeyboardInterrupt(SIGINT), SIGTERM
-  # 会跳过 finally:audio.close() → 其 pw-cat speaker 子进程孤儿化 + 音频图不释放 → RPS voice 接手
-  # 同一麦克风回声自打断 ("只吐两字"). 改 SIGINT 优先 (触发 audio.close 干净释放), SIGTERM/KILL 兜底.
-  pkill -INT -f "$GATE_PATTERN" 2>/dev/null || true
-  for ((i = 0; i < timeout * 2; i++)); do
-    if ! pgrep -f "$GATE_PATTERN" >/dev/null 2>&1 && ! ss -ltn | grep -q ':8770 '; then
-      echo "[门禁] 8770 已释放 (SIGINT 优雅退出, 进程+端口均无)"
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "[WARN] 门禁 ${timeout}s 内未响应 SIGINT (可能卡在 audio.close) → SIGTERM 兜底"
-  pkill -TERM -f "$GATE_PATTERN" 2>/dev/null || true
-  sleep 1
-  if pgrep -f "$GATE_PATTERN" >/dev/null 2>&1 || ss -ltn | grep -q ':8770 '; then
-    echo "[WARN] 门禁仍未退出 → fuser -k 8770 兜底"
-    fuser -k 8770/tcp 2>/dev/null || true
-  fi
-  return 0
-}
-
+# ---- 监控循环: 起 RPS(JSON ready) + 收尾 (phaseE 退出) ----
 shutdown_rps() {
-  echo "[收尾] phaseE 结束 → 优雅停 RPS 服务 (SIGTERM rps_stream + realtime_voice --rps-game)"
+  echo "[收尾] phaseE 结束 → 优雅停 RPS 服务 (SIGTERM merged + realtime_voice --rps-game)"
   pkill -TERM -f 'realtime_voice.py --rps-game' 2>/dev/null || true
-  pkill -TERM -f 'rps_stream.py' 2>/dev/null || true
+  pkill -TERM -f 'rps_stream_merged.py' 2>/dev/null || true
   sleep 1
   if ss -ltn | grep -q ':8768 '; then
     echo "[WARN] 8768 仍占用 → fuser -k"
     fuser -k 8768/tcp 2>/dev/null || true
   fi
-  wait_gate_gone 10
   echo "[收尾] RPS 服务已停止 (相机/串口已释放)"
 }
 
 cleanup() {
   trap - INT TERM EXIT
-  echo "[清理] 停止 RPS 服务 + 释放资源..."
+  echo "[清理] 停止 RPS 服务 (merged + voice) + 释放资源..."
   pkill -TERM -f 'realtime_voice.py --rps-game' 2>/dev/null || true
-  pkill -TERM -f 'rps_stream.py' 2>/dev/null || true
-  wait_gate_gone 5
+  pkill -TERM -f 'rps_stream_merged.py' 2>/dev/null || true
   [ -n "$FIFO_HOLDER" ] && kill "$FIFO_HOLDER" 2>/dev/null || true
   rm -f "$HELPER"
   echo "[清理] 完成"
@@ -361,35 +334,10 @@ trap cleanup INT TERM EXIT
 
 rps_started=0; p0_logged=0
 while true; do
-  if [ "$rps_started" = "0" ] && ! ss -ltn | grep -q ':8080 '; then
-    echo "[交接] A2D socket 已关 (8080 释放) → 等进程完全退出释放 D435i/CameraB/串口..."
-    # stop() 先关 8080 监听, 相机/串口释放在后; 必须等 A2D 进程退出 (fd 全释放) 再起 RPS,
-    # 否则 RPS 的 MediaPipe 初始化会因设备未释放而崩溃 (2026-08-21 实机定位)
-    # 硬门禁 (2026-08-21): 等进程退出超时必须失败退出, 禁止空转后继续起 RPS —
-    #   用户实测 hand_in_cup.py→PhaseE 0s 即可起 RPS, 崩的根因是"进程没退干净仍起 RPS"而非沉降;
-    #   若 A2D 进程卡在 teardown (disable_hand/门禁/MediaPipe CUDA 释放), 直接报错, 不硬起.
-    A2D_EXITED=0
-    for ((i = 0; i < 60; i++)); do
-      if ! pgrep -f "^/home/user/miniconda3/envs/Proj/bin/python .*estun_handle_cup_sm\.py" >/dev/null 2>&1; then
-        A2D_EXITED=1
-        break
-      fi
-      sleep 0.5
-    done
-    if [ "$A2D_EXITED" != "1" ]; then
-      echo "[ERROR] A2D 进程 30s 内未退出 (可能卡在 stop() teardown) → 禁止启动 RPS"
-      echo "[ERROR] 请检查 A2D 终端日志 (disable_hand / 门禁 terminate / MediaPipe CUDA 释放)"
-      exit 1
-    fi
-    echo "[交接] A2D 已退出 → 沉降 ${RPS_SETTLE}s (余量, 实测 0s 即可起 RPS)..."
-    sleep "$RPS_SETTLE"
-    echo "[交接] 沉降完成 → 起 RPS 服务..."
-    # 兜底停门禁 (A2D py stop() 已优雅关停自启的 8770 门禁; 残留则此处清, 让麦克风给 RPS voice)
-    wait_gate_gone 20
-    # 音频交接沉降 (2026-08-22, 方案A): 门禁 SIGINT 优雅关停后, 再给 PipeWire/ALSA 音频图一点时间彻底
-    # 释放 JBL sink 与麦克风, RPS voice 开同一设备才干净 (防回声自打断). 可 GATE_AUDIO_SETTLE env 覆盖.
-    echo "[交接] 音频沉降 ${GATE_AUDIO_SETTLE}s (门禁→RPS voice 音频交接, 防回声自打断)..."
-    sleep "$GATE_AUDIO_SETTLE"
+  if [ "$rps_started" = "0" ] && [ -f /tmp/a2d_ready ]; then
+    echo "[交接] A2D 已进 READY (PhaseD 递杯) → 起 RPS 服务 (voice+merged)..."
+    # 方案甲 option(b): A2D READY 时写 /tmp/a2d_ready, 此处才起 RPS 服务.
+    # merged 随相机/usb-0:2 启 + 灵巧手 defer(触发才 open, 交接给同事); voice 内建 8770 供递杯确认+RPS游戏.
     open_term "RPS 服务 (8768)" "bash $HELPER"
     rps_started=1
   fi

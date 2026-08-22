@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """A2D estun_handle_cup_sm.py --defer-devices 融合模式测试 (无硬件, mock 设备 init).
 
-覆盖 (三 CRP 融合 2026-08-21):
-  1. defer 模式 start(): 只 init 配置/标定/稳定器/TCP, 不 init 灵巧手/D435i/Camera B
-  2. 非 defer 模式 start(): 全量初始化 (原行为不变)
+覆盖 (三 CRP 融合 2026-08-21; 方案甲 2026-08-22 Camera B 交 merged 进程, 本状态机恒不初始化):
+  1. defer 模式 start(): 只 init 配置/标定/稳定器/TCP, 不 init 灵巧手/D435i
+  2. 非 defer 模式 start(): 启灵巧手/D435i (Camera B 仍不初始化, 已交 merged)
   3. _ensure_devices(): 首次连接开设备, 二次跳过 (幂等)
   4. _ensure_devices(): 非 defer 模式 no-op
 """
@@ -33,29 +33,25 @@ class CupSmDeferDevicesTest(unittest.TestCase):
              mock.patch.object(sm, "_init_stabilizer_and_calib") as m_stab, \
              mock.patch.object(sm, "_init_tcp") as m_tcp, \
              mock.patch.object(sm, "_init_hand") as m_hand, \
-             mock.patch.object(sm, "_init_detector") as m_det, \
-             mock.patch.object(sm, "_init_camera_b") as m_cam:
+             mock.patch.object(sm, "_init_detector") as m_det:
             sm.start()
         m_cfg.assert_called_once()
         m_stab.assert_called_once()
         m_tcp.assert_called_once()
         m_hand.assert_not_called()
         m_det.assert_not_called()
-        m_cam.assert_not_called()
 
-    def test_normal_start_opens_all(self):
-        """非 defer 模式 start(): 全量初始化 (原行为不变)."""
+    def test_normal_start_opens_hand_and_det(self):
+        """非 defer 模式 start(): 启灵巧手/D435i (Camera B 已交 merged, 不初始化)."""
         sm = self._sm(defer=False)
         with mock.patch.object(sm, "_load_configs"), \
              mock.patch.object(sm, "_init_stabilizer_and_calib") as m_stab, \
              mock.patch.object(sm, "_init_tcp") as m_tcp, \
              mock.patch.object(sm, "_init_hand") as m_hand, \
-             mock.patch.object(sm, "_init_detector") as m_det, \
-             mock.patch.object(sm, "_init_camera_b") as m_cam:
+             mock.patch.object(sm, "_init_detector") as m_det:
             sm.start()
         m_hand.assert_called_once()
         m_det.assert_called_once()
-        m_cam.assert_called_once()
         m_stab.assert_called_once()
         m_tcp.assert_called_once()
 
@@ -63,24 +59,20 @@ class CupSmDeferDevicesTest(unittest.TestCase):
         """_ensure_devices: 首次打开设备, 二次跳过 (幂等)."""
         sm = self._sm(defer=True)
         with mock.patch.object(sm, "_init_hand") as m_hand, \
-             mock.patch.object(sm, "_init_detector") as m_det, \
-             mock.patch.object(sm, "_init_camera_b") as m_cam:
+             mock.patch.object(sm, "_init_detector") as m_det:
             sm._ensure_devices()
             sm._ensure_devices()
         m_hand.assert_called_once()
         m_det.assert_called_once()
-        m_cam.assert_called_once()
 
     def test_ensure_devices_noop_when_not_defer(self):
         """非 defer 模式: _ensure_devices 不动作 (设备已在 start 打开)."""
         sm = self._sm(defer=False)
         with mock.patch.object(sm, "_init_hand") as m_hand, \
-             mock.patch.object(sm, "_init_detector") as m_det, \
-             mock.patch.object(sm, "_init_camera_b") as m_cam:
+             mock.patch.object(sm, "_init_detector") as m_det:
             sm._ensure_devices()
         m_hand.assert_not_called()
         m_det.assert_not_called()
-        m_cam.assert_not_called()
 
     def test_run_accepts_tcp_when_no_frames(self):
         """defer 模式: 检测器未开(无帧)时主循环仍 accept — 修复 8080 永不接受连接 bug.

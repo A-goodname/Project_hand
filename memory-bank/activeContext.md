@@ -14,6 +14,27 @@
 
 ## 最近变更
 
+### 融合方案甲重排 + 实机联调修复 (2026-08-22, 代码完成待实机复测)
+
+**架构(方案甲)**: merged 进程(`rps_stream_merged.py`)全程拥有 usb-0:2(单相机 HandInCup 递杯 + RPS 切换); A2D py 让出 usb-0:2; voice(`--rps-game`)内建 8770 门禁供递杯确认; 灵巧手在 A2D 递杯段后交给 merged(RPS 手势)。
+
+**A2D py (`estun_handle_cup_sm.py`)**:
+- `_init_camera_b` no-op(让 usb-0:2); READY 写 `/tmp/a2d_ready`(通知 sh 起 RPS 服务); `_gate_setup` 融合(defer)不 spawn 门禁(等 sh 的 voice)。
+- PhaseD 去 ABORT/Continue; RELEASE 用 `handover_ready` 区分**两次 RELEASE**(CRP 序 CUP→RELEASE(松杯)→GRIP→READY→RELEASE(递杯交接))—— 第1次只松夹, 第2次才有门禁确认。
+- **第2次 RELEASE 先等门禁就绪**(voice 晚起, RELEASE 常先到)再 `wait_confirmed("拿好了")` → 松夹 → 发结束串。
+- `_finalize_handover()` 在 `_handle_session` finally(socket 断开=递杯段真结束)才 `disable_hand`+CANCEL+写触发文件(灵巧手交接, 防"RELEASE 后马上 RESET")。
+- `_is_person_seated=True`; 删 unused import + 死代码(Camera B/HandInCup/`_camera_b_loop`)。
+
+**sh `start_phase_all.sh`**:
+- 监控段: 等 `[ -f /tmp/a2d_ready ]` → 起 RPS 服务; 删"A2D 退出→起 RPS"后置链路; 8770 门禁=voice 内建(A2D 不再 spawn), 删 `wait_gate_gone`/`GATE_PATTERN`。
+- HELPER 里 **voice 先起**(8770 门禁+日志就绪)再 merged(照同事 startup); 用 `rps_stream_merged.py --enable-hand RPS_HANDOVER_MODE=1`。
+- py 服务输出 `tee` 日志 + `PYTHONUNBUFFERED=1`(否则 pipe 块缓冲, 终端日志延迟); 启动清 `a2d_ready/handover_ready/trigger/released` + 日志。
+- `shutdown_rps`/cleanup 改杀 merged+voice。
+
+**对方(wangxilu)**: `rps_stream_merged.py` 灵巧手 open 延迟到 `rps_active`(触发才 configure_hand); 修 `capture_loop` 缺 `import socket`(NameError)。
+
+**实机踩坑(2026-08-22 定位)**: ①merged `socket` NameError(capture_loop) ②上次 `/tmp/a2d_ready` 残留→RPS 提前启(启动清) ③RELEASE 处 `disable_hand` 内部发 RESET→"RELEASE后马上RESET"(移到段尾) ④CRP 两次 RELEASE(`hand_judged` 跳过第2次→改 `handover_ready`) ⑤voice 晚起→RELEASE 到门禁没就绪(改先等门禁)。协作修改方案见 `/data/VLA/协作-灵巧手交接-A2D与merged-2026-08-22.md`。
+
 ### 音频会话验证 + check_audio 放宽 + 清孤儿 (2026-08-22)
 
 1. **现象**: 融合 PhaseALL 无声排查。JBL 蓝牙音箱被"对方(wangxilu, 训练侧)会话"占/抢同一 A2DP, user 本机播落到无后端 sink 无声; 期间 user 的 PipeWire 守护进程一度卡死 → 系统设置"无输入/输出设备"
