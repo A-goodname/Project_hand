@@ -14,6 +14,14 @@
 
 ## 最近变更
 
+### 音频会话验证 + check_audio 放宽 + 清孤儿 (2026-08-22)
+
+1. **现象**: 融合 PhaseALL 无声排查。JBL 蓝牙音箱被"对方(wangxilu, 训练侧)会话"占/抢同一 A2DP, user 本机播落到无后端 sink 无声; 期间 user 的 PipeWire 守护进程一度卡死 → 系统设置"无输入/输出设备"
+2. **验证 (结论)**: 语音(千寻=`realtime_voice --rps-game`)/greeting/门禁**统一走 user(uid 1000) 会话 → 默认 sink=JBL 才出声**。本机控制台登录=user(seat0/tty2)+SSH user 共享同一 `/run/user/1000` PipeWire; 对方(训练侧)先后用了两个用户: **之前 wangxilu**(uid 1001) 会话 → 独立 PipeWire 抢同一 BT A2DP → 无声源; **刚才的交接测试 sh 则以 user 身份跑**(见下). **音频跟着持有 A2DP 的会话走**（印证 start_greeting.sh 注释: 跨会话 sudo 播放无声）
+3. **修复**: `start_phase_all.sh check_audio` 判据放宽 — **只要 user 默认 sink 是 JBL 即放行**, 多实例(wangxilu)只警告不阻断; 唯一硬失败=user 实例无该 JBL sink → exit 3; bash -n + 干跑 PASS
+4. **清理**: `/data/xilu/test/start_rps_after_handover.sh`(对方交接测试脚本, **以 user 身份跑**)起的孤儿 — 千寻(21322)/rps_stream(21071)/FIFO holder(21069)/脚本(21318)全清, 8768/8770 释放, FIFO/`rps_config_phaseE.json` 删除; 该脚本前台 trigger 等"拿好了"+回车、交接完才退出 → 常驻非 bug, 但跑 PhaseALL 前须清
+5. **实机验证**: user 会话独立播 greeting("来自同济大学的各位老师晚上好呀！")→ JBL 出声 ✅ (2026-08-22)
+
 ### 融合语音截断根修: 门禁 SIGINT 优雅关停 + 音频沉降 (2026-08-22, 方案A)
 
 1. **原理 (读 /data/Speech realtime_voice.py + realtime_audio.py 确认)**: 回声防护 = **半双工麦克风门控** (`_mic_enabled.clear()` while TTS 播放, 播放完 `playback_tail_guard_ms` 1000ms 重开); `interrupt_output()` 由游戏(播邀请/结算前主动)或 ASR 触发。**根因** = 门禁被 SIGTERM → `realtime_voice` **无 SIGTERM 处理器**, `finally:audio.close()` 不执行 → 其 **pw-cat speaker 子进程孤儿化** + 音频图不释放 → RPS voice 无缝接手同一麦克风(UGREEN usb 内置 mic), 卡在未释放音频图上, 半双工没拦 JBL 回灌的机器人 TTS 回声 → 当人声打断
