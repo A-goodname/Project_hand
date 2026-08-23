@@ -14,6 +14,21 @@
 
 ## 最近变更
 
+### 同事单进程融合 single_all 多次实机验证通过 + 环境差异/备份 (2026-08-23)
+
+**同事把多进程融合收拢为单进程 (`/data/xilu/single/single_all.py`)，多次实机验证通过。** 原多进程(P0 py + A2D py + phaseE py + rps_stream_merged + realtime_voice×2 + 8770门禁TCP + /tmp触发文件 + FIFO)全部收进一个 Python 进程；**CRP 完全不动** (`estun_fused_phase_all.crp` 依次连 8600/8080/8700)。入口 `bash /data/xilu/single/start_single.sh`。
+
+**关键设计**：
+- 灵巧手 `SingleHandHub` **唯一持有者**：open→enable→`is_enabled()`确认(未确认重试 30×0.5s)、**全程保持使能、阶段间只做手势绝无 disable/close**；`ensure_enabled()` 阶段边界校验；仅进程退出 `shutdown()` RESET→disable→close。RPS 出拳走共享代理(同实例+互斥锁)。
+- `rps_active` 由编排器 `activate_rps()` **进程内调用**(无 /tmp 触发文件)；门禁 `HandoverConfirmationGate` **进程内对象**(无 8770 TCP)；语音 `VoiceEngine` quiet→gate→game 三段；完成/邀请信号进程内(无日志tail/FIFO)。
+- 设备单进程持有：手(唯一)/迎宾cam/ D435i / RPS cam usb-0:2 / 麦克风音响 / 8768 Flask。
+
+**→ 这解决了我们多进程"方案甲"追的坑**：手全程共享不失能(无跨进程交接、无"疯狂使能")、触发→RPS 进程内无缝(无文件时序)、RELEASE 无 RESET/无提前 disable、无 8770 TCP/日志tail/FIFO。**多进程方案甲(`start_phase_all.sh` + estun_handle_cup_sm handover/触发文件/假失能)被单进程取代为融合主线**(保留作参考)。
+
+**环境差异(两 conda)**: Proj 与 VLA 的 torch **相同**(2.13.0+cu126)、python 3.11.15 相同、mediapipe 0.10.35 / ultralytics 8.4.48 相同。差异= **`sherpa-onnx==1.13.4`(requirements.txt line30, ASR, onnx推理、非 funasr) 只在 VLA**；Proj 未装但可装(它是项目依赖 single 用 `/data/xilu/conda-envs/VLA/bin/python` 即因含 ASR)。
+
+**备份**: `/data/xilu/single` 已复制到 `reference/single/`(21文件, gitignore 忽略)。
+
 ### 融合方案甲重排 + 实机联调修复 (2026-08-22, 代码完成待实机复测)
 
 **架构(方案甲)**: merged 进程(`rps_stream_merged.py`)全程拥有 usb-0:2(单相机 HandInCup 递杯 + RPS 切换); A2D py 让出 usb-0:2; voice(`--rps-game`)内建 8770 门禁供递杯确认; 灵巧手在 A2D 递杯段后交给 merged(RPS 手势)。

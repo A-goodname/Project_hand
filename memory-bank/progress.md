@@ -86,7 +86,7 @@
 
 | 任务 | 说明 |
 |------|------|
-| 🔴 三阶段融合实机联调 | estun_fused_phase_all.crp + start_phase_all.sh (代码完成 159 绿); 示教器导入走通三阶段; 验证 defer-devices/RPS 晚起/麦克风交接 (含语音截断修复) |
+| 🔴 三阶段融合实机联调 | **主线已改同事单进程 `single_all.py`(`bash /data/xilu/single/start_single.sh`, 多次实机验证通过)**; CRP 不动 estun_fused_phase_all.crp; 多进程方案甲 start_phase_all.sh 被取代(保留参考, 备份 reference/single/) |
 | 🟡 证据合同 5→10 申报 (训练侧) | ROT_THETA_WIN 对齐 10; 随 18 回合采集一并申报 (协作线) |
 | 🟡 异常点 110950 重采 | pos_side 数据点 d=0.531 近距; 可随 18 回合采集顺带 |
 | 🟡 Phase 0 握手超时备选 | 若握手变慢: 方案A=CRP 90→110~120s / 方案B=py force_release_timeout 60→45s (现冗余足够) |
