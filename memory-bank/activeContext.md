@@ -6,7 +6,7 @@
 
 **服务器 VLA → Windows 再移植**：先完成设备/端口映射，再移除语音模块，最终恢复 Phase0 + Phase A-D 全流程。服务器 `VLA` 比本机旧 `main` 线性领先 88 个提交，迁移分支为 `codex/server-vla-windows`。
 
-**2026-09-23 当前新主线**：控制器 `D:/Download` 的 Phase0、PhaseA2D、PhaseAll 导出为准。已生成 `doc/controller_exports/PhaseAll-NoRPS.crp`（84 个顶层块，去除 RPS 段/点/变量/8700，PhaseD 用 `<C_P3>` / `[C_P3]` 的 TranStrToCpos 分支）。Windows 入口 `scripts_gen/run_phase0_a2d.py` 只融合 Phase0+A2D；不启动语音或 RPS。PhaseD 必须键盘 C/回车 CONTINUE 或 A ABORT，视觉仅提示。操作见 `doc/phase0_a2d_windows.md`。已完成两台 UGREEN 抓帧、Phase0 YOLO 单帧、COM5 初始化 RESET、PhaseD HandInCup 单帧、D435i 枚举和无运动测试；**融合 ALL 尚未在控制器导入/执行**。RealSense Windows 通过根目录 `pyrealsense2.cp311-win_amd64.pyd` 导入，不从 pip 安装。
+**2026-09-23 当前新主线**：控制器 `D:/Download` 的 Phase0、PhaseA2D、PhaseAll 导出为准。已生成 `doc/controller_exports/PhaseAll-NoRPS.crp`（84 个顶层块，去除 RPS 段/点/变量/8700，PhaseD 用 `<C_P3>` / `[C_P3]` 的 TranStrToCpos 分支）。Windows 入口 `Orchestrator/estun_phase0_a2d.py` 只融合 Phase0+A2D；不启动语音或 RPS。PhaseD 必须键盘 C/回车 CONTINUE 或 A ABORT，视觉仅提示。操作见 `doc/phase0_a2d_windows.md`。已完成两台 UGREEN 抓帧、Phase0 YOLO 单帧、COM5 初始化 RESET、PhaseD HandInCup 单帧、D435i 枚举和无运动测试；**融合 CONTINUE 已由用户实机确认通过，融合 ABORT 待测**。RealSense Windows 通过根目录 `pyrealsense2.cp311-win_amd64.pyd` 导入，不从 pip 安装。
 
 **Phase0 实机复测**：用户确认识人、挥手、握手和 Home 均正常。此前一次 Step4 的 COM5 `WriteFile failed` 未再现，暂按偶发问题记录，不能认定阈值故障。融合生命周期进一步改为主进程全程持有同一灵巧手串口，迎宾 UGREEN+YOLO 由 `Estun/phase0_camera_worker.py` 独立子进程持有，识人后立即关闭；已实测子进程独立打开/预热/关闭相机。融合 ALL 仍未上机执行。
 

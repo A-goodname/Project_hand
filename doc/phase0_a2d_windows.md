@@ -14,6 +14,8 @@
 - `Orchestrator/config.yaml` 保留服务器未提交的加速参数 `skip_frames: 2`、`stabilization.window: 6`。
 - PhaseD 键盘决策：`C` 或回车为 CONTINUE，松夹并发送 `<C_P3>`；CRP 等待 1 秒后 MovL Home。`A` 为 ABORT，先保持夹持并发送 `[C_P3]`；CRP 按 MovL C_P1 → RELEASE → 等 1 秒 → MovL C_P2 → RESET → 等 1 秒 → MovL Home 执行。视觉仅提示，不自动决定。
 - 用户已实机确认独立 Phase0 全功能正常，以及独立 A2D 的 ABORT 分支正常；融合版复用同一 PhaseD 决策与 CRP 分支，但 Phase0→A2D 交接仍待实机验证。
+- 用户随后实机确认融合版 CONTINUE 分支通过；融合 ABORT 尚待验证。入口运行时自动保存主进程和迎宾相机子进程日志到 `logs/phase0_a2d_*.log` 与同名前缀的 `_phase0_camera.log`（目录被 Git 忽略）。
+- 2026-09-23 再次实机通过融合 CONTINUE；本机日志 `phase0_a2d_20260923_115143_084512.log` 显示 Phase0→A2D 共用 COM5、Cup/Handle 判稳、D435i 关闭、键盘 CONTINUE 松夹与收尾均正常。Cup 在 6 个有效样本后稳定；Handle 位置极差约 1–2 mm、姿态极差 <0.5°，主要等待 θ 极差从约 5–12° 收敛到 4.95°（阈值 <5°）。不宜凭本次结果直接放宽抓取阈值。
 - A2D 启动时可预开 PhaseD UGREEN、加载 HandInCup 模型；READY 前不读取/推理，READY 后丢弃 3 帧缓冲画面再推理。PhaseB 发送位姿后立即关闭 D435i pipeline。
 
 ## 启动
@@ -21,7 +23,7 @@
 在项目根目录运行（主进程始终持有同一 COM5 连接；迎宾 UGREEN 与识人模型在独立子进程中打开、预热，并在识人后退出；D435i/Handle+Cup 模型默认提前打开）：
 
 ```powershell
-D:\Environment\miniconda\envs\Proj\python.exe scripts_gen\run_phase0_a2d.py
+D:\Environment\miniconda\envs\Proj\python.exe -u Orchestrator\estun_phase0_a2d.py
 ```
 
 等待 8600 和 8080 服务就绪后，由现场操作员在示教器上导入并运行
@@ -29,6 +31,7 @@ D:\Environment\miniconda\envs\Proj\python.exe scripts_gen\run_phase0_a2d.py
 PhaseD 到 READY 后看相机辅助画面，在相机窗口按 `C`/回车或 `A`；也可在终端输入
 `c`/`a` 再回车。`--no-preview` 仅使用终端输入。
 若不想提前打开 D435i，可加 `--no-prewarm`，但控制器连接到 8080 后会多等模型与相机初始化。
+Handle/Cup 判稳慢时先看主日志的 `[STABILITY]` 行：有效 θ 样本数、位置/姿态/θ 窗口极差会指出哪个条件尚未满足。当前 `skip_frames=2`、稳定窗口 6 个有效检测样本；Handle 另要求位置极差 <10 mm、姿态极差 <5°、θ 极差 <5°，θ 最新观测不超过 1.5 秒。无效帧不计入窗口，并不会清空已有样本。不要仅为加速而降低抓取门槛。
 
 单独测试 PhaseA2D：
 
@@ -43,6 +46,6 @@ ABORT 信号发出时仍夹持，直到 CRP 到达 C_P1 发 RELEASE；若分支�
 
 ## 尚未完成的实机验证
 
-- 独立 A2D 的 CONTINUE 分支与融合版两条分支仍须逐条验证；融合版额外验证相机关闭和 COM5 全程共享。
+- 独立 A2D 的 CONTINUE 分支和融合版 ABORT 分支尚待验证；融合版 CONTINUE 已由用户实机确认通过。
 - `.crp` 已在 Git 中忽略，仅保留在本机。换机器时重新取得控制器导出件、原参考 `doc/handlepluscup-orchestrator.crp`，运行 `scripts_gen/prepare_controller_crps.py` 生成派生件。
 - 如 Windows 尚未配置 `192.168.101.96`，服务无法绑定该地址；不改项目中的 host，先由现场确认本机网络设置。

@@ -3,7 +3,9 @@
 ## Windows 再移植 (2026-09-23)
 
 - [x] 用户实机确认：独立 Phase0 全流程正常；独立 A2D 的 PhaseD ABORT 分支正常。
-- [ ] 融合版 Phase0→A2D 交接及 CONTINUE/ABORT 实机验证；单段通过不等于融合通过。
+- [x] 用户实机确认：融合版 Phase0→A2D 交接和 CONTINUE 分支通过。
+- [x] 再次实机确认融合 CONTINUE；日志证实 COM5 复用、两相机生命周期与松夹收尾。Handle 判稳慢主因是 θ 极差 5–12° 超过 5° 门槛，Cup/Handle 位置与姿态已稳定；先保留安全门槛。
+- [ ] 融合版 ABORT 分支实机验证；如需优化 Handle θ，进一步采集同一摆位的独立 θ 稳定性数据。
 - [x] 服务器 `VLA` 分支取回本机，确认相对旧 `main` 线性领先 88 个提交
 - [x] Windows 设备枚举：D435i ×1、UGREEN ×2、OmniHand `COM5`、ESTUN `192.168.101.100`
 - [x] 双 UGREEN 实机预览定案：Phase0=`UGREEN Camera 1080P`(当前 4)，PhaseD=`UGREEN Camera`(当前 3)

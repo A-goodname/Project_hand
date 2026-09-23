@@ -18,6 +18,7 @@ from Estun.estun_greeting_phase0 import Phase0Greeting, _load_estun_config
 from Estun.phase0_camera_worker import WelcomeCameraWorker
 from Estun.utils_shared import disable_hand
 from Orchestrator.estun_handle_cup_sm import HandleCupSM
+from Orchestrator.run_log import capture_run_log
 
 
 def main() -> int:
@@ -34,12 +35,19 @@ def main() -> int:
         print("5. PhaseD keyboard C/Enter=CONTINUE, A=ABORT; no voice/RPS")
         return 0
 
+    with capture_run_log("phase0_a2d") as log_path:
+        return run_fusion(args, log_path)
+
+
+def run_fusion(args, log_path: Path) -> int:
     sm = HandleCupSM()
     sm._defer_devices = True
     sm._no_preview = args.no_preview
     sm._phase0_handoff = threading.Event()
     estun_cfg = _load_estun_config()
-    camera_worker = WelcomeCameraWorker(estun_cfg)
+    child_log_path = log_path.with_name(log_path.stem + "_phase0_camera.log")
+    camera_worker = WelcomeCameraWorker(estun_cfg, log_path=child_log_path)
+    print(f"[LOG] 迎宾相机子进程日志: {child_log_path}")
     phase0 = Phase0Greeting(
         estun_cfg,
         camera_path="",
@@ -55,7 +63,12 @@ def main() -> int:
         if not args.no_prewarm:
             sm._init_detector()  # D435i + models, but Handle/Cup inference is paused.
             sm._detect_active = False
-        phase0.start()  # opens shared COM5; camera+YOLO live only in child process
+        try:
+            phase0.start()  # opens shared COM5; camera+YOLO live only in child process
+        except Exception:
+            phase0.stop()  # startup may already have opened COM5
+            sm.stop()
+            raise
 
         def serve_phase0():
             try:
@@ -78,7 +91,7 @@ def main() -> int:
         if phase0_result["error"] is not None or not phase0_result["completed"]:
             return 2
         if sm._handover_choice != "CONTINUE":
-            print("[FUSION] ABORT or unfinished handover: retain current grip; inspect hardware manually.")
+            print("[FUSION] ABORT or unfinished handover: verify controller Home and hand state manually.")
             return 3
         disable_hand(skip_reset=True)
         return 0

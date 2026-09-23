@@ -6,9 +6,28 @@ model. The parent retains the robot socket and the single shared OmniHand.
 from __future__ import annotations
 
 import multiprocessing as mp
+from contextlib import nullcontext
+from pathlib import Path
 
 
-def _camera_process(conn, cfg, camera_name: str, camera_path: str, camera_id: int):
+def _camera_process(conn, cfg, camera_name: str, camera_path: str,
+                    camera_id: int, log_path: str | None):
+    from Orchestrator.run_log import capture_run_log
+
+    log_context = capture_run_log("phase0_camera", Path(log_path)) if log_path else nullcontext()
+    with log_context:
+        try:
+            _run_camera_process(conn, cfg, camera_name, camera_path, camera_id)
+        except Exception as exc:
+            try:
+                conn.send(("error", f"{type(exc).__name__}: {exc}"))
+            except (BrokenPipeError, OSError):
+                pass
+            conn.close()
+            raise
+
+
+def _run_camera_process(conn, cfg, camera_name, camera_path, camera_id):
     from Estun.estun_greeting_phase0 import Phase0Greeting
 
     service = Phase0Greeting(
@@ -40,11 +59,12 @@ class WelcomeCameraWorker:
     """One-shot camera/YOLO subprocess; closes immediately after person check."""
 
     def __init__(self, cfg, *, camera_name="UGREEN Camera 1080P",
-                 camera_path="", camera_id=-1):
+                 camera_path="", camera_id=-1, log_path=None):
         self._cfg = cfg
         self._camera_name = camera_name
         self._camera_path = camera_path
         self._camera_id = camera_id
+        self._log_path = str(log_path) if log_path is not None else None
         self._process = None
         self._conn = None
 
@@ -56,7 +76,7 @@ class WelcomeCameraWorker:
         process = context.Process(
             target=_camera_process,
             args=(child, self._cfg, self._camera_name,
-                  self._camera_path, self._camera_id),
+                  self._camera_path, self._camera_id, self._log_path),
             name="phase0-welcome-camera", daemon=True,
         )
         try:
@@ -66,7 +86,10 @@ class WelcomeCameraWorker:
             self._conn = parent
             if not parent.poll(45.0):
                 raise TimeoutError("迎宾相机进程 45 秒内未就绪")
-            kind, payload = parent.recv()
+            try:
+                kind, payload = parent.recv()
+            except EOFError as exc:
+                raise RuntimeError("迎宾相机子进程提前退出；请查看本次 _phase0_camera.log") from exc
             if kind != "ready":
                 raise RuntimeError(f"迎宾相机进程启动失败: {payload}")
             print(f"[GREETING] 迎宾相机子进程已预热: id={payload}")

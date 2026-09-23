@@ -105,6 +105,18 @@ class PoseStabilizer:
         # 无 θ (cup 等): 仅位置+角度
         return pos_range < self.pos_thresh and angle_range < self.angle_thresh
 
+    def spreads(self):
+        """Observed position/euler/theta ranges for diagnostics; no gate changes."""
+        if not self._buffer:
+            return None, None, None
+        pos = np.array([p for p, _, _ in self._buffer])
+        angles = np.array([a for _, a, _ in self._buffer])
+        thetas = [value for _, _, value in self._buffer]
+        theta_range = (float(np.ptp(np.array(thetas)))
+                       if all(value is not None for value in thetas) else None)
+        return (float(np.ptp(pos, axis=0).max()),
+                float(np.ptp(angles, axis=0).max()), theta_range)
+
     def get_mean(self):
         if not self._buffer:
             return None, None, None
@@ -119,7 +131,7 @@ class PoseStabilizer:
         self._buffer = []
 
 
-ROT_THETA_WIN = 10       # 旋转 θ 稳定窗口帧数 (2026-08-20: 与 config stabilization.window 对齐)
+ROT_THETA_WIN = 10       # 默认旋转窗口；实用窗口由 config stabilization.window 覆盖
 ROT_THETA_SPREAD_MAX = 5.0   # 窗口内 θ 分歧上限 (deg, B3: 极差超限 → 不稳定/REJECT)
 ROT_THETA_FRESH_S = 1.5      # θ 观测新鲜窗口 (s, B3: 超期 → REJECT)
 
@@ -930,6 +942,29 @@ class HandleCupSM:
             if theta is not None:
                 self._handle_stabilizer.add(tuple(pos_cam), tuple(euler), float(theta))
                 self._rot_obs_t = time.monotonic()
+            n = len(self._handle_stabilizer._buffer)
+            p_range, a_range, t_range = self._handle_stabilizer.spreads()
+            ratio = h.get("ratio")
+            rd = h.get("rd")
+            fmt = lambda value, digits=2: "NA" if value is None else f"{value:.{digits}f}"
+            reasons = []
+            if theta is None:
+                reasons.append("theta_missing")
+            if n < self._handle_stabilizer.window:
+                reasons.append("window_filling")
+            if p_range is not None and p_range >= self._handle_stabilizer.pos_thresh:
+                reasons.append("position_spread")
+            if a_range is not None and a_range >= self._handle_stabilizer.angle_thresh:
+                reasons.append("euler_spread")
+            if t_range is not None and t_range >= self._handle_stabilizer.theta_thresh:
+                reasons.append("theta_spread")
+            if not self._handle_stabilizer.is_generation_valid():
+                reasons.append("stale_session")
+            print(f"[STABILITY] H frame={self._frame_counter} valid={n}/{self._handle_stabilizer.window} "
+                  f"ratio={fmt(ratio, 4)} rd={fmt(rd, 4)} theta={fmt(theta)} "
+                  f"band={h.get('band')} pos_mm={fmt(None if p_range is None else p_range * 1000)} "
+                  f"euler_deg={fmt(a_range)} theta_deg={fmt(t_range)} "
+                  f"reason={','.join(reasons) or 'ready'}", flush=True)
             if not self._handle_stabilizer.is_generation_valid():
                 self._rot_valid = False
                 self._rot_band = None
@@ -958,6 +993,10 @@ class HandleCupSM:
                             self._rot_reject = None
                             print(f"\n[Handle STABLE] ee=({pos_ee[0]:.3f},{pos_ee[1]:.3f},{pos_ee[2]:.3f})"
                                   f" θ_med={th_med:.1f}° band={band}")
+        else:
+            print(f"[STABILITY] H frame={self._frame_counter} missing_position "
+                  f"kettle={'Y' if h.get('kettle_bbox') is not None else 'N'} "
+                  f"valid={len(self._handle_stabilizer._buffer)}/{self._handle_stabilizer.window}", flush=True)
 
         # === Cup 稳定 ===
         c = result["cup"]
@@ -965,6 +1004,11 @@ class HandleCupSM:
             pos_cam = np.array(c["pos_cam"])
             euler = np.array(c["euler_cam"])
             self._cup_stabilizer.add(tuple(pos_cam), tuple(euler))
+            p_range, a_range, _ = self._cup_stabilizer.spreads()
+            print(f"[STABILITY] C frame={self._frame_counter} "
+                  f"valid={len(self._cup_stabilizer._buffer)}/{self._cup_stabilizer.window} "
+                  f"pos_mm={p_range * 1000:.2f} euler_deg={a_range:.2f} "
+                  f"ready={self._cup_stabilizer.is_stable()}", flush=True)
             if self._cup_stabilizer.is_stable():
                 if not self._cup_stabilizer.is_generation_valid():
                     self._cup_stabilizer.reset()
@@ -974,6 +1018,10 @@ class HandleCupSM:
                     if mean_cpos is not None:
                         det.last_known_cup_pose = (mean_cpos, self._cup_fixed_abc)
                         print(f"\n[Cup STABLE]    pos=({mean_cpos[0]:.3f},{mean_cpos[1]:.3f},{mean_cpos[2]:.3f})")
+        else:
+            print(f"[STABILITY] C frame={self._frame_counter} missing_position "
+                  f"bbox={'Y' if c.get('cup_bbox') is not None else 'N'} "
+                  f"valid={len(self._cup_stabilizer._buffer)}/{self._cup_stabilizer.window}", flush=True)
 
     # ================================================================
     #  可视化
