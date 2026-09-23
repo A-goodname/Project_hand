@@ -48,12 +48,14 @@ class CupSmDeferDevicesTest(unittest.TestCase):
              mock.patch.object(sm, "_init_stabilizer_and_calib") as m_stab, \
              mock.patch.object(sm, "_init_tcp") as m_tcp, \
              mock.patch.object(sm, "_init_hand") as m_hand, \
-             mock.patch.object(sm, "_init_detector") as m_det:
+             mock.patch.object(sm, "_init_detector") as m_det, \
+             mock.patch.object(sm, "_prepare_handover_vision") as m_hic:
             sm.start()
         m_hand.assert_called_once()
         m_det.assert_called_once()
         m_stab.assert_called_once()
         m_tcp.assert_called_once()
+        m_hic.assert_called_once()
 
     def test_ensure_devices_idempotent(self):
         """_ensure_devices: 首次打开设备, 二次跳过 (幂等)."""

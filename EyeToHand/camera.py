@@ -144,10 +144,19 @@ def find_camera_id(keywords: Optional[List[str]] = None,
     if not devices:
         return None
 
+    # Windows 上可能同时存在 "UGREEN Camera" 与
+    # "UGREEN Camera 1080P"。先做完整名称匹配，避免短名称以子串方式
+    # 抢到另一只相机；没有完整命中时再保留原来的关键词回退。
+    for keyword in keywords:
+        for i, name in enumerate(devices):
+            if keyword.casefold() == name.casefold():
+                print(f"[CameraFinder] 完整匹配 \"{keyword}\" → [{i}] {name}")
+                return i
+
     for keyword in keywords:
         for i, name in enumerate(devices):
             if keyword.lower() in name.lower():
-                print(f"[CameraFinder] 匹配 \"{keyword}\" → [{i}] {name}")
+                print(f"[CameraFinder] 关键词匹配 \"{keyword}\" → [{i}] {name}")
                 return i
 
     return None

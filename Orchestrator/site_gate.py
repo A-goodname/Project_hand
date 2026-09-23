@@ -21,12 +21,22 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from EyeToHand.camera import _list_v4l2_devices  # noqa: E402
+from EyeToHand.camera import _list_v4l2_devices, find_camera_id  # noqa: E402
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def _eth_carrier(iface: str) -> str | None:
     """读取网口载波状态 (NO-CARRIER / UP 等); 无该接口 → None."""
     try:
+        if _IS_WINDOWS:
+            safe_iface = iface.replace("'", "''")
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-NetAdapter -Name '{safe_iface}').Status"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=5)
+            return (out.stdout or out.stderr).strip() or None
         out = subprocess.run(["ip", "-o", "link", "show", iface],
                              capture_output=True, text=True, timeout=5)
         return (out.stdout or out.stderr).strip() or None
@@ -60,8 +70,37 @@ def check_camera_b_physical_port(path_keyword: str = "usb-0:4.2") -> str | None:
     return None
 
 
+def check_camera_b_device(camera_id: int = -1, camera_name: str = "",
+                          camera_path: str = "") -> str | None:
+    """跨平台核验 Camera B 身份，不打开视频流。
+
+    Windows 的两个 UGREEN 有不同 DSHOW 完整名称，按名称核验；Linux 仍按
+    USB 物理口核验，避免依赖会漂移的 /dev/videoN。
+    """
+    if not _IS_WINDOWS:
+        return check_camera_b_physical_port(camera_path)
+    try:
+        resolved = find_camera_id([camera_name] if camera_name else ["UGREEN"])
+    except Exception as exc:  # noqa: BLE001
+        return f"Camera B 枚举失败: {type(exc).__name__}: {exc}"
+    if resolved is None:
+        return f"Camera B 未找到: name={camera_name!r}"
+    if int(camera_id) >= 0 and resolved != int(camera_id):
+        return f"Camera B 索引不匹配: 期望 {camera_id}, 按名称解析为 {resolved}"
+    return None
+
+
 def check_hand_carrier_alive(serial_path: str) -> str | None:
     """灵巧手 carrier 活体: 串口稳定路径存在 (by-id)."""
+    if _IS_WINDOWS:
+        try:
+            from serial.tools import list_ports  # noqa: PLC0415
+            ports = {p.device.upper() for p in list_ports.comports()}
+        except Exception as exc:  # noqa: BLE001
+            return f"灵巧手串口枚举失败: {type(exc).__name__}: {exc}"
+        if serial_path.upper() not in ports:
+            return f"灵巧手串口不存在: {serial_path}; 实际 {sorted(ports)}"
+        return None
     if not os.path.exists(serial_path):
         return f"灵巧手串口不存在: {serial_path}"
     return None
@@ -72,7 +111,7 @@ def check_ether_link(iface: str = "enp36s0f1") -> tuple[str | None, str | None]:
     state = _eth_carrier(iface)
     if state is None:
         return None, "无该网络接口"
-    if "NO-CARRIER" in state:
+    if "NO-CARRIER" in state or state.lower() in {"disconnected", "down"}:
         return (f"机械臂有线网 {iface} NO-CARRIER — 联机测试前需现场物理链路核验",
                 state)
     return None, state
@@ -80,6 +119,7 @@ def check_ether_link(iface: str = "enp36s0f1") -> tuple[str | None, str | None]:
 
 def run_site_gate(*, preparation_ok: bool, camera_a_serial: str,
                   camera_b_path: str, hand_serial_path: str,
+                  camera_b_name: str = "", camera_b_id: int = -1,
                   eth_iface: str = "enp36s0f1",
                   block_link_down: bool = False) -> list[str]:
     """执行现场门禁. 返回失败原因列表 (空 = 通过).
@@ -97,7 +137,8 @@ def run_site_gate(*, preparation_ok: bool, camera_a_serial: str,
     if fail:
         failures.append(fail)
 
-    fail = check_camera_b_physical_port(camera_b_path)
+    fail = (check_camera_b_device(camera_b_id, camera_b_name, camera_b_path)
+            if camera_b_name else check_camera_b_physical_port(camera_b_path))
     if fail:
         failures.append(fail)
 

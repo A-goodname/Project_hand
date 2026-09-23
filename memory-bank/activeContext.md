@@ -1,10 +1,18 @@
 # Active Context — Project_hand
 
-> 工作区 /data/VLA/Project_hand(2026-08-16 起唯一;~/ 旧副本仅历史)。
+> 当前迁移工作区 `D:\Downloads\Project_hand`；服务器基线 `/data/VLA/Project_hand` 已取回为 `server/VLA`。
 
 ## 当前焦点
 
-**⚠️ ROBOT 语音播报被截断 (融合场景, 已定位 + 已实装根修, 待实机验证)** — 融合流程已通，但 RPS 的 ROBOT 语音"只吐两个字就停"（`[Robot]` 完整文本已生成, 播放层被 `interrupt_output()` 清 buffer）。**根因 (读 /data/Speech 代码确认)**：8770 门禁被 **SIGTERM**，`realtime_voice` 只捕 KeyboardInterrupt(SIGINT)、**SIGTERM 跳过 `finally:audio.close()`** → 其 pw-cat speaker 子进程孤儿化 + 音频图不释放 → RPS voice 接手同一麦克风时, 半双工门控没拦住 JBL 回灌的机器人 TTS 回声 → 被当成新的人声 → 打断 (`[Audio] microphone peak: 28712` 即麦克风开着时捕获强回声)。**单局正常**（无门禁占音频）。**实装修复 (2026-08-22, 方案A)**：门禁 kill 改 **SIGINT 优雅关停**（触发 audio.close 干净释放麦克风/pw-cat）+ 起 RPS 前 `GATE_AUDIO_SETTLE`(2s) 音频沉降；改 `estun_handle_cup_sm.py` + `start_phase_all.sh` + `start_cup_handover.sh`，全量 168 测试绿。**下一步**：实机融合 demo 验证 RPS 交接不再"只吐两字"；若仍截断再走方案B(仅加长沉降)/C(同事改 /data/Speech 加 SIGTERM 清音频)。
+**服务器 VLA → Windows 再移植**：先完成设备/端口映射，再移除语音模块，最终恢复 Phase0 + Phase A-D 全流程。服务器 `VLA` 比本机旧 `main` 线性领先 88 个提交，迁移分支为 `codex/server-vla-windows`。
+
+**2026-09-23 当前新主线**：控制器 `D:/Download` 的 Phase0、PhaseA2D、PhaseAll 导出为准。已生成 `doc/controller_exports/PhaseAll-NoRPS.crp`（84 个顶层块，去除 RPS 段/点/变量/8700，PhaseD 用 `<C_P3>` / `[C_P3]` 的 TranStrToCpos 分支）。Windows 入口 `scripts_gen/run_phase0_a2d.py` 只融合 Phase0+A2D；不启动语音或 RPS。PhaseD 必须键盘 C/回车 CONTINUE 或 A ABORT，视觉仅提示。操作见 `doc/phase0_a2d_windows.md`。已完成两台 UGREEN 抓帧、Phase0 YOLO 单帧、COM5 初始化 RESET、PhaseD HandInCup 单帧、D435i 枚举和无运动测试；**融合 ALL 尚未在控制器导入/执行**。RealSense Windows 通过根目录 `pyrealsense2.cp311-win_amd64.pyd` 导入，不从 pip 安装。
+
+**Phase0 实机复测**：用户确认识人、挥手、握手和 Home 均正常。此前一次 Step4 的 COM5 `WriteFile failed` 未再现，暂按偶发问题记录，不能认定阈值故障。融合生命周期进一步改为主进程全程持有同一灵巧手串口，迎宾 UGREEN+YOLO 由 `Estun/phase0_camera_worker.py` 独立子进程持有，识人后立即关闭；已实测子进程独立打开/预热/关闭相机。融合 ALL 仍未上机执行。
+
+**PhaseA2D 下一步**：控制器原版 `PhaseA2D-Down-444.crp` 派生了 `doc/controller_exports/PhaseA2D-KeyboardGate.crp`（57 块，`<C_P3>` / `[C_P3]` 分支），供单独实测。`estun_handle_cup_sm.py` 启动时预开 UGREEN PhaseD 相机+加载 HandInCup，但 READY 前不推理；PhaseB 位姿发送后关闭 D435i，READY 后丢弃 3 帧缓冲再开始视觉辅助。用户将测试 PhaseA2D，结果待回报。
+
+**PhaseD 分支新路径（用户指定）**：`CONTINUE` 在 Python 松夹后由 CRP Wait 1s → MovL Home；`ABORT` 先持杯 MovL C_P1（sudu2），CRP 发 RELEASE（Python 此时松夹）→ Wait 1s → MovL C_P2 → 发 RESET → Wait 1s → MovL Home。两份派生 CRP 均已更新，原始控制器导出未动；静态结构与 Python 后续 RELEASE/RESET 协议测试已通过，实机仍待验证。
 
 ## 已提交 (2026-08-21)
 - `ea680f3` Phase0 语音欢迎 (复用 /data/Speech)
@@ -13,6 +21,12 @@
 - `c25960b` 服务终端自动关闭 (默认去 exec bash, KEEP_TERM=1 保留)
 
 ## 最近变更
+
+### Windows 双 UGREEN 物理角色确认 (2026-09-23)
+
+1. DSHOW 实机预览确认：`UGREEN Camera 1080P`（当前索引 4）= Phase0 迎宾相机；`UGREEN Camera`（当前索引 3）= PhaseD HandInCup 判断相机。
+2. 配置使用完整设备名自动搜索，索引只作现场诊断，避免重启后编号漂移。
+3. 灵巧手为 `COM5`（STM32 S/N `304137433235`）；Socket 服务配置保持 `192.168.101.96:8080`，机械臂为 `192.168.101.100`。
 
 ### 同事单进程融合 single_all 多次实机验证通过 + 环境差异/备份 (2026-08-23)
 

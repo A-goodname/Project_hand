@@ -886,6 +886,8 @@ class HandleGraspAndPourHandler:
             preparation_ok=bool(_sg.get("preparation_ok", False)),
             camera_a_serial=ctx.camera_a_serial or "",
             camera_b_path=_sg.get("camera_b_path", "usb-0:4.2"),
+            camera_b_name=_sg.get("camera_b_name", ""),
+            camera_b_id=int(_sg.get("camera_b_id", -1)),
             hand_serial_path=_sg.get(
                 "hand_serial_path",
                 "/dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_304137433235-if00"),

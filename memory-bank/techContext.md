@@ -1,5 +1,9 @@
 # Tech Context — Project_hand
 
+> Windows 再移植修正（2026-09-23）：RealSense 从项目根目录的
+> `pyrealsense2.cp311-win_amd64.pyd` 导入，不通过 pip 安装；旧文中的 pip 版本号、
+> 语音/RPS 依赖属于服务器历史记录。当前入口与 CRP 见 `doc/phase0_a2d_windows.md`。
+
 ## 技术栈
 
 | 类别 | 技术 |
@@ -13,6 +17,15 @@
 | 配置 | PyYAML |
 
 ## 开发环境 (Linux 主用, 2026-08-16 起唯一工作区)
+
+### Windows 再移植环境 (2026-09-23)
+
+- **工作区**: `D:\Downloads\Project_hand`，分支 `codex/server-vla-windows`
+- **Conda**: `D:\Environment\miniconda\envs\Proj\python.exe`
+- **Phase0 相机**: `UGREEN Camera 1080P`（DSHOW 当前索引 4，配置按完整名称查找）
+- **PhaseD 相机**: `UGREEN Camera`（DSHOW 当前索引 3，配置按完整名称查找）
+- **Camera A**: Intel RealSense D435i；**灵巧手**: `COM5`
+- **网络角色**: Socket 服务 `192.168.101.96:8080`；机械臂客户端 `192.168.101.100`；Windows 网卡现场地址另为 `192.168.101.2`，不替换 Socket `host`
 
 - **工作区**: `/data/VLA/Project_hand` (唯一; Windows 副本仅历史)
 - **OS**: Ubuntu (Linux 7.0.0-29-generic)

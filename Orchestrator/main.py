@@ -327,7 +327,7 @@ def main():
                 break
 
             # ---- 手动 CONTINUE (Phase D 最高权限) ----
-            if phase == "hand_in_cup" and (key == ord(" ") or key == ord("c")):
+            if phase == "hand_in_cup" and key in (10, 13, ord(" "), ord("c")):
                 ctx.hand_on_cup = True
                 session_log("手动 CONTINUE (按键覆盖)")
 

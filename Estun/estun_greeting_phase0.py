@@ -51,16 +51,18 @@ class Phase0Greeting:
     """Phase 0 打招呼独立服务 (4 步 TCP)."""
 
     def __init__(self, estun_cfg, camera_path=DEFAULT_WELCOME_CAMERA_PATH,
-                 preview=True):
+                 camera_name="UGREEN Camera", camera_id=-1, preview=True,
+                 mock=False, camera_worker=None):
         self._cfg = estun_cfg
         self._camera_path = camera_path
+        self._camera_name = camera_name
+        self._camera_id = int(camera_id)
         self._preview = preview
+        self._mock = mock
+        self._camera_worker = camera_worker
         self._stop_event = threading.Event()
 
         g = estun_cfg.get("greeting", {})
-        vcfg = g.get("voice", {})
-        self._voice_enabled = bool(vcfg.get("enabled", True))
-        self._voice_script = str(vcfg.get("script", "/data/Speech/start_greeting.sh"))
         self._zhaoshou1 = [float(v) for v in g.get("zhaoshou1_pose", [0] * 6)]
         self._zhaoshou2 = [float(v) for v in g.get("zhaoshou2_pose", [0] * 6)]
         self._woshou = [float(v) for v in g.get("woshou_pose", [0] * 6)]
@@ -81,6 +83,7 @@ class Phase0Greeting:
         self._camera = None
         self._hand = None
         self._server = None
+        self._completed = False
 
     # ================================================================
     #  生命周期
@@ -88,16 +91,15 @@ class Phase0Greeting:
 
     def start(self):
         """初始化灵巧手 + 打开迎宾相机."""
-        self._init_hand()
+        if not self._mock:
+            self._init_hand()
         self._open_camera()
         return self
 
     def stop(self):
         """清理资源."""
         self._stop_event.set()
-        if self._camera is not None:
-            self._camera.release()
-            self._camera = None
+        self._close_camera()
         if self._server is not None:
             try:
                 self._server.close()
@@ -114,7 +116,8 @@ class Phase0Greeting:
             except Exception as e:
                 print(f"[GREETING] 灵巧手 RESET 失败: {e}")
             self._hand = None
-        cv2.destroyAllWindows()
+        if self._preview:
+            cv2.destroyAllWindows()
         print("[GREETING] 已退出")
 
     def _init_hand(self):
@@ -133,10 +136,17 @@ class Phase0Greeting:
     # ================================================================
 
     def _open_camera(self):
+        if self._camera_worker is not None:
+            self._camera_worker.start()
+            print("[GREETING] 迎宾相机在独立进程中就绪")
+            return
         self._camera = UGreenCamera(
-            camera_id=-1, camera_name="UGREEN Camera", camera_path=self._camera_path,
+            camera_id=self._camera_id, camera_name=self._camera_name,
+            camera_path=self._camera_path,
             width=1280, height=720, fps=30)
-        print(f"[GREETING] 迎宾相机已打开: {self._camera_path}")
+        print("[GREETING] 迎宾相机已打开: "
+              f"id={self._camera.camera_id} name={self._camera_name!r} "
+              f"path={self._camera_path!r}")
 
     def _get_frame(self):
         if self._camera is None:
@@ -148,6 +158,9 @@ class Phase0Greeting:
             return None
 
     def _close_camera(self):
+        if self._camera_worker is not None:
+            self._camera_worker.close()
+            return
         if self._camera is not None:
             self._camera.release()
             self._camera = None
@@ -188,6 +201,8 @@ class Phase0Greeting:
 
     def _wait_for_person(self, timeout=120.0):
         """迎宾相机 YOLO 人检测, 连续 N 帧稳定则返回."""
+        if self._camera_worker is not None:
+            return self._camera_worker.wait_for_person(timeout)
         print("[GREETING] 等待人进门...")
         self._person_stable = 0
         deadline = time.time() + timeout
@@ -207,54 +222,10 @@ class Phase0Greeting:
                 cv2.waitKey(1)
             if self._person_stable >= self._person_required:
                 print("\n[GREETING] 检测到人进门!")
-                if self._voice_enabled:
-                    self._announce_voice()
                 return True
             time.sleep(0.03)
         print(f"\n[GREETING] 人检测超时 ({timeout}s)")
         return False
-
-    # ================================================================
-    #  语音欢迎 (复用 /data/Speech 问候链路; 检测到人进门时异步播报)
-    # ================================================================
-
-    def _announce_voice(self):
-        """异步触发一次语音播报: start_greeting.sh --no-enter → 豆包 TTS → JBL.
-
-        文案**不自定义** — 不传 --message, 由 greeting_announcer.py 读
-        /data/Speech/config.json 的 greeting.message (对方改文案我方自动跟随).
-        不阻塞 TCP 协议 (subprocess.Popen 非等待); 独立进程组防与 phase0 同组被误杀.
-        """
-        import subprocess, json
-        script = self._voice_script
-        if not os.path.exists(script):
-            print(f"[GREETING] 语音脚本不存在: {script} → 跳过播报")
-            return
-        # 2026-08-22: greeting_announcer 默认用 config.json 的 pipewire_target(显式 JBL target),
-        # 但 pw-cat --target 在 A2DP sink 上静默失败 → JBL 无声. 故复制 config 清空 pipewire_target,
-        # 让 pw-cat 走 default sink(=JBL, 由 start_phase_all.sh pactl set-default-sink 设定) 才出声.
-        greet_config = "/tmp/greet_config.json"
-        try:
-            src = "/data/Speech/config.json"
-            d = json.load(open(src, encoding="utf-8"))
-            d.get("realtime", {}).pop("pipewire_target", None)
-            with open(greet_config, "w", encoding="utf-8") as f:
-                json.dump(d, f, ensure_ascii=False, indent=1)
-        except Exception as e:
-            print(f"[GREETING] 语音 config 复制失败: {e} → 走默认(可能无声)")
-            greet_config = None
-        print("[GREETING] 语音播报: 复用 /data/Speech 问候文案 (config.json greeting.message, 走 default sink=JBL)")
-        cmd = ["bash", script, "--no-enter"]
-        if greet_config:
-            cmd += ["--config", greet_config]
-        try:
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,   # 独立进程组, 不与 phase0 同组被误杀
-            )
-        except Exception as e:
-            print(f"[GREETING] 语音播报启动失败: {e}")
 
     # ================================================================
     #  挥手 + 握手 (Gesture 枚举, 无手模拟降级)
@@ -345,15 +316,19 @@ class Phase0Greeting:
         if h is not None:
             h.do_gesture(Gesture.RESET, delay=0.5)
             print("[GREETING] RESET — 等待握手...")
-            self._wait_for_handshake_force()
+            if not self._wait_for_handshake_force():
+                h.do_gesture(Gesture.RESET, delay=0.5)
+                return False
             h.do_gesture(Gesture.HAND_SHAKE, delay=1.0)
             print("[GREETING] HAND_SHAKE")
-            self._wait_for_handshake_release()
+            released = self._wait_for_handshake_release()
             h.do_gesture(Gesture.RESET, delay=0.5)
             print("[GREETING] RESET — 握手结束")
+            return released
         else:
             print("[GREETING] 模拟握手")
             time.sleep(3.0)
+            return True
 
     # ================================================================
     #  TCP 4 步协议 (与 estun_greeting_phase0.crp 匹配)
@@ -385,7 +360,9 @@ class Phase0Greeting:
                 print("[GREETING] Step 2: 未收到数据")
                 return
             print(f"[GREETING] Step 2 recv: {data.decode('utf-8', errors='replace').strip()}")
-            self._wait_for_person(timeout=120.0)
+            if not self._wait_for_person(timeout=120.0):
+                print("[GREETING] 人检测未通过，不发送 ZHAOSHOU2 位姿")
+                return
             self._close_camera()
             conn.sendall(self._fmt_pose6(self._zhaoshou2).encode() + b"\n")
 
@@ -406,8 +383,11 @@ class Phase0Greeting:
                 print("[GREETING] Step 4: 未收到数据")
                 return
             print(f"[GREETING] Step 4 recv: {data.decode('utf-8', errors='replace').strip()}")
-            self._execute_handshake()
+            if not self._execute_handshake():
+                print("[GREETING] 握手未完成，不发送 Home 确认")
+                return
             conn.sendall(b"Home\n")
+            self._completed = True
             print("[GREETING] Step 4 reply: Home")
         except socket.timeout:
             print("[GREETING] Step 超时")
@@ -446,13 +426,14 @@ class Phase0Greeting:
                         cv2.imshow("Phase0 Greeting | Welcome Cam", frame)
                     if self._preview and cv2.waitKey(1) & 0xFF == ord("q"):
                         print("[GREETING] 用户跳过")
-                        return
+                        return False
                     time.sleep(0.05)
         finally:
             server.close()
             self._server = None
         if conn is not None:
             self._handle_session(conn)
+        return self._completed
 
 
 def main():
@@ -462,6 +443,10 @@ def main():
                     help="TCP 端口 (默认 config greeting.port=8600)")
     ap.add_argument("--camera-path", default=None,
                     help="迎宾相机 USB 物理口 (默认 usb-0:4.1)")
+    ap.add_argument("--camera-name", default=None,
+                    help="迎宾相机设备名 (Windows 推荐使用完整 DSHOW 名称)")
+    ap.add_argument("--camera-id", type=int, default=None,
+                    help="迎宾相机 OpenCV 索引；指定后跳过名称/物理口探测")
     ap.add_argument("--no-preview", action="store_true", help="不显示预览窗口")
     ap.add_argument("--mock", action="store_true", help="不连接灵巧手 (模拟挥手/握手)")
     args = ap.parse_args()
@@ -469,21 +454,26 @@ def main():
     estun_cfg = _load_estun_config()
     g = estun_cfg.get("greeting", {})
     port = args.port if args.port is not None else int(g.get("port", 8600))
-    camera_path = (args.camera_path or g.get("camera_path")
-                   or DEFAULT_WELCOME_CAMERA_PATH)
+    camera_path = (args.camera_path if args.camera_path is not None
+                   else g.get("camera_path", DEFAULT_WELCOME_CAMERA_PATH))
+    camera_name = (args.camera_name if args.camera_name is not None
+                   else g.get("camera_name", "UGREEN Camera"))
+    camera_id = (args.camera_id if args.camera_id is not None
+                 else int(g.get("camera_id", -1)))
 
     svc = Phase0Greeting(estun_cfg, camera_path=camera_path,
-                         preview=not args.no_preview)
-    if args.mock:
-        svc._hand = None
+                         camera_name=camera_name, camera_id=camera_id,
+                         preview=not args.no_preview, mock=args.mock)
     svc.start()
     try:
-        svc.serve(port=port)
+        completed = svc.serve(port=port)
     except KeyboardInterrupt:
         print("[GREETING] 用户中断")
+        return 130
     finally:
         svc.stop()
+    return 0 if completed else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

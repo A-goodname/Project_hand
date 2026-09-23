@@ -1,5 +1,18 @@
 # Progress — Project_hand
 
+## Windows 再移植 (2026-09-23)
+
+- [x] 用户实机确认：独立 Phase0 全流程正常；独立 A2D 的 PhaseD ABORT 分支正常。
+- [ ] 融合版 Phase0→A2D 交接及 CONTINUE/ABORT 实机验证；单段通过不等于融合通过。
+- [x] 服务器 `VLA` 分支取回本机，确认相对旧 `main` 线性领先 88 个提交
+- [x] Windows 设备枚举：D435i ×1、UGREEN ×2、OmniHand `COM5`、ESTUN `192.168.101.100`
+- [x] 双 UGREEN 实机预览定案：Phase0=`UGREEN Camera 1080P`(当前 4)，PhaseD=`UGREEN Camera`(当前 3)
+- [x] Windows DSHOW 完整名称优先匹配，避免两只 UGREEN 子串误匹配
+- [x] 端口/现场门禁相关 40 个无动作测试通过
+- [ ] 完成语音模块移除并清理依赖/文档
+- [ ] 完成 Phase0 + Phase A-D 离线协议验证
+- [ ] 经现场安全确认后进行全流程实机验证
+
 ## 待续 (2026-08-22): ROBOT 语音截断 (融合场景) — 方案A 已实装, 待实机验证
 - [x] 现象: 融合流程已通, 但 RPS ROBOT 语音只吐两个字就停; 单局正常融合异常
 - [x] 诊断 (读 /data/Speech 代码确认): 8770 门禁被 SIGTERM → realtime_voice 无 SIGTERM 处理器, finally:audio.close() 不执行 → pw-cat speaker 子进程孤儿化 + 音频图不释放 → RPS voice 接手同一麦克风, 半双工没拦 JBL 回灌机器人 TTS 回声 → 当人声打断 (peak 28712 佐证)

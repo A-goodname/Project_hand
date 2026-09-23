@@ -13,25 +13,14 @@
 # ============================================================
 
 numpy==2.4.4
-opencv-python==4.13.0.92
-# mediapipe 依赖 opencv-contrib-python, 必须与 opencv-python 同版本, 避免互相覆盖 cv2 目录
+# mediapipe 依赖 contrib 版；不要同时安装 opencv-python 覆盖同一个 cv2 目录
 opencv-contrib-python==4.13.0.92
 PyYAML==6.0.3
 pyserial==3.5
-# PyPI 版本带构建后缀 (2.56.5.9235), 裸版本号匹配不到
-pyrealsense2==2.56.5.9235
+# Windows RealSense 从项目根目录的 pyrealsense2.cp311-win_amd64.pyd 导入，不从 pip 安装。
 pyorbbecsdk2==2.0.18
 ultralytics==8.4.48
 mediapipe==0.10.35
 # Camera B 自动探测 (仅 Windows DSHOW; Linux 走 /sys/class/video4linux)
 pygrabber==0.2; sys_platform == 'win32'
 comtypes==1.4.16; sys_platform == 'win32'
-# 语音控制 (ASR + 麦克风)
-sherpa-onnx==1.13.4
-sounddevice==0.5.5
-# 语音控制 — 拼音模糊匹配 (处理 ASR 同音字错误)
-pypinyin==0.55.0
-# 语音控制 — LLM (语义理解 + MiMo TTS 语音合成)
-openai==2.46.0
-# 语音控制 — 豆包端到端实时语音大模型 (全双工 WebSocket S2S)
-websocket-client==1.8.0

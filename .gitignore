@@ -26,8 +26,9 @@ logs/
 
 # 文档
 doc/*.pdf
-doc/*.crp
+*.crp
 doc/*.bak
+doc/controller_exports/*.bak
 
 # 编译器文件
 .vscode/

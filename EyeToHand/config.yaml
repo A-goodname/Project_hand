@@ -5,8 +5,8 @@ model:
   device: gpu
 ugreen:
   camera_id: -1
-  camera_path: usb-0:2
-  camera_name: UGREEN Camera
+  camera_path: ""                    # Linux USB 物理口；Windows 留空
+  camera_name: UGREEN Camera         # PhaseD 判断相机，Windows 当前索引 3
   width: 640
   height: 480
   fps: 30
