@@ -27,3 +27,7 @@ python -B .\scripts_gen\package_phase_a2c_windows.py
 ```
 
 默认输出为 `reference/PhaseA2C-Windows.zip`。包内的 README 和依赖来自 `packaging/phase_a2c_windows/`。RealSense 通过 `pyrealsense2==2.56.5.9235` 安装，版本与原 Windows `.pyd` 一致。
+
+## 第一轮数据采集
+
+设备静止复测、整轮采集范围和待接入项见 [Phase A–C 倒水数据采集](phase_a2c_data_collection.md)。

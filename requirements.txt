@@ -6,9 +6,21 @@
 #     pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 # ============================================================
 
+# ============================================================
+# 前置步骤 2: 安装 EpicEye SDK
+#   参考 epiceyesdk_samples_project/python/README.md,
+#   打包 whl 并安装
+# ============================================================
+
 numpy==2.4.4
-opencv-python==4.13.0.92
+# mediapipe 依赖 contrib 版；不要同时安装 opencv-python 覆盖同一个 cv2 目录
+opencv-contrib-python==4.13.0.92
 PyYAML==6.0.3
 pyserial==3.5
-pyrealsense2
+# Windows RealSense 从项目根目录的 pyrealsense2.cp311-win_amd64.pyd 导入，不从 pip 安装。
+pyorbbecsdk2==2.0.18
 ultralytics==8.4.48
+mediapipe==0.10.35
+# Camera B 自动探测 (仅 Windows DSHOW; Linux 走 /sys/class/video4linux)
+pygrabber==0.2; sys_platform == 'win32'
+comtypes==1.4.16; sys_platform == 'win32'

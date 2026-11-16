@@ -25,6 +25,8 @@ pip install -r requirements.txt
 
 EpicEye SDK 需要手动打包 whl 安装 (SDK 位于机器本地目录, 非本仓库内容).
 
+根目录的 `requirements.txt` 用于完整工程。Phase A–C Windows 独立包使用 `packaging/phase_a2c_windows/requirements.txt`，其中固定了通过 pip 安装的 RealSense 版本。倒水试采的范围和数据要求见 [Phase A–C 运行说明](doc/phase_a2c_handle_windows.md#第一轮数据采集)。
+
 ### 2. 确认硬件连接
 
 - [ ] Camera A USB 连接, serial 与 `RealSense_R/D435i_info.yaml` 一致
