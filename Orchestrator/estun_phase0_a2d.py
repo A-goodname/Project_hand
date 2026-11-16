@@ -30,7 +30,8 @@ def main() -> int:
     if args.dry_run:
         print("1. Bind A2D 8080 (deferred devices)")
         print("2. Preopen PhaseD UGREEN/model, optionally prewarm D435i/Handle+Cup; no PhaseD inference")
-        print("3. Open OmniHand COM5 once; welcome camera/model in own process; bind 8600")
+        hand_port = _load_estun_config()["hand"]["port"]
+        print(f"3. Open OmniHand {hand_port} once; welcome camera/model in own process; bind 8600")
         print("4. Phase0 completes; A2D reuses the same OmniHand connection")
         print("5. PhaseD keyboard C/Enter=CONTINUE, A=ABORT; no voice/RPS")
         return 0
@@ -64,9 +65,9 @@ def run_fusion(args, log_path: Path) -> int:
             sm._init_detector()  # D435i + models, but Handle/Cup inference is paused.
             sm._detect_active = False
         try:
-            phase0.start()  # opens shared COM5; camera+YOLO live only in child process
+            phase0.start()  # opens shared serial; camera+YOLO live only in child process
         except Exception:
-            phase0.stop()  # startup may already have opened COM5
+            phase0.stop()  # startup may already have opened the serial port
             sm.stop()
             raise
 

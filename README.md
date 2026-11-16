@@ -8,7 +8,7 @@
 |------|------|------|------|
 | Camera A | RealSense D435i (serial `342222071364`) | USB 3.0 | 眼在手上: Handle+Cup 3D 检测 |
 | Camera B | UGREEN 1080P | USB | 眼在手外: 人就位 + HandInCup |
-| 灵巧手 | OmniHand | USB 串口 (默认 COM5) | 抓取/手势/压力检测 |
+| 灵巧手 | OmniHand | USB 串口 (当前 Windows 配置 COM4) | 抓取/手势/压力检测 |
 | 机械臂 | ESTUN | TCP (LAN) | 执行抓取动作 |
 | GPU | NVIDIA (CUDA 12.6) | — | YOLO 推理加速 |
 
@@ -41,7 +41,7 @@ EpicEye SDK 需要手动打包 whl 安装 (SDK 位于机器本地目录, 非本�
 | `estun.tcp_server.host` | **本机 IP** (机械臂作为客户端连接) |
 | `estun.tcp_server.port` | 8080 (Phase A-D 抓取) |
 | `estun.greeting.port` | 8600 (Phase 0 打招呼) |
-| `estun.hand.port` | OmniHand 串口号 (如 COM5) |
+| `estun.hand.port` | OmniHand 串口号 (当前为 COM4) |
 
 编辑 `EyeToHand/config.yaml`:
 
@@ -201,6 +201,7 @@ python EyeToHand/hand_in_cup.py
 |------|------|
 | `doc/estun_handle_cup_code_orchestrator.txt` | CRP 伪代码 + 版本变更记录 |
 | `doc/Greeting_Flow.md` | Phase 0 + Phase A-D 协议时间线 |
+| `doc/phase_a2c_handle_windows.md` | Windows 水壶抓取、倒水和回 Home 的独立运行与打包 |
 | `doc/Handle_Cup_Process.md` | Handle+Cup 位姿计算 + 偏移参数 |
 | `doc/Handle_Process.md` | 把手检测设计决策记录 |
 | `doc/Grip_Process.md` | 瓶身位姿转换算法 |

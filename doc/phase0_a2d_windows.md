@@ -20,7 +20,7 @@
 
 ## 启动
 
-在项目根目录运行（主进程始终持有同一 COM5 连接；迎宾 UGREEN 与识人模型在独立子进程中打开、预热，并在识人后退出；D435i/Handle+Cup 模型默认提前打开）：
+在项目根目录运行（主进程始终持有同一灵巧手串口连接，当前 Windows 配置为 COM4；迎宾 UGREEN 与识人模型在独立子进程中打开、预热，并在识人后退出；D435i/Handle+Cup 模型默认提前打开）：
 
 ```powershell
 D:\Environment\miniconda\envs\Proj\python.exe -u Orchestrator\estun_phase0_a2d.py

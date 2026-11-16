@@ -1,0 +1,18 @@
+# Python >=3.11, <3.12
+
+# ============================================================
+# 前置步骤 1: 安装 PyTorch (CUDA 12.6)
+#   请先执行:
+#     pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# ============================================================
+
+numpy==2.4.4
+opencv-python==4.13.0.92
+PyYAML==6.0.3
+pyserial==3.5
+pyrealsense2==2.56.5.9235
+ultralytics==8.4.48
+
+# Imports used by the shared A2D state machine
+mediapipe==0.10.35
+opencv-contrib-python==4.13.0.92

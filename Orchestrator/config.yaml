@@ -13,7 +13,7 @@ site_gate:
   camera_b_id: -1             # -1=按名称搜索；必要时可临时固定 DSHOW 索引
   camera_b_name: UGREEN Camera      # PhaseD 判断相机，Windows 当前索引 3
   camera_b_path: ""           # Linux USB 物理口；Windows 留空
-  hand_serial_path: COM5      # VID_0483/PID_5740, S/N 304137433235
+  hand_serial_path: COM4      # VID_0483/PID_5740, S/N 304137433235
   eth_iface: "以太网 5"       # Windows 机械臂有线网卡
   block_link_down: false       # true = 网线断开也阻止启动
 

@@ -10,7 +10,7 @@ estun:
   # Home 位姿 (mm/deg; 示教工具参考, 与示教器 CRP 同步, 2026-08-17 更新)
   home_pose: [-111.901, 378.274, 698.33, -125.647, 0.759, 4.803]
   hand:
-    port: "COM5"                # Windows 灵巧手串口 (VID_0483/PID_5740, S/N 304137433235)
+    port: "COM4"                # Windows 灵巧手串口 (VID_0483/PID_5740, S/N 304137433235)
   calibration:
     result_path: "calib_data/calibration_result.yaml"  # 手眼标定结果(相对项目根目录)
   stabilization:
